@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
+// Package turn provides GridSwarm's owned UDP TURN client, centered on Client.Allocate and Client.PrepareUDPPeer.
 package turn
 
 import (
@@ -78,7 +79,6 @@ type Client struct {
 	trMap         *client.TransactionMap // Thread-safe
 	rto           time.Duration          // Read-only
 	relayedConn   *client.UDPConn        // Protected by mutex ***
-	tcpAllocation *client.TCPAllocation  // Protected by mutex ***
 	allocTryLock  client.TryLock         // Thread-safe
 	listenTryLock client.TryLock         // Thread-safe
 	mutex         sync.RWMutex           // Thread-safe
@@ -109,12 +109,6 @@ func inferAddressFamilyFromConn(
 
 	switch a := addr.(type) {
 	case *net.UDPAddr:
-		if a.IP.To4() != nil {
-			return proto.RequestedFamilyIPv4, nil
-		}
-
-		return proto.RequestedFamilyIPv6, nil
-	case *net.TCPAddr:
 		if a.IP.To4() != nil {
 			return proto.RequestedFamilyIPv4, nil
 		}
@@ -525,58 +519,11 @@ func (c *Client) Allocate() (net.PacketConn, error) {
 	return relayedConn, nil
 }
 
-// AllocateTCP creates a new TCP allocation at the TURN server.
-func (c *Client) AllocateTCP() (*client.TCPAllocation, error) {
-	if err := c.allocTryLock.Lock(); err != nil {
-		return nil, fmt.Errorf("%w: %s", errOneAllocateOnly, err.Error())
-	}
-	defer c.allocTryLock.Unlock()
-
-	allocation := c.getTCPAllocation()
-	if allocation != nil {
-		return nil, fmt.Errorf("%w: %s", errAlreadyAllocated, allocation.Addr())
-	}
-
-	relayed, lifetime, nonce, reservationToken, err := c.sendAllocateRequest(proto.ProtoTCP)
-	if err != nil {
-		return nil, err
-	}
-
-	relayedAddr := &net.TCPAddr{
-		IP:   relayed.IP,
-		Port: relayed.Port,
-	}
-
-	allocation = client.NewTCPAllocation(&client.AllocationConfig{
-		Client:      c,
-		RelayedAddr: relayedAddr,
-		ServerAddr:  c.turnServerAddr,
-		Realm:       c.realm,
-		Username:    c.username,
-		Integrity:   c.integrity,
-		Nonce:       nonce,
-		Lifetime:    lifetime.Duration,
-		Net:         c.net,
-		Log:         c.log,
-	})
-
-	c.setTCPAllocation(allocation)
-	c.setReservationToken(reservationToken)
-
-	return allocation, nil
-}
-
 // CreatePermission Issues a CreatePermission request for the supplied addresses
 // as described in https://datatracker.ietf.org/doc/html/rfc5766#section-9
 func (c *Client) CreatePermission(addrs ...net.Addr) error {
 	if conn := c.relayedUDPConn(); conn != nil {
 		if err := conn.CreatePermissions(addrs...); err != nil {
-			return err
-		}
-	}
-
-	if allocation := c.getTCPAllocation(); allocation != nil {
-		if err := allocation.CreatePermissions(addrs...); err != nil {
 			return err
 		}
 	}
@@ -643,7 +590,6 @@ func (c *Client) PerformTransaction(msg *stun.Message, to net.Addr, ignoreResult
 // (Called by UDPConn).
 func (c *Client) OnDeallocated(net.Addr) {
 	c.setRelayedUDPConn(nil)
-	c.setTCPAllocation(nil)
 }
 
 // HandleInbound handles data received.
@@ -727,32 +673,6 @@ func (c *Client) handleSTUNMessage(data []byte, from net.Addr) error { //nolint:
 				return nil // Silently discard
 			}
 			relayedConn.HandleInbound(data, from)
-		case stun.MethodConnectionAttempt:
-			var peerAddr proto.PeerAddress
-			if err := peerAddr.GetFrom(msg); err != nil {
-				return err
-			}
-
-			addr := &net.TCPAddr{
-				IP:   peerAddr.IP,
-				Port: peerAddr.Port,
-			}
-
-			var cid proto.ConnectionID
-			if err := cid.GetFrom(msg); err != nil {
-				return err
-			}
-
-			c.log.Debugf("Connection attempt from %s", addr)
-
-			allocation := c.getTCPAllocation()
-			if allocation == nil {
-				c.log.Debug("No TCP allocation exists")
-
-				return nil // Silently discard
-			}
-
-			allocation.HandleConnectionAttempt(addr, cid)
 		default:
 			c.log.Debug("Received unsupported STUN method")
 		}
@@ -872,30 +792,9 @@ func (c *Client) relayedUDPConn() *client.UDPConn {
 	return c.relayedConn
 }
 
-func (c *Client) setTCPAllocation(alloc *client.TCPAllocation) {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
-
-	c.tcpAllocation = alloc
-}
-
-func (c *Client) getTCPAllocation() *client.TCPAllocation {
-	c.mutex.RLock()
-	defer c.mutex.RUnlock()
-
-	return c.tcpAllocation
-}
-
 func (c *Client) setReservationToken(reservationToken []byte) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
 	c.reservationToken = reservationToken
-}
-
-func (c *Client) getReservationToken() []byte {
-	c.mutex.RLock()
-	defer c.mutex.RUnlock()
-
-	return c.reservationToken
 }

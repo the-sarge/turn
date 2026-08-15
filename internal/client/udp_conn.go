@@ -19,6 +19,10 @@ import (
 	"github.com/the-sarge/turn/v5/internal/proto"
 )
 
+func noDeadline() time.Time {
+	return time.Time{}
+}
+
 const (
 	maxReadQueueSize              = 1024
 	defaultPermRefreshInterval    = 120 * time.Second
