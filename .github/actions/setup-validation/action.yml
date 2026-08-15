@@ -9,10 +9,23 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Export pinned tool versions
+      shell: bash
+      run: |
+        set -a
+        source ./scripts/tool-versions.env
+        set +a
+        for variable in GO_VERSION TASK_VERSION GOLANGCI_LINT_VERSION GOVULNCHECK_VERSION ACTIONLINT_VERSION YQ_VERSION GITLEAKS_VERSION; do
+          printf '%s=%s\n' "$variable" "${!variable}"
+        done >> "$GITHUB_ENV"
+
     - name: Set up Go
       uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
-        go-version-file: go.mod
+        # The pinned validation toolchain; go.mod's go directive stays the
+        # module floor. GOTOOLCHAIN=local in the lanes makes this version
+        # authoritative, so it must satisfy every pinned tool's minimum Go.
+        go-version: ${{ env.GO_VERSION }}
         cache: false
 
     - name: Report Go environment
@@ -20,16 +33,6 @@ runs:
       run: |
         go version
         go env GOTOOLCHAIN GOFLAGS GOPROXY GOSUMDB GOVCS
-
-    - name: Export pinned tool versions
-      shell: bash
-      run: |
-        set -a
-        source ./scripts/tool-versions.env
-        set +a
-        for variable in TASK_VERSION GOLANGCI_LINT_VERSION GOVULNCHECK_VERSION ACTIONLINT_VERSION YQ_VERSION GITLEAKS_VERSION; do
-          printf '%s=%s\n' "$variable" "${!variable}"
-        done >> "$GITHUB_ENV"
 
     - name: Install the Task runner
       if: ${{ inputs.install-task == 'true' }}
