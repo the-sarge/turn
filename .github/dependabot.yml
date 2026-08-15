@@ -16,7 +16,11 @@ updates:
           - '*'
 
   - package-ecosystem: github-actions
-    directory: /
+    # "/" covers .github/workflows; the second entry covers the nested
+    # composite action manifest, which the root directory does not scan.
+    directories:
+      - /
+      - /.github/actions/setup-validation
     schedule:
       interval: weekly
       day: tuesday

@@ -51,7 +51,7 @@ else
     esac
 
     case "$changed_path" in
-      .github/workflows/*|.github/actions/*|.github/dependabot.yml|.gitleaks.toml|.golangci.yml|.golangci.yaml|Taskfile.yml|Taskfile.yaml|scripts/*)
+      .github/workflows/*|.github/actions/*|.github/dependabot.yml|.gitleaks.toml|.gitleaksignore|.golangci.yml|.golangci.yaml|Taskfile.yml|Taskfile.yaml|scripts/*)
         workflows_changed=true
         ;;
     esac
