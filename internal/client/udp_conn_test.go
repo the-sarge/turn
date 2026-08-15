@@ -20,8 +20,8 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 	makeConn := func(client *mockClient, bm *bindingManager) UDPConn {
 		return UDPConn{
 			allocation: allocation{
-				client: client,
-				log:    logging.NewDefaultLoggerFactory().NewLogger("test"),
+				clientHooks: client.hooks(),
+				log:         logging.NewDefaultLoggerFactory().NewLogger("test"),
 			},
 			bindingMgr:             bm,
 			bindingRefreshInterval: defaultBindingRefreshInterval,
@@ -282,15 +282,17 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		}
 
 		conn := NewUDPConn(&AllocationConfig{
-			Client:      client,
-			RelayedAddr: relayedAddr,
-			ServerAddr:  serverAddr,
-			Username:    stun.NewUsername("user"),
-			Realm:       stun.NewRealm("realm"),
-			Integrity:   stun.NewShortTermIntegrity("pass"),
-			Nonce:       stun.NewNonce("nonce"),
-			Lifetime:    time.Hour,
-			Log:         logging.NewDefaultLoggerFactory().NewLogger("test"),
+			WriteTo:            client.WriteTo,
+			PerformTransaction: client.PerformTransaction,
+			OnDeallocated:      client.OnDeallocated,
+			RelayedAddr:        relayedAddr,
+			ServerAddr:         serverAddr,
+			Username:           stun.NewUsername("user"),
+			Realm:              stun.NewRealm("realm"),
+			Integrity:          stun.NewShortTermIntegrity("pass"),
+			Nonce:              stun.NewNonce("nonce"),
+			Lifetime:           time.Hour,
+			Log:                logging.NewDefaultLoggerFactory().NewLogger("test"),
 		})
 		defer func() { _ = conn.Close() }()
 
@@ -339,34 +341,37 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		var channelBindAttempts atomic.Int32
 		deallocatedCh := make(chan net.Addr, 1)
 
-		conn := NewUDPConn(&AllocationConfig{
-			Client: &mockClient{
-				performTransaction: func(msg *stun.Message, addr net.Addr, dontWait bool) (TransactionResult, error) {
-					switch msg.Type.Method {
-					case stun.MethodChannelBind:
-						if channelBindAttempts.Add(1) == 1 {
-							return TransactionResult{}, errFake
-						}
-
-						return TransactionResult{Msg: badRequestMsg()}, nil
-					case stun.MethodRefresh:
-						return TransactionResult{}, nil
-					default:
+		client := &mockClient{
+			performTransaction: func(msg *stun.Message, addr net.Addr, dontWait bool) (TransactionResult, error) {
+				switch msg.Type.Method {
+				case stun.MethodChannelBind:
+					if channelBindAttempts.Add(1) == 1 {
 						return TransactionResult{}, errFake
 					}
-				},
-				onDeallocated: func(addr net.Addr) {
-					deallocatedCh <- addr
-				},
+
+					return TransactionResult{Msg: badRequestMsg()}, nil
+				case stun.MethodRefresh:
+					return TransactionResult{}, nil
+				default:
+					return TransactionResult{}, errFake
+				}
 			},
-			RelayedAddr: relayedAddr,
-			ServerAddr:  serverAddr,
-			Username:    stun.NewUsername("user"),
-			Realm:       stun.NewRealm("realm"),
-			Integrity:   stun.NewShortTermIntegrity("pass"),
-			Nonce:       stun.NewNonce("nonce"),
-			Lifetime:    time.Hour,
-			Log:         logging.NewDefaultLoggerFactory().NewLogger("test"),
+			onDeallocated: func(addr net.Addr) {
+				deallocatedCh <- addr
+			},
+		}
+		conn := NewUDPConn(&AllocationConfig{
+			WriteTo:            client.WriteTo,
+			PerformTransaction: client.PerformTransaction,
+			OnDeallocated:      client.OnDeallocated,
+			RelayedAddr:        relayedAddr,
+			ServerAddr:         serverAddr,
+			Username:           stun.NewUsername("user"),
+			Realm:              stun.NewRealm("realm"),
+			Integrity:          stun.NewShortTermIntegrity("pass"),
+			Nonce:              stun.NewNonce("nonce"),
+			Lifetime:           time.Hour,
+			Log:                logging.NewDefaultLoggerFactory().NewLogger("test"),
 		})
 		defer func() { _ = conn.Close() }()
 
@@ -398,31 +403,34 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 
 		var channelBindAttempts atomic.Int32
 
-		conn := NewUDPConn(&AllocationConfig{
-			Client: &mockClient{
-				performTransaction: func(msg *stun.Message, addr net.Addr, dontWait bool) (TransactionResult, error) {
-					switch msg.Type.Method {
-					case stun.MethodChannelBind:
-						if channelBindAttempts.Add(1) == 1 {
-							return TransactionResult{}, newTimeoutError("channel bind timeout")
-						}
-
-						return TransactionResult{Msg: badRequestMsg()}, nil
-					case stun.MethodRefresh:
-						return TransactionResult{}, nil
-					default:
-						return TransactionResult{}, errFake
+		client := &mockClient{
+			performTransaction: func(msg *stun.Message, addr net.Addr, dontWait bool) (TransactionResult, error) {
+				switch msg.Type.Method {
+				case stun.MethodChannelBind:
+					if channelBindAttempts.Add(1) == 1 {
+						return TransactionResult{}, newTimeoutError("channel bind timeout")
 					}
-				},
+
+					return TransactionResult{Msg: badRequestMsg()}, nil
+				case stun.MethodRefresh:
+					return TransactionResult{}, nil
+				default:
+					return TransactionResult{}, errFake
+				}
 			},
-			RelayedAddr: relayedAddr,
-			ServerAddr:  serverAddr,
-			Username:    stun.NewUsername("user"),
-			Realm:       stun.NewRealm("realm"),
-			Integrity:   stun.NewShortTermIntegrity("pass"),
-			Nonce:       stun.NewNonce("nonce"),
-			Lifetime:    time.Hour,
-			Log:         logging.NewDefaultLoggerFactory().NewLogger("test"),
+		}
+		conn := NewUDPConn(&AllocationConfig{
+			WriteTo:            client.WriteTo,
+			PerformTransaction: client.PerformTransaction,
+			OnDeallocated:      client.OnDeallocated,
+			RelayedAddr:        relayedAddr,
+			ServerAddr:         serverAddr,
+			Username:           stun.NewUsername("user"),
+			Realm:              stun.NewRealm("realm"),
+			Integrity:          stun.NewShortTermIntegrity("pass"),
+			Nonce:              stun.NewNonce("nonce"),
+			Lifetime:           time.Hour,
+			Log:                logging.NewDefaultLoggerFactory().NewLogger("test"),
 		})
 		defer func() { _ = conn.Close() }()
 
@@ -497,8 +505,8 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 
 		conn := UDPConn{
 			allocation: allocation{
-				client:  client,
-				permMap: pm,
+				clientHooks: client.hooks(),
+				permMap:     pm,
 			},
 			bindingMgr: bm,
 		}
@@ -532,14 +540,14 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 
 		conn := UDPConn{
 			allocation: allocation{
-				client:     client,
-				serverAddr: &net.UDPAddr{IP: net.ParseIP("10.0.0.1"), Port: 3478},
-				permMap:    newPermissionMap(),
-				username:   stun.NewUsername("user"),
-				realm:      stun.NewRealm("realm"),
-				integrity:  stun.NewShortTermIntegrity("pass"),
-				_nonce:     stun.NewNonce("nonce"),
-				log:        logging.NewDefaultLoggerFactory().NewLogger("test"),
+				clientHooks: client.hooks(),
+				serverAddr:  &net.UDPAddr{IP: net.ParseIP("10.0.0.1"), Port: 3478},
+				permMap:     newPermissionMap(),
+				username:    stun.NewUsername("user"),
+				realm:       stun.NewRealm("realm"),
+				integrity:   stun.NewShortTermIntegrity("pass"),
+				_nonce:      stun.NewNonce("nonce"),
+				log:         logging.NewDefaultLoggerFactory().NewLogger("test"),
 			},
 			bindingMgr: newBindingManager(),
 		}
@@ -581,14 +589,14 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 
 		conn := UDPConn{
 			allocation: allocation{
-				client:     client,
-				serverAddr: serverAddr,
-				permMap:    pm,
-				username:   stun.NewUsername("user"),
-				realm:      stun.NewRealm("realm"),
-				integrity:  stun.NewShortTermIntegrity("pass"),
-				_nonce:     stun.NewNonce("nonce"),
-				log:        logging.NewDefaultLoggerFactory().NewLogger("test"),
+				clientHooks: client.hooks(),
+				serverAddr:  serverAddr,
+				permMap:     pm,
+				username:    stun.NewUsername("user"),
+				realm:       stun.NewRealm("realm"),
+				integrity:   stun.NewShortTermIntegrity("pass"),
+				_nonce:      stun.NewNonce("nonce"),
+				log:         logging.NewDefaultLoggerFactory().NewLogger("test"),
 			},
 			bindingMgr: bm,
 		}
@@ -620,12 +628,12 @@ func TestCreatePermissions(t *testing.T) {
 			},
 		}
 		a := &allocation{
-			client:     client,
-			serverAddr: &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 3478},
-			username:   stun.NewUsername("user"),
-			realm:      stun.NewRealm("realm"),
-			integrity:  stun.NewShortTermIntegrity("pass"),
-			_nonce:     stun.NewNonce("nonce"),
+			clientHooks: client.hooks(),
+			serverAddr:  &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 3478},
+			username:    stun.NewUsername("user"),
+			realm:       stun.NewRealm("realm"),
+			integrity:   stun.NewShortTermIntegrity("pass"),
+			_nonce:      stun.NewNonce("nonce"),
 		}
 		addr := &net.UDPAddr{IP: net.IPv4(5, 6, 7, 8), Port: 12345}
 		err := a.CreatePermissions(addr)
@@ -648,12 +656,12 @@ func TestCreatePermissions(t *testing.T) {
 			},
 		}
 		a := &allocation{
-			client:     client,
-			serverAddr: &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 3478},
-			username:   stun.NewUsername("user"),
-			realm:      stun.NewRealm("realm"),
-			integrity:  stun.NewShortTermIntegrity("pass"),
-			_nonce:     stun.NewNonce("nonce"),
+			clientHooks: client.hooks(),
+			serverAddr:  &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 3478},
+			username:    stun.NewUsername("user"),
+			realm:       stun.NewRealm("realm"),
+			integrity:   stun.NewShortTermIntegrity("pass"),
+			_nonce:      stun.NewNonce("nonce"),
 		}
 		addr := &net.UDPAddr{IP: net.IPv4(5, 6, 7, 8), Port: 12345}
 		err := a.CreatePermissions(addr)

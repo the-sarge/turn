@@ -36,3 +36,14 @@ func (c *mockClient) OnDeallocated(relayedAddr net.Addr) {
 		c.onDeallocated(relayedAddr)
 	}
 }
+
+// hooks returns the mock's operations as the allocation's client hooks. The
+// method values dispatch through the mock's fields at call time, so a test
+// may rescript the mock after the allocation is built.
+func (c *mockClient) hooks() clientHooks {
+	return clientHooks{
+		writeTo:            c.WriteTo,
+		performTransaction: c.PerformTransaction,
+		onDeallocated:      c.OnDeallocated,
+	}
+}

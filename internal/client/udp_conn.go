@@ -64,7 +64,11 @@ func NewUDPConn(config *AllocationConfig) *UDPConn {
 		closeCh:                make(chan struct{}),
 		bindingRefreshInterval: defaultBindingRefreshInterval,
 		allocation: allocation{
-			client:            config.Client,
+			clientHooks: clientHooks{
+				writeTo:            config.WriteTo,
+				performTransaction: config.PerformTransaction,
+				onDeallocated:      config.OnDeallocated,
+			},
 			relayedAddr:       config.RelayedAddr,
 			serverAddr:        config.ServerAddr,
 			readTimer:         time.NewTimer(time.Duration(math.MaxInt64)),
@@ -74,7 +78,6 @@ func NewUDPConn(config *AllocationConfig) *UDPConn {
 			integrity:         config.Integrity,
 			_nonce:            config.Nonce,
 			_lifetime:         config.Lifetime,
-			net:               config.Net,
 			log:               config.Log,
 			abortTransactions: config.AbortTransactions,
 		},
@@ -536,7 +539,7 @@ func (c *UDPConn) WriteTo(payload []byte, addr net.Addr) (int, error) { //nolint
 			return 0, err
 		}
 
-		if _, err = c.client.WriteTo(msg.Raw, c.serverAddr); err != nil {
+		if _, err = c.writeTo(msg.Raw, c.serverAddr); err != nil {
 			return 0, err
 		}
 
@@ -596,7 +599,7 @@ func (c *UDPConn) startClose() (bool, error) {
 		c.abortTransactions()
 	}
 
-	c.client.OnDeallocated(c.relayedAddr)
+	c.onDeallocated(c.relayedAddr)
 
 	return true, c.refreshAllocation(0, true /* dontWait=true */)
 }
@@ -697,7 +700,7 @@ func (a *allocation) CreatePermissions(addrs ...net.Addr) error {
 		return err
 	}
 
-	trRes, err := a.client.PerformTransaction(msg, a.serverAddr, false)
+	trRes, err := a.performTransaction(msg, a.serverAddr, false)
 	if err != nil {
 		return err
 	}
@@ -894,7 +897,7 @@ func (c *UDPConn) bind(bound *binding) error {
 		return err
 	}
 
-	trRes, err := c.client.PerformTransaction(msg, c.serverAddr, false)
+	trRes, err := c.performTransaction(msg, c.serverAddr, false)
 	if err != nil {
 		return fmt.Errorf("%w: %w", errChannelBindTransactionFailed, err)
 	}
@@ -934,7 +937,7 @@ func (c *UDPConn) sendChannelData(data []byte, chNum uint16) (int, error) {
 		Number: proto.ChannelNumber(chNum),
 	}
 	chData.Encode()
-	_, err := c.client.WriteTo(chData.Raw, c.serverAddr)
+	_, err := c.writeTo(chData.Raw, c.serverAddr)
 	if err != nil {
 		return 0, err
 	}

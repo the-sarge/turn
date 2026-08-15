@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/netip"
 	"testing"
 	"time"
 
@@ -32,31 +33,32 @@ func newSilentServerAllocation(t *testing.T, withAbort bool) *client.UDPConn {
 	require.NoError(t, err)
 
 	cl, err := NewClient(&ClientConfig{
-		Conn:           clientSock,
-		TURNServerAddr: serverSock.LocalAddr().String(),
-		Username:       "user",
-		Password:       "secret",
-		Realm:          "realm",
-		RTO:            25 * time.Millisecond,
-		LoggerFactory:  logging.NewDefaultLoggerFactory(),
+		Conn:          clientSock,
+		Server:        netip.MustParseAddrPort(serverSock.LocalAddr().String()),
+		Username:      "user",
+		Password:      "secret",
+		RTO:           25 * time.Millisecond,
+		LoggerFactory: logging.NewDefaultLoggerFactory(),
 	})
 	require.NoError(t, err)
 	require.NoError(t, cl.Listen())
 
 	config := &client.AllocationConfig{
-		Client:      cl,
-		RelayedAddr: &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 54321},
-		ServerAddr:  cl.turnServerAddr,
-		Username:    stun.NewUsername("user"),
-		Realm:       stun.NewRealm("realm"),
-		Integrity:   stun.NewShortTermIntegrity("secret"),
-		Nonce:       stun.NewNonce("nonce"),
-		Lifetime:    time.Hour,
-		Log:         logging.NewDefaultLoggerFactory().NewLogger("test"),
+		WriteTo:            cl.writeTo,
+		PerformTransaction: cl.performTransaction,
+		OnDeallocated:      cl.onDeallocated,
+		RelayedAddr:        &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 54321},
+		ServerAddr:         cl.serverAddr,
+		Username:           stun.NewUsername("user"),
+		Realm:              stun.NewRealm("realm"),
+		Integrity:          stun.NewShortTermIntegrity("secret"),
+		Nonce:              stun.NewNonce("nonce"),
+		Lifetime:           time.Hour,
+		Log:                logging.NewDefaultLoggerFactory().NewLogger("test"),
 	}
 	if withAbort {
 		config.AbortTransactions = func() {
-			cl.abortPendingTransactionsTo(cl.turnServerAddr)
+			cl.abortPendingTransactionsTo(cl.serverAddr)
 		}
 	}
 
