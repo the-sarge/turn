@@ -19,9 +19,9 @@ import (
 	"github.com/pion/logging"
 	"github.com/pion/stun/v3"
 	"github.com/pion/transport/v4/reuseport"
+	"github.com/stretchr/testify/assert"
 	"github.com/the-sarge/turn/v5/internal/ipnet"
 	"github.com/the-sarge/turn/v5/internal/proto"
-	"github.com/stretchr/testify/assert"
 )
 
 func TestAddressFamily(t *testing.T) {

@@ -12,8 +12,8 @@ import (
 
 	"github.com/pion/logging"
 	"github.com/pion/stun/v3"
-	"github.com/the-sarge/turn/v5/internal/proto"
 	"github.com/stretchr/testify/assert"
+	"github.com/the-sarge/turn/v5/internal/proto"
 )
 
 func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
