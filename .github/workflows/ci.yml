@@ -254,6 +254,47 @@ jobs:
         if: ${{ needs.classify.outputs.merged_pr != 'true' && (needs.classify.outputs.platform_changed == 'true' || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.full)) }}
         run: task platform-check
 
+  floor:
+    name: Go floor
+    needs: classify
+    if: ${{ needs.classify.result == 'success' && (startsWith(github.ref, 'refs/tags/') || (needs.classify.outputs.merged_pr != 'true' && (needs.classify.outputs.docs_only != 'true' || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.full)))) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'pull_request' && needs.classify.outputs.bound_head_sha || github.sha }}
+          persist-credentials: false
+
+      - name: Set up validation toolchain
+        uses: ./.github/actions/setup-validation
+
+      - name: Resolve the consumer Go floor
+        id: go_floor
+        shell: bash
+        run: |
+          set -euo pipefail
+          floor_version="$(go list -m -f '{{.GoVersion}}')"
+          if [[ ! "$floor_version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+            echo "::error::Unexpected go.mod Go version: $floor_version"
+            exit 1
+          fi
+          IFS=. read -r floor_major floor_minor _ <<< "$floor_version"
+          printf 'version=%s.%s\n' "$floor_major" "$floor_minor" >> "$GITHUB_OUTPUT"
+
+      - name: Set up latest patch of the consumer Go floor
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ steps.go_floor.outputs.version }}
+          check-latest: true
+          cache: false
+
+      - name: Test with the consumer Go floor
+        run: |
+          go version
+          GOTOOLCHAIN=local go test ./...
+
   fuzz:
     name: Proto fuzz smoke
     needs: [classify, core]
@@ -351,7 +392,7 @@ jobs:
   ci_required:
     name: ${{ github.event_name == 'pull_request' && github.event.label.name != 'ci-certify' && 'ci-rejected-label' || 'ci-required' }}
     if: ${{ always() }}
-    needs: [classify, docs, core, fuzz, codeql, secret_scan, release]
+    needs: [classify, docs, core, floor, fuzz, codeql, secret_scan, release]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -386,6 +427,7 @@ jobs:
           SOURCE_CHANGED: ${{ needs.classify.outputs.source_changed }}
           DOCS_RESULT: ${{ needs.docs.result }}
           CORE_RESULT: ${{ needs.core.result }}
+          FLOOR_RESULT: ${{ needs.floor.result }}
           FUZZ_RESULT: ${{ needs.fuzz.result }}
           CODEQL_RESULT: ${{ needs.codeql.result }}
           SECRET_SCAN_RESULT: ${{ needs.secret_scan.result }}

@@ -44,7 +44,7 @@ label_guard="$(yq_read '.jobs.classify.steps[0].env.CI_CERTIFICATION_LABEL')"
 [[ "$label_guard" == "ci-certify" ]] || fail "classify must bind the ci-certify certification label, got: $label_guard"
 
 aggregate_needs="$(yq_read '.jobs.ci_required.needs | join(",")')"
-for required_job in classify docs core fuzz codeql secret_scan release; do
+for required_job in classify docs core floor fuzz codeql secret_scan release; do
   [[ ",$aggregate_needs," == *",$required_job,"* ]] || fail "ci_required.needs must include $required_job"
 done
 

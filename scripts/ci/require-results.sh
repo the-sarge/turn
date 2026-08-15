@@ -53,6 +53,7 @@ case "${CI_REF:-}" in
   refs/tags/*)
     require_result docs skipped "${DOCS_RESULT:-}"
     require_result core skipped "${CORE_RESULT:-}"
+    require_result floor success "${FLOOR_RESULT:-}"
     require_deep_pair skipped
     require_result release success "${RELEASE_RESULT:-}"
     ;;
@@ -64,17 +65,21 @@ case "${CI_REF:-}" in
       true)
         if [[ "$run_deep" == true ]]; then
           require_result core success "${CORE_RESULT:-}"
+          require_result floor success "${FLOOR_RESULT:-}"
           require_deep_pair success
         else
           require_result core skipped "${CORE_RESULT:-}"
+          require_result floor skipped "${FLOOR_RESULT:-}"
           require_deep_pair skipped
         fi
         ;;
       false)
         require_result core success "${CORE_RESULT:-}"
         if [[ "${CI_MERGED_PR:-false}" == true ]]; then
+          require_result floor skipped "${FLOOR_RESULT:-}"
           require_deep_pair skipped
         else
+          require_result floor success "${FLOOR_RESULT:-}"
           case "${SOURCE_CHANGED:-}" in
             true)
               require_deep_pair success

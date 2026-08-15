@@ -18,6 +18,10 @@ The permanent `-gs` suffix keeps consumer upgrades deliberate. This repository i
 
 Run the ordinary local gate with `task verify` and the complete exact-head certification with `task preflight`.
 
+Validation tool versions in `scripts/tool-versions.env` are owned by the repository maintainers. Review those pins weekly alongside the dependency-update queue and before every release, updating one tool family at a time and running `task preflight` after each change. The validation Go pin may advance independently of the consumer-facing `go` directive; raising that directive remains an explicit release decision.
+
+This manual policy covers Go, Task, golangci-lint, govulncheck, actionlint, yq, and gitleaks. Retire it only when every pin has moved to an equivalently validated automated manifest.
+
 Root integration tests use `github.com/pion/turn/v5@v5.0.12` only as a pinned test server fixture. That dependency is a transitional verification seam and is not imported by shipped code.
 
 ## License
