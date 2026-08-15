@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/the-sarge/turn/v5/internal/proto"
 	"github.com/stretchr/testify/assert"
+	"github.com/the-sarge/turn/v5/internal/proto"
 )
 
 func TestChannelBind(t *testing.T) {

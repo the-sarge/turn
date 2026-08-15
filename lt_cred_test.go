@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/pion/logging"
-	"github.com/the-sarge/turn/v5/internal/auth"
 	"github.com/stretchr/testify/assert"
+	"github.com/the-sarge/turn/v5/internal/auth"
 )
 
 func TestLtCredMech(t *testing.T) {

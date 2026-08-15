@@ -1,0 +1,8 @@
+# Per-finding ignores for documented, non-secret TURN test vectors in
+# repository history (RFC long-term-credential HMAC examples and an example
+# CLI flag string). Fingerprint format: commit:file:rule:line. Narrow by
+# design: any new secret in these files is still detected.
+0bbc3e5adfa270a5c100dfd3daa4d1f63e7493e5:examples/README.md:generic-api-key:151
+0285806888237198451e881f02a5c77a8b0c9d38:lt_cred_test.go:generic-api-key:18
+8d84191cbbad2ac92f48408321f1a885a76fa62d:lt_cred_test.go:generic-api-key:11
+8d84191cbbad2ac92f48408321f1a885a76fa62d:lt_cred_test.go:generic-api-key:26

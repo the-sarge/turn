@@ -16,8 +16,8 @@ import (
 
 	"github.com/pion/logging"
 	"github.com/pion/stun/v3"
-	"github.com/the-sarge/turn/v5"
 	"github.com/stretchr/testify/assert"
+	"github.com/the-sarge/turn/v5"
 )
 
 const channelBindDropDuration = 1500 * time.Millisecond

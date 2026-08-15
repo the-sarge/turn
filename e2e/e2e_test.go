@@ -16,9 +16,9 @@ import (
 
 	"github.com/pion/logging"
 	"github.com/pion/transport/v4/test"
+	"github.com/stretchr/testify/assert"
 	"github.com/the-sarge/turn/v5"
 	"github.com/the-sarge/turn/v5/internal/auth"
-	"github.com/stretchr/testify/assert"
 )
 
 const (

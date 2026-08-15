@@ -25,9 +25,9 @@ import (
 	"github.com/pion/transport/v4/reuseport"
 	"github.com/pion/transport/v4/test"
 	"github.com/pion/transport/v4/vnet"
+	"github.com/stretchr/testify/assert"
 	"github.com/the-sarge/turn/v5/internal/allocation"
 	"github.com/the-sarge/turn/v5/internal/proto"
-	"github.com/stretchr/testify/assert"
 )
 
 const (

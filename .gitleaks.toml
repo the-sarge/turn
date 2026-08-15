@@ -1,0 +1,8 @@
+# Fork-owned gitleaks policy: the default ruleset, unmodified. Documented
+# historical TURN test vectors are excluded per finding via .gitleaksignore
+# fingerprints, never by path, so new secrets in those files are still
+# detected. scripts/ci/check-secrets.sh self-tests this config against a
+# planted credential before trusting any clean scan.
+
+[extend]
+useDefault = true
