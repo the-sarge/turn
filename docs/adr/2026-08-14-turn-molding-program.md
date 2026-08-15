@@ -1,6 +1,6 @@
 # TURN Fork Molding Program — 2026-08-14
 
-**Status:** Accepted; Track 1 not yet implemented; Tracks 2–3 gated, plans pending
+**Status:** Accepted; Track 1 Slice 1 complete (the-sarge/turn#8), Slice 2 dispatchable; Tracks 2–3 gated, plans pending
 
 ## What this is
 
@@ -18,11 +18,11 @@ The program that molds `the-sarge/turn` into wiremux's minimal owned TURN client
 
 | # | Track | Plan | Parent issue | Blocked by | Slices | Status |
 |---|---|---|---|---|---|---|
-| 1 | Cut and stabilize (M0) | [plan](2026-08-14-cut-and-stabilize-plan.md) | pending | None | 2 | FRONTIER |
+| 1 | Cut and stabilize (M0) | [plan](2026-08-14-cut-and-stabilize-plan.md) | the-sarge/turn#3 | None | 2 | FRONTIER — Slice 1 complete (#8); Slice 2 (#5) dispatchable |
 | 2 | Modernize the kept API (M1) | plan pending | pending | Track 1; wiremux Slice 1.3 merged (GridSwarm/wiremux#1056) | TBD | GATED — requires a future `$architecture-handoff` run once its gate opens; content defined by 1.3 adoption experience |
 | 3 | Optimize the packet path (M2) | plan pending | pending | Track 2; profiles from production wiremux traffic | TBD | GATED — same; no speculative optimization |
 
-Cross-track slice edge: the transitional upstream-fixture seam introduced by Track 1 Slice 2 is removed by a Track 2 fixture-replacement slice, gated on fork-owned receipt coverage from wiremux Slice 1.3. Parallel-safe: Track 1 proceeds independently of wiremux Slice 1.3 adoption (which pins the already-published `v5.0.13-gs.1`). Recommended starter: Track 1 Slice 1.
+Cross-track slice edge: the transitional upstream-fixture seam introduced by Track 1 Slice 2 is removed by a Track 2 fixture-replacement slice, gated on fork-owned receipt coverage from wiremux Slice 1.3. Parallel-safe: Track 1 proceeds independently of wiremux Slice 1.3 adoption (which pins the already-published `v5.0.13-gs.1`). Recommended next: Track 1 Slice 2 (the-sarge/turn#5).
 
 ## Rules that bind every track
 

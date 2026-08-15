@@ -1,7 +1,7 @@
 # Cut and Stabilize (M0) Implementation Plan
 
 **Date:** 2026-08-14
-**Status:** Accepted; not yet implemented
+**Status:** Accepted; Slice 1 complete (PR #8); Slice 2 dispatchable
 **Track:** 1 of 3 in the 2026-08-14 TURN fork molding program
 **Depends on:** nothing — safe to start first
 **Related:** [Molding program scope](2026-08-14-molding-program-scope.md) (grilled decisions D1–D5), [Owned-library ADR](2026-08-14-owned-library-fork.md), wiremux fork-pivot amendment (GridSwarm/wiremux#1161)
@@ -40,8 +40,8 @@ Grilled and settled in the [scope doc](2026-08-14-molding-program-scope.md); bin
 
 | Slice | Status/disposition | Delivers | Blocked by | Removes temporary seam |
 |---|---|---|---|---|
-| 1 | new | Fork-owned portfolio CI gate (+ proto fuzz) green on the full pre-cut tree | None | Coupling to pion/.goassets auto-synced CI |
-| 2 | new | Kept-surface-only tree, upstream test fixture pinned, deps re-audited, tag `v5.1.0-gs.1` | Slice 1 | n/a (introduces documented transitional fixture seam) |
+| 1 | complete (PR #8) | Fork-owned portfolio CI gate (+ proto fuzz) green on the full pre-cut tree | None | Coupling to pion/.goassets auto-synced CI |
+| 2 | ready — dispatchable | Kept-surface-only tree, upstream test fixture pinned, deps re-audited, tag `v5.1.0-gs.1` | Slice 1 (complete) | n/a (introduces documented transitional fixture seam) |
 
 ## Implementation Slices
 
