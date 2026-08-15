@@ -21,14 +21,6 @@ import (
 
 const testAddr = "127.0.0.1:3478"
 
-func buildMsg(
-	transactionID [stun.TransactionIDSize]byte,
-	msgType stun.MessageType,
-	additional ...stun.Setter,
-) []stun.Setter {
-	return append([]stun.Setter{&stun.Message{TransactionID: transactionID}, msgType}, additional...)
-}
-
 func createListeningTestClient(t *testing.T, loggerFactory logging.LoggerFactory) (*Client, net.PacketConn, bool) {
 	t.Helper()
 

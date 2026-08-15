@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
+// Package turn provides GridSwarm's owned UDP TURN client, centered on Client.Allocate and Client.PrepareUDPPeer.
 package turn
 
 import (
@@ -796,11 +797,4 @@ func (c *Client) setReservationToken(reservationToken []byte) {
 	defer c.mutex.Unlock()
 
 	c.reservationToken = reservationToken
-}
-
-func (c *Client) getReservationToken() []byte {
-	c.mutex.RLock()
-	defer c.mutex.RUnlock()
-
-	return c.reservationToken
 }
