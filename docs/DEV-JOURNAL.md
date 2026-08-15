@@ -39,3 +39,34 @@ M0 Slice 1 of the fork molding program merged: all ten inherited pion `.goassets
 - Slice 2 (#5) is dispatchable: cut to the kept surface, pin the upstream test fixture, tag `v5.1.0-gs.1`. Live frontier: `docs/adr/2026-08-14-turn-molding-program.md` and tracking issue #6.
 - Deferred follow-ups (to be filed): Go-floor exercise vs deliberate `go` directive bump; docs-prefix classification tightening + pin-refresh ownership; pion tooling residue cleanup (`.github/fetch-scripts.sh`, `install-hooks.sh`).
 - Operator follow-up: add a ruleset requiring `ci-required` (no branch protection exists yet, so the gate is advisory until then).
+
+---
+
+## Kept UDP client surface landed (M0 Slice 2) - 2026-08-15 00:08 EDT
+
+**Main:** `1ee874ea3df1`
+**Actor:** Codex (implement-architecture-slice)
+
+**Summary**
+
+M0 Slice 2 completed the fork's cut-and-stabilize track: PR [#14](https://github.com/the-sarge/turn/pull/14) removed the TURN server, TCP allocation path, examples, and end-to-end harness; retained the owned UDP client surface; and merged as `1ee874e`.
+
+**Completed**
+
+- Root UDP regressions now use the pinned upstream fixture `github.com/pion/turn/v5@v5.0.12`; fork code no longer exports or retains the cut server/TCP surface.
+- The retained deadline helper moved into `internal/client/udp_conn.go` after the scoped contract re-audit in [#13](https://github.com/the-sarge/turn/pull/13); the normative plan and child issue pointer were updated before implementation continued.
+- Dependencies and README were reduced to the owned surface, and annotated tag `v5.1.0-gs.1` was published at merge commit `1ee874ea3df126b674c12fec8c17024851c843fd`.
+
+**Decisions**
+
+- The cut remains compiler-owned: deleted declarations have no compatibility shims, and tests that need a full TURN server import the pinned upstream module. The accepted boundary and helper-relocation exception are recorded in the [normative plan](docs/adr/2026-08-14-cut-and-stabilize-plan.md).
+
+**Validation**
+
+- RAS review `20260815T032334-6f6bc4c837bcbd58911e2f00` found two fix-now clusters; exact-head verification cleared them, and replacement review `20260815T034127-bb7990b3bf0df55c68ab9529` returned no Fix First or Follow Up findings.
+- Exact-head local preflight passed at `7bd3582`; pull-request CI run [31862982109](https://github.com/the-sarge/turn/actions/runs/31862982109) and merged-main run [31863300995](https://github.com/the-sarge/turn/actions/runs/31863300995) passed.
+- The tag resolves through the Go module proxy to `1ee874e`; the tag-triggered release lane is recorded in run [31863488687](https://github.com/the-sarge/turn/actions/runs/31863488687).
+
+**Next**
+
+- Track 1 is complete. No implementation slice is newly ready: Track 2 remains gated on wiremux Slice 1.3, and Track 3 remains gated on Track 2 plus production traffic profiles. The live view is [tracking issue #6](https://github.com/the-sarge/turn/issues/6).
