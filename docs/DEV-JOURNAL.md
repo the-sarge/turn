@@ -70,3 +70,37 @@ M0 Slice 2 completed the fork's cut-and-stabilize track: PR [#14](https://github
 **Next**
 
 - Track 1 is complete. No implementation slice is newly ready: Track 2 remains gated on wiremux Slice 1.3, and Track 3 remains gated on Track 2 plus production traffic profiles. The live view is [tracking issue #6](https://github.com/the-sarge/turn/issues/6).
+
+---
+
+## CI floor and routing maintenance landed - 2026-08-15 01:09 EDT
+
+**Main:** `8b95ebb13fb0`
+**Actor:** Codex (planit)
+
+**Summary**
+
+PR [#16](https://github.com/the-sarge/turn/pull/16) closed CI follow-ups [#9](https://github.com/the-sarge/turn/issues/9), [#10](https://github.com/the-sarge/turn/issues/10), and [#11](https://github.com/the-sarge/turn/issues/11), merging the Go-floor lane, fail-closed documentation routing, pin-governance policy, and inherited Pion tooling cleanup as `8b95ebb`.
+
+**Completed**
+
+- Added a hosted `Go floor` job that derives the consumer minor version through the Go module parser, selects its latest patch, disables toolchain switching, runs `go test ./...`, and participates in `ci-required` for source-affecting, full, scheduled, and tag runs.
+- Restricted documentation-only classification to `*.md`; unknown file types under `docs/` or `notes/` now route as source-affecting.
+- Added a maintained finite routing table for `classify-changes.sh` and `require-results.sh` under `task workflow-check`, including negative aggregate-result cases.
+- Documented repository-maintainer ownership, weekly review cadence, and pre-release review for all seven validation-tool pins.
+- Removed the inactive mutable-ref Pion hook fetch/installer, gopher asset and license sidecar, and the obsolete `.goassets` ignore entry.
+
+**Decisions**
+
+- Kept `go 1.24.0` as the consumer floor because the current tree passes under Go 1.24; the validation pin may advance independently, while any future floor increase remains an explicit release decision. The accepted contract and alternatives are recorded in [PR #16](https://github.com/the-sarge/turn/pull/16).
+- Chose documented manual pin ownership instead of adding `tools/go.mod`, avoiding a second module and tool-invocation refactor for this bounded maintenance batch.
+
+**Validation**
+
+- Local Go 1.24 tests and exact-head `task preflight` passed at `ca932013739fc889ef864be141226ac984cef8f3` against base `7fcd051a6b80a3ebfbfecf584e793a84fe634d7f`.
+- RAS review `20260815T044607-bc15af9854aae3deea10123c` returned no Fix First or Follow Up findings.
+- Hosted pull-request certification [31865895365](https://github.com/the-sarge/turn/actions/runs/31865895365) passed on the exact certified head, including the new floor job, routing contract, core/race, fuzz, CodeQL, secret scan, and `ci-required`.
+
+**Next**
+
+- No deferred finding from this batch survived for tracking. The repository's live program view remains [tracking issue #6](https://github.com/the-sarge/turn/issues/6).
