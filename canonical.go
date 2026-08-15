@@ -34,13 +34,18 @@ func canonicalAddrPort(ap netip.AddrPort, mode canonicalMode) (netip.AddrPort, b
 		return netip.AddrPort{}, false
 	}
 	addr := ap.Addr()
+	// Zone rejection must precede unmapping: Unmap drops the zone, so
+	// checking afterwards would silently admit a zoned IPv4-mapped value.
+	if addr.Zone() != "" {
+		return netip.AddrPort{}, false
+	}
 	if addr.Is4In6() {
 		if mode == canonicalStrict {
 			return netip.AddrPort{}, false
 		}
 		addr = addr.Unmap()
 	}
-	if ap.Port() == 0 || addr.Zone() != "" || addr.IsUnspecified() || addr.IsMulticast() {
+	if ap.Port() == 0 || addr.IsUnspecified() || addr.IsMulticast() {
 		return netip.AddrPort{}, false
 	}
 

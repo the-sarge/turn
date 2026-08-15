@@ -57,6 +57,11 @@ func TestCanonicalAddrPort(t *testing.T) {
 			name: "unspecified IPv4 spelled as mapped IPv6",
 			in:   netip.AddrPortFrom(netip.AddrFrom16([16]byte{10: 0xff, 11: 0xff}), 3478),
 		},
+		{
+			name: "zoned IPv4-mapped IPv6 rejects in both modes (zone checked before unmapping)",
+			in: netip.AddrPortFrom(
+				netip.AddrFrom16([16]byte{10: 0xff, 11: 0xff, 12: 192, 13: 0, 14: 2, 15: 1}).WithZone("eth0"), 3478),
+		},
 	}
 
 	for _, tt := range tests {
