@@ -4,6 +4,6 @@ Pion's UDP client lets `WriteTo` reach an unprepared peer by creating a permissi
 
 ## Consequences
 
-- Permissions and bindings are created only by `PreparePeer`. `PreparePeer` installs the permission before the binding and a canceled or failed attempt does not remove it, so permission refresh covers every peer for which `PreparePeer` was attempted, not only peers that became prepared; that membership rule is unchanged by this decision.
+- Permissions and bindings are created only by `PreparePeer`. `PreparePeer` installs the permission before the binding; a failed CreatePermission removes it, but a waiter canceled after installation or a failed bind leaves it installed, so permission refresh covers permitted-but-unbound peers as well as prepared ones; that membership rule is unchanged by this decision.
 - Data indications are still accepted inbound (a permitted-but-unbound peer may legitimately produce them); the asymmetry is deliberate.
 - Re-adding pre-preparation writes would be a re-implementation, not a flag flip; a consumer that needs them is not this library's consumer.
