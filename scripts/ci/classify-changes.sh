@@ -35,7 +35,7 @@ else
     path_is_docs=false
 
     case "$changed_path" in
-      *.md|docs/*|notes/*)
+      *.md)
         path_is_docs=true
         ;;
       *)

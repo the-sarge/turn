@@ -108,6 +108,7 @@ tasks:
       # $YQ by word-splitting, and a leading VAR=value word is not an
       # assignment after expansion.
       - YQ="go run {{.YQ_PKG}}@{{.YQ_VERSION}}" ./scripts/ci/check-workflow-contract.sh
+      - ./scripts/ci/test-routing-contract.sh
 
   secret-scan:
     desc: Scan a selected commit range (CI_BASE_SHA..CI_HEAD_SHA), or the complete repository history, for secrets.
