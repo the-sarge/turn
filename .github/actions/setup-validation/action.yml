@@ -1,0 +1,39 @@
+name: Set up validation toolchain
+description: Install the go.mod Go version, report its environment, and export pinned validation tool versions.
+
+inputs:
+  install-task:
+    description: Install the pinned Task runner.
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Go
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version-file: go.mod
+        cache: false
+
+    - name: Report Go environment
+      shell: bash
+      run: |
+        go version
+        go env GOTOOLCHAIN GOFLAGS GOPROXY GOSUMDB GOVCS
+
+    - name: Export pinned tool versions
+      shell: bash
+      run: |
+        set -a
+        source ./scripts/tool-versions.env
+        set +a
+        for variable in TASK_VERSION GOLANGCI_LINT_VERSION GOVULNCHECK_VERSION ACTIONLINT_VERSION YQ_VERSION GITLEAKS_VERSION; do
+          printf '%s=%s\n' "$variable" "${!variable}"
+        done >> "$GITHUB_ENV"
+
+    - name: Install the Task runner
+      if: ${{ inputs.install-task == 'true' }}
+      shell: bash
+      run: |
+        go install "github.com/go-task/task/v3/cmd/task@$TASK_VERSION"
+        echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"

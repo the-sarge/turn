@@ -1,0 +1,15 @@
+# Fork-owned gitleaks policy. Extends the default ruleset; the allowlist
+# below admits only documented, non-secret TURN test vectors that live in
+# repository history (RFC long-term-credential HMAC examples and an example
+# CLI flag string). scripts/ci/check-secrets.sh self-tests this config
+# against a planted credential before trusting any clean scan.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Documented TURN test vectors and example CLI text; not credentials."
+paths = [
+  '''lt_cred_test\.go''',
+  '''examples/README\.md''',
+]

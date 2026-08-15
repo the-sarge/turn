@@ -1,0 +1,31 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '11:00'
+      timezone: America/New_York
+    labels:
+      - dependencies
+      - go
+    groups:
+      go-modules:
+        patterns:
+          - '*'
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: tuesday
+      time: '11:00'
+      timezone: America/New_York
+    labels:
+      - dependencies
+      - github-actions
+    groups:
+      github-actions:
+        patterns:
+          - '*'

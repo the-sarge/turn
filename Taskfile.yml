@@ -1,0 +1,120 @@
+# Validation gate for the-sarge/turn. Mirrors CI (.github/workflows/ci.yml).
+# Run the full local certification with: task preflight
+# Install the runner from https://taskfile.dev
+version: '3'
+
+dotenv: ['scripts/tool-versions.env']
+
+vars:
+  GO: GOTOOLCHAIN=local go
+  GOLANGCI_LINT_PKG: github.com/golangci/golangci-lint/v2/cmd/golangci-lint
+  GOVULNCHECK_PKG: golang.org/x/vuln/cmd/govulncheck
+  GITLEAKS_PKG: github.com/zricethezav/gitleaks/v8
+  ACTIONLINT_PKG: github.com/rhysd/actionlint/cmd/actionlint
+  YQ_PKG: github.com/mikefarah/yq/v4
+  FUZZTIME: '{{.FUZZTIME | default "30s"}}'
+
+tasks:
+  preflight:
+    desc: Full local exact-head certification (core, docs, race, dependency, platform, workflow, secrets), then print the head/base receipt.
+    cmds:
+      - task: check
+      - task: docs-check
+      - task: race
+      - task: dependency-gate
+      - task: platform-check
+      - task: workflow-check
+      - task: secret-scan
+      - git status --short --branch
+      - git log -1 --format='preflight head %H'
+      - git rev-parse --verify '{{.BASE_REF | default "origin/main"}}' | sed 's/^/preflight base /'
+
+  verify:
+    desc: Core lane plus docs lane; the ordinary local development gate.
+    cmds:
+      - task: check
+      - task: docs-check
+
+  check:
+    desc: Portable core lane (gofmt, vet, tests, lint).
+    cmds:
+      - task: format-check
+      - task: vet
+      - task: test
+      - task: lint
+
+  smoke:
+    desc: Prove a freshly merged tree still compiles and passes ordinary tests without repeating lint or deep analysis.
+    cmds:
+      - task: test
+
+  docs-check:
+    desc: Portable docs lane (whitespace hygiene over the working tree and the selected range).
+    cmds:
+      - ./scripts/ci/check-docs.sh
+
+  format-check:
+    desc: Verify gofmt formatting.
+    cmds:
+      - GOFMT=gofmt ./scripts/check-gofmt.sh
+
+  vet:
+    desc: Run go vet across all packages.
+    cmds:
+      - '{{.GO}} vet ./...'
+
+  test:
+    desc: Run all Go tests.
+    cmds:
+      - '{{.GO}} test ./...'
+
+  race:
+    desc: Run all Go tests with the race detector.
+    cmds:
+      - '{{.GO}} test -race ./...'
+
+  lint:
+    desc: Run the pinned golangci-lint.
+    cmds:
+      - '{{.GO}} run {{.GOLANGCI_LINT_PKG}}@{{.GOLANGCI_LINT_VERSION}} run --timeout 5m'
+
+  fuzz:
+    desc: Run the three internal/proto fuzz targets with a bounded per-target fuzztime (override with FUZZTIME=...).
+    cmds:
+      - '{{.GO}} test ./internal/proto -run ''^$'' -fuzz ''^FuzzSetters$'' -fuzztime {{.FUZZTIME}}'
+      - '{{.GO}} test ./internal/proto -run ''^$'' -fuzz ''^FuzzChannelData$'' -fuzztime {{.FUZZTIME}}'
+      - '{{.GO}} test ./internal/proto -run ''^$'' -fuzz ''^FuzzIsChannelData$'' -fuzztime {{.FUZZTIME}}'
+
+  dependency-gate:
+    desc: Dependency hygiene (module verify, tidy drift, govulncheck).
+    cmds:
+      - '{{.GO}} mod verify'
+      - '{{.GO}} mod tidy -diff'
+      - '{{.GO}} run {{.GOVULNCHECK_PKG}}@{{.GOVULNCHECK_VERSION}} -test ./...'
+
+  platform-check:
+    desc: Cross-build all packages for pure-Go Darwin and Windows targets.
+    cmds:
+      - GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 {{.GO}} build ./...
+      - GOOS=windows GOARCH=amd64 CGO_ENABLED=0 {{.GO}} build ./...
+
+  workflow-check:
+    desc: Validate GitHub Actions syntax and the CI routing contract.
+    cmds:
+      - '{{.GO}} run {{.ACTIONLINT_PKG}}@{{.ACTIONLINT_VERSION}}'
+      - YQ="{{.GO}} run {{.YQ_PKG}}@{{.YQ_VERSION}}" ./scripts/ci/check-workflow-contract.sh
+
+  secret-scan:
+    desc: Scan a selected commit range (CI_BASE_SHA..CI_HEAD_SHA), or the complete repository history, for secrets.
+    cmds:
+      - GITLEAKS_GO_RUN_VERSION={{.GITLEAKS_VERSION}} ./scripts/ci/check-secrets.sh
+
+  release-check:
+    desc: Complete validation required before creating or moving a release tag.
+    cmds:
+      - task: check
+      - task: docs-check
+      - task: race
+      - task: dependency-gate
+      - task: platform-check
+      - task: fuzz
