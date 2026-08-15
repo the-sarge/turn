@@ -100,9 +100,14 @@ tasks:
 
   workflow-check:
     desc: Validate GitHub Actions syntax and the CI routing contract.
+    env:
+      GOTOOLCHAIN: local
     cmds:
-      - '{{.GO}} run {{.ACTIONLINT_PKG}}@{{.ACTIONLINT_VERSION}}'
-      - YQ="{{.GO}} run {{.YQ_PKG}}@{{.YQ_VERSION}}" ./scripts/ci/check-workflow-contract.sh
+      - go run {{.ACTIONLINT_PKG}}@{{.ACTIONLINT_VERSION}}
+      # YQ must stay a plain command string: the contract script executes
+      # $YQ by word-splitting, and a leading VAR=value word is not an
+      # assignment after expansion.
+      - YQ="go run {{.YQ_PKG}}@{{.YQ_VERSION}}" ./scripts/ci/check-workflow-contract.sh
 
   secret-scan:
     desc: Scan a selected commit range (CI_BASE_SHA..CI_HEAD_SHA), or the complete repository history, for secrets.
