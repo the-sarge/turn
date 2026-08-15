@@ -31,3 +31,13 @@ _Avoid_: Control connection
 **Reservation token**:
 A short-lived value that identifies a reserved relay transport address for a subsequent allocation.
 _Avoid_: Connection ID
+
+## Client-side language
+
+**Prepared peer**:
+A peer for which the client's allocation holds a confirmed permission and channel binding, so that every later write to it is ChannelData or fails for the allocation's lifetime.
+_Avoid_: Bound peer, ready peer
+
+**Terminal cause**:
+The first error that sealed an allocation, whether the caller closed it or the allocation sealed itself; every later operation reports it.
+_Avoid_: Close reason
