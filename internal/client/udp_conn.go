@@ -96,7 +96,7 @@ func NewUDPConn(config *AllocationConfig) *UDPConn {
 	// never Close, because this runs on the refresh timer goroutine, which
 	// must not join itself (the ChannelBind-400 path documents the same rule).
 	conn.onAllocRefreshFailure = func(err error) {
-		_, _ = conn.startClose(fmt.Errorf("%w: %w", ErrAllocationRefreshFailed, err))
+		conn.startClose(fmt.Errorf("%w: %w", ErrAllocationRefreshFailed, err))
 	}
 
 	conn.refreshAllocTimer = NewPeriodicTimer(
@@ -497,12 +497,15 @@ func (c *UDPConn) WriteTo(payload []byte, addr netip.AddrPort) (int, error) { //
 // allocation had already sealed itself (refresh failure or ChannelBind 400);
 // net.ErrClosed on a repeated caller Close.
 func (c *UDPConn) Close() error {
+	// The caller-duplicate decision and the seal-ownership decision happen in
+	// one closeMutex hold, so concurrent caller Closes cannot disagree about
+	// which of them performed the seal: exactly one caller observes the
+	// emission result and every duplicate returns net.ErrClosed.
 	c.closeMutex.Lock()
 	repeat := c.callerClosed
 	c.callerClosed = true
+	first, emitErr := c.startCloseLocked(nil)
 	c.closeMutex.Unlock()
-
-	first, emitErr := c.startClose(nil)
 
 	c.refreshAllocTimer.StopAndWait()
 	c.refreshPermsTimer.StopAndWait()
@@ -530,10 +533,15 @@ func (c *UDPConn) Close() error {
 // caller Close yields exactly one lifetime-0 emission and one recorded
 // terminal cause, and a seal attempt after the allocation is already sealed
 // (such as an in-flight refresh aborted by Close) records nothing.
-func (c *UDPConn) startClose(cause error) (bool, error) {
+func (c *UDPConn) startClose(cause error) {
 	c.closeMutex.Lock()
 	defer c.closeMutex.Unlock()
 
+	_, _ = c.startCloseLocked(cause)
+}
+
+// startCloseLocked is startClose's body; it requires closeMutex to be held.
+func (c *UDPConn) startCloseLocked(cause error) (bool, error) {
 	c.refreshAllocTimer.Stop()
 	c.refreshPermsTimer.Stop()
 	c.checkBindingsTimer.Stop()
@@ -793,7 +801,7 @@ func bindingStateWasReady(state bindingState) bool {
 // caller's Close still joins every worker and observes the recorded cause; a
 // failed lifetime-0 emission is joined into that cause by startClose.
 func (c *UDPConn) closeAfterChannelBindBadRequest(bindErr error) {
-	_, _ = c.startClose(fmt.Errorf("%w: %w", ErrChannelBindFailed, bindErr))
+	c.startClose(fmt.Errorf("%w: %w", ErrChannelBindFailed, bindErr))
 }
 
 func (c *UDPConn) bind(bound *binding) error {

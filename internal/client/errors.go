@@ -12,6 +12,9 @@ import (
 // Exported sentinels: the failure classes a consumer can act on. The root
 // package re-exports them.
 var (
+	// ErrTransactionTimeout reports a STUN transaction whose retransmissions
+	// were all exhausted without a server response.
+	ErrTransactionTimeout = errors.New("transaction timeout: all retransmissions failed")
 	// ErrAllocationRefreshFailed reports a permanent allocation-refresh
 	// failure. The allocation seals itself with this cause: pending waiters
 	// wake, and every subsequent operation returns net.ErrClosed wrapped with

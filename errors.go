@@ -17,7 +17,7 @@ var ErrClosed = net.ErrClosed
 
 // ErrTransactionTimeout reports a STUN transaction whose retransmissions
 // were all exhausted without a server response.
-var ErrTransactionTimeout = errors.New("turn: transaction timeout: all retransmissions failed")
+var ErrTransactionTimeout = client.ErrTransactionTimeout
 
 // ErrAllocationRefreshFailed reports a permanent allocation-refresh failure:
 // an exhausted refresh transaction, a well-formed non-438 error response, or

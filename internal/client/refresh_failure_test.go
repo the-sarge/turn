@@ -6,8 +6,10 @@ package client
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -120,10 +122,10 @@ func TestRefreshFailureTerminalizes(t *testing.T) {
 		{
 			name: "exhausted refresh transaction",
 			waited: func() (TransactionResult, error) {
-				return TransactionResult{}, errFake
+				return TransactionResult{}, fmt.Errorf("%w: transaction test", ErrTransactionTimeout)
 			},
 			wantWaited: 1,
-			underlying: errFake,
+			underlying: ErrTransactionTimeout,
 		},
 		{
 			name: "well-formed non-438 error response",
@@ -203,6 +205,46 @@ func TestRefreshFailureTerminalizes(t *testing.T) {
 				"the caller's Close after a self-seal must not emit a second lifetime-0 refresh")
 		})
 	}
+}
+
+func TestConcurrentCallerCloses(t *testing.T) {
+	harness := newRefreshFailureHarness(t, func() (TransactionResult, error) {
+		return TransactionResult{}, errFake
+	}, nil)
+	conn := harness.conn
+
+	const closers = 4
+	results := make([]error, closers)
+	var start, done sync.WaitGroup
+	start.Add(1)
+	done.Add(closers)
+	for i := range closers {
+		go func() {
+			defer done.Done()
+			start.Wait()
+			results[i] = conn.Close()
+		}()
+	}
+	start.Done()
+	done.Wait()
+
+	var nilCount, closedCount int
+	for _, err := range results {
+		switch {
+		case err == nil:
+			nilCount++
+		case errors.Is(err, net.ErrClosed):
+			closedCount++
+		default:
+			assert.Failf(t, "unexpected concurrent Close result", "err: %v", err)
+		}
+	}
+	assert.Equal(t, 1, nilCount,
+		"exactly one concurrent caller Close observes the successful release")
+	assert.Equal(t, closers-1, closedCount,
+		"every duplicate caller Close returns net.ErrClosed")
+	assert.Equal(t, int32(1), harness.emitCount.Load(),
+		"concurrent caller Closes must yield exactly one lifetime-0 emission")
 }
 
 func TestRefreshFailureSealVsCloseRace(t *testing.T) {
