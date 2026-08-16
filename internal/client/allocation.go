@@ -12,13 +12,18 @@ import (
 
 	"github.com/pion/logging"
 	"github.com/pion/stun/v3"
-	"github.com/pion/transport/v4"
 	"github.com/the-sarge/turn/v5/internal/proto"
 )
 
-// AllocationConfig is a set of configuration params use by NewUDPConn and NewTCPAllocation.
+// AllocationConfig is a set of configuration params used by NewUDPConn.
 type AllocationConfig struct {
-	Client                    Client
+	// WriteTo sends data to the given destination on the client's base socket.
+	WriteTo func(data []byte, to net.Addr) (int, error)
+	// PerformTransaction runs a STUN transaction against the given destination.
+	PerformTransaction func(msg *stun.Message, to net.Addr, dontWait bool) (TransactionResult, error)
+	// OnDeallocated is called once de-allocation of the relayed address is complete.
+	OnDeallocated func(relayedAddr net.Addr)
+
 	RelayedAddr               net.Addr
 	ServerAddr                net.Addr
 	Integrity                 stun.MessageIntegrity
@@ -26,7 +31,6 @@ type AllocationConfig struct {
 	Username                  stun.Username
 	Realm                     stun.Realm
 	Lifetime                  time.Duration
-	Net                       transport.Net
 	Log                       logging.LeveledLogger
 	PermissionRefreshInterval time.Duration
 	BindingRefreshInterval    time.Duration
@@ -40,7 +44,7 @@ type AllocationConfig struct {
 }
 
 type allocation struct {
-	client            Client                // Read-only
+	clientHooks                             // Read-only
 	relayedAddr       net.Addr              // Read-only
 	serverAddr        net.Addr              // Read-only
 	permMap           *permissionMap        // Thread-safe
@@ -49,7 +53,6 @@ type allocation struct {
 	realm             stun.Realm            // Read-only
 	_nonce            stun.Nonce            // Needs mutex x
 	_lifetime         time.Duration         // Needs mutex x
-	net               transport.Net         // Thread-safe
 	refreshAllocTimer *PeriodicTimer        // Thread-safe
 	refreshPermsTimer *PeriodicTimer        // Thread-safe
 	readTimer         *time.Timer           // Thread-safe
@@ -92,7 +95,7 @@ func (a *allocation) refreshAllocation(lifetime time.Duration, dontWait bool) er
 	}
 
 	a.log.Debugf("Send refresh request (dontWait=%v)", dontWait)
-	trRes, err := a.client.PerformTransaction(msg, a.serverAddr, dontWait)
+	trRes, err := a.performTransaction(msg, a.serverAddr, dontWait)
 	if err != nil {
 		return fmt.Errorf("%w: %s", errFailedToRefreshAllocation, err.Error())
 	}

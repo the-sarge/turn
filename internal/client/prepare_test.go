@@ -21,6 +21,7 @@ import (
 // prepareHarness drives a NewUDPConn against a scripted mock TURN server.
 type prepareHarness struct {
 	conn      *UDPConn
+	mock      *mockClient
 	peer      *net.UDPAddr
 	permCount atomic.Int32
 	bindCount atomic.Int32
@@ -85,16 +86,19 @@ func newPrepareHarness(t *testing.T, gateBinds bool) *prepareHarness {
 		},
 	}
 
+	harness.mock = mock
 	harness.conn = NewUDPConn(&AllocationConfig{
-		Client:      mock,
-		RelayedAddr: &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 54321},
-		ServerAddr:  &net.UDPAddr{IP: net.ParseIP("10.0.0.1"), Port: 3478},
-		Username:    stun.NewUsername("user"),
-		Realm:       stun.NewRealm("realm"),
-		Integrity:   stun.NewShortTermIntegrity("pass"),
-		Nonce:       stun.NewNonce("nonce"),
-		Lifetime:    time.Hour,
-		Log:         logging.NewDefaultLoggerFactory().NewLogger("test"),
+		WriteTo:            mock.WriteTo,
+		PerformTransaction: mock.PerformTransaction,
+		OnDeallocated:      mock.OnDeallocated,
+		RelayedAddr:        &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 54321},
+		ServerAddr:         &net.UDPAddr{IP: net.ParseIP("10.0.0.1"), Port: 3478},
+		Username:           stun.NewUsername("user"),
+		Realm:              stun.NewRealm("realm"),
+		Integrity:          stun.NewShortTermIntegrity("pass"),
+		Nonce:              stun.NewNonce("nonce"),
+		Lifetime:           time.Hour,
+		Log:                logging.NewDefaultLoggerFactory().NewLogger("test"),
 	})
 	t.Cleanup(func() { _ = harness.conn.Close() })
 
@@ -329,8 +333,7 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 		harness := newPrepareHarness(t, false)
 
 		// First permission succeeds, but every ChannelBind transaction fails.
-		mock, ok := harness.conn.client.(*mockClient)
-		assert.True(t, ok)
+		mock := harness.mock
 		inner := mock.performTransaction
 		mock.performTransaction = func(msg *stun.Message, to net.Addr, dontWait bool) (TransactionResult, error) {
 			if msg.Type.Method == stun.MethodChannelBind {

@@ -5,17 +5,21 @@ package turn
 
 import "errors"
 
+// ErrAlreadyAllocated is returned by Allocate when the client already owns a
+// live allocation. Close that allocation before allocating again.
+var ErrAlreadyAllocated = errors.New("turn: already allocated")
+
 var (
-	errNilConn                       = errors.New("turn: conn cannot not be nil")
+	errNilConn       = errors.New("turn: conn cannot not be nil")
+	errInvalidServer = errors.New(
+		"turn: Server must be a canonical netip.AddrPort (unicast, unmapped, zone-free, nonzero port)")
 	errAlreadyListening              = errors.New("turn: already listening")
 	errFailedToRetransmitTransaction = errors.New("turn: failed to retransmit transaction")
 	errAllRetransmissionsFailed      = errors.New("all retransmissions failed for")
 	errChannelBindNotFound           = errors.New("no binding found for channel")
-	errSTUNServerAddressNotSet       = errors.New("STUN server address is not set for the client")
 	errOneAllocateOnly               = errors.New("only one Allocate() caller is allowed")
-	errAlreadyAllocated              = errors.New("already allocated")
 	errUDPAllocationNotFound         = errors.New("UDP allocation not found")
-	errNonSTUNMessage                = errors.New("non-STUN message from STUN server")
+	errUnexpectedServerDatagram      = errors.New("turn: datagram from server is neither STUN nor ChannelData")
 	errFailedToDecodeSTUN            = errors.New("failed to decode STUN message")
 	errUnexpectedSTUNRequestMessage  = errors.New("unexpected STUN request message")
 )

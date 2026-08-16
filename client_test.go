@@ -6,7 +6,9 @@
 package turn
 
 import (
+	b64 "encoding/base64"
 	"net"
+	"net/netip"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,123 +18,141 @@ import (
 	pionturn "github.com/pion/turn/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/the-sarge/turn/v5/internal/client"
 	"github.com/the-sarge/turn/v5/internal/proto"
 )
 
 const testAddr = "127.0.0.1:3478"
 
-func createListeningTestClient(t *testing.T, loggerFactory logging.LoggerFactory) (*Client, net.PacketConn, bool) {
-	t.Helper()
-
-	conn, err := net.ListenPacket("udp4", "0.0.0.0:0") // nolint: noctx
-	assert.NoError(t, err)
-
-	c, err := NewClient(&ClientConfig{
-		Conn:          conn,
-		Software:      "TEST SOFTWARE",
-		LoggerFactory: loggerFactory,
+func TestNewClientRejectsNilConn(t *testing.T) {
+	_, err := NewClient(&ClientConfig{
+		Server: netip.MustParseAddrPort("192.0.2.1:3478"),
 	})
-	assert.NoError(t, err)
-	assert.NoError(t, c.Listen())
-
-	return c, conn, true
+	assert.ErrorIs(t, err, errNilConn)
 }
 
-func createListeningTestClientWithSTUNServ(t *testing.T, loggerFactory logging.LoggerFactory) ( // nolint:lll
-	*Client, net.PacketConn,
-	bool,
-) {
-	t.Helper()
+func TestNewClientRejectsNonCanonicalServer(t *testing.T) {
+	conn, err := net.ListenPacket("udp4", "127.0.0.1:0") // nolint: noctx
+	require.NoError(t, err)
+	defer conn.Close() //nolint:errcheck
 
-	conn, err := net.ListenPacket("udp4", "0.0.0.0:0") // nolint: noctx
-	assert.NoError(t, err)
-
-	addr := "stun1.l.google.com:19302"
-
-	c, err := NewClient(&ClientConfig{
-		STUNServerAddr: addr,
-		Conn:           conn,
-		LoggerFactory:  loggerFactory,
-	})
-	assert.NoError(t, err)
-	assert.NoError(t, c.Listen())
-
-	return c, conn, true
-}
-
-func TestClientWithSTUN(t *testing.T) {
-	loggerFactory := logging.NewDefaultLoggerFactory()
-	log := loggerFactory.NewLogger("test")
-
-	t.Run("SendBindingRequest", func(t *testing.T) {
-		client, pc, ok := createListeningTestClientWithSTUNServ(t, loggerFactory)
-		if !ok {
-			return
-		}
-		defer client.Close()
-
-		resp, err := client.SendBindingRequest()
-		assert.NoError(t, err, "should succeed")
-		log.Debugf("mapped-addr: %s", resp)
-		assert.Equal(t, 0, client.trMap.Size(), "should be no transaction left")
-		assert.NoError(t, pc.Close())
-	})
-
-	t.Run("SendBindingRequestTo Parallel", func(t *testing.T) {
-		client, pc, ok := createListeningTestClient(t, loggerFactory)
-		if !ok {
-			return
-		}
-		defer client.Close()
-
-		// Simple channel fo go routine start signaling
-		started := make(chan struct{})
-		finished := make(chan struct{})
-		var err1 error
-
-		to, err := net.ResolveUDPAddr("udp4", "stun1.l.google.com:19302")
-		assert.NoError(t, err)
-
-		// stun1.l.google.com:19302, more at https://gist.github.com/zziuni/3741933#file-stuns-L5
-		go func() {
-			close(started)
-			_, err1 = client.SendBindingRequestTo(to)
-			close(finished)
-		}()
-
-		// Block until go routine is started to make two almost parallel requests
-		<-started
-
-		_, err = client.SendBindingRequestTo(to)
-		assert.NoError(t, err)
-
-		<-finished
-		assert.NoErrorf(t, err1, "should succeed: %v", err)
-		assert.NoError(t, pc.Close())
-	})
-
-	t.Run("NewClient should fail if Conn is nil", func(t *testing.T) {
-		_, err := NewClient(&ClientConfig{
-			LoggerFactory: loggerFactory,
+	mapped := netip.AddrPortFrom(netip.AddrFrom16([16]byte{10: 0xff, 11: 0xff, 12: 192, 13: 0, 14: 2, 15: 1}), 3478)
+	for name, server := range map[string]netip.AddrPort{
+		"zero value":       {},
+		"IPv4-mapped IPv6": mapped,
+		"zero port":        netip.MustParseAddrPort("192.0.2.1:0"),
+		"unspecified":      netip.MustParseAddrPort("0.0.0.0:3478"),
+		"multicast":        netip.MustParseAddrPort("224.0.0.1:3478"),
+		"zoned link-local": netip.MustParseAddrPort("[fe80::1%eth0]:3478"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, newErr := NewClient(&ClientConfig{Conn: conn, Server: server})
+			assert.ErrorIs(t, newErr, errInvalidServer)
 		})
-		assert.Error(t, err, "should fail")
+	}
+
+	c, err := NewClient(&ClientConfig{Conn: conn, Server: netip.MustParseAddrPort("192.0.2.1:3478")})
+	require.NoError(t, err)
+	c.Close()
+}
+
+// TestHandleInboundAdmitsOnlyServer proves the server-source admission owned by
+// HandleInbound: a datagram whose canonical source is not the configured
+// Server is ignored with a nil error and zero delivery, while a datagram from
+// the Server (in any *net.UDPAddr spelling of it) is delivered.
+func TestHandleInboundAdmitsOnlyServer(t *testing.T) {
+	server := netip.MustParseAddrPort("192.0.2.1:3478")
+
+	newClient := func(t *testing.T) *Client {
+		t.Helper()
+		conn, err := net.ListenPacket("udp4", "127.0.0.1:0") // nolint: noctx
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = conn.Close() })
+
+		c, err := NewClient(&ClientConfig{Conn: conn, Server: server})
+		require.NoError(t, err)
+		t.Cleanup(c.Close)
+
+		return c
+	}
+
+	// pendingResponse inserts a pending transaction and returns the STUN
+	// success response that completes it plus a channel carrying whatever the
+	// waiter observes. Delivery is observable as the transaction leaving trMap
+	// and the waiter receiving the message.
+	pendingResponse := func(t *testing.T, c *Client) ([]byte, <-chan client.TransactionResult) {
+		t.Helper()
+		res, err := stun.Build(stun.TransactionID, stun.NewType(stun.MethodAllocate, stun.ClassSuccessResponse))
+		require.NoError(t, err)
+		key := b64.StdEncoding.EncodeToString(res.TransactionID[:])
+		tr := client.NewTransaction(&client.TransactionConfig{Key: key, Raw: nil, To: c.serverAddr, Interval: time.Hour})
+		c.trMap.Insert(key, tr)
+
+		waited := make(chan client.TransactionResult, 1)
+		go func() { waited <- tr.WaitForResult() }()
+
+		return res.Raw, waited
+	}
+
+	expectDelivered := func(t *testing.T, c *Client, waited <-chan client.TransactionResult) {
+		t.Helper()
+		select {
+		case res := <-waited:
+			assert.NoError(t, res.Err)
+			assert.NotNil(t, res.Msg)
+		case <-time.After(time.Second):
+			assert.Fail(t, "waiter was not woken by a delivered server response")
+		}
+		assert.Equal(t, 0, c.trMap.Size(), "delivered transaction leaves the map")
+	}
+
+	expectIgnored := func(t *testing.T, c *Client, waited <-chan client.TransactionResult) {
+		t.Helper()
+		select {
+		case res := <-waited:
+			assert.Failf(t, "waiter was woken by an ignored datagram", "res: %+v", res)
+		case <-time.After(100 * time.Millisecond):
+		}
+		assert.Equal(t, 1, c.trMap.Size(), "ignored datagram leaves the transaction pending")
+	}
+
+	t.Run("server source is delivered", func(t *testing.T) {
+		c := newClient(t)
+		raw, waited := pendingResponse(t, c)
+		assert.NoError(t, c.HandleInbound(raw, net.UDPAddrFromAddrPort(server)))
+		expectDelivered(t, c, waited)
 	})
 
-	t.Run("SendBindingRequestTo timeout", func(t *testing.T) {
-		c, pc, ok := createListeningTestClient(t, loggerFactory)
-		if !ok {
-			return
-		}
-		defer c.Close()
+	t.Run("IPv4-mapped 16-byte spelling of the server is delivered", func(t *testing.T) {
+		c := newClient(t)
+		raw, waited := pendingResponse(t, c)
+		from := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 3478} // 16-byte mapped form, as a dual-stack socket reports it
+		require.Len(t, from.IP, net.IPv6len)
+		assert.NoError(t, c.HandleInbound(raw, from))
+		expectDelivered(t, c, waited)
+	})
 
-		to, err := net.ResolveUDPAddr("udp4", "127.0.0.1:9")
-		assert.NoError(t, err)
+	t.Run("other UDP source is ignored with zero delivery", func(t *testing.T) {
+		c := newClient(t)
+		raw, waited := pendingResponse(t, c)
+		assert.NoError(t, c.HandleInbound(raw, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 3479}))
+		assert.NoError(t, c.HandleInbound(raw, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 3478}))
+		expectIgnored(t, c, waited)
+	})
 
-		c.rto = 10 * time.Millisecond // Force short timeout
+	t.Run("non-UDP source is ignored with zero delivery", func(t *testing.T) {
+		c := newClient(t)
+		raw, waited := pendingResponse(t, c)
+		assert.NoError(t, c.HandleInbound(raw, &net.TCPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 3478}))
+		assert.NoError(t, c.HandleInbound(raw, nil))
+		expectIgnored(t, c, waited)
+	})
 
-		_, err = c.SendBindingRequestTo(to)
-		assert.NotNil(t, err)
-		assert.NoError(t, pc.Close())
+	t.Run("non-protocol datagram: error from server, ignored from others", func(t *testing.T) {
+		c := newClient(t)
+		junk := []byte("not stun, not channeldata")
+		assert.ErrorIs(t, c.HandleInbound(junk, net.UDPAddrFromAddrPort(server)), errUnexpectedServerDatagram)
+		assert.NoError(t, c.HandleInbound(junk, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 3478}))
 	})
 }
 
@@ -164,11 +184,10 @@ func TestClientNonceExpiration(t *testing.T) {
 	assert.NoError(t, err)
 
 	client, err := NewClient(&ClientConfig{
-		Conn:           conn,
-		STUNServerAddr: testAddr,
-		TURNServerAddr: testAddr,
-		Username:       "foo",
-		Password:       "pass",
+		Conn:     conn,
+		Server:   netip.MustParseAddrPort(testAddr),
+		Username: "foo",
+		Password: "pass",
 	})
 	assert.NoError(t, err)
 	assert.NoError(t, client.Listen())
@@ -210,11 +229,10 @@ func TestClientReadTimout(t *testing.T) {
 	assert.NoError(t, err)
 
 	client, err := NewClient(&ClientConfig{
-		Conn:           stunClientConn,
-		STUNServerAddr: testAddr,
-		TURNServerAddr: testAddr,
-		Username:       "foo",
-		Password:       "pass",
+		Conn:     stunClientConn,
+		Server:   netip.MustParseAddrPort(testAddr),
+		Username: "foo",
+		Password: "pass",
 	})
 	assert.NoError(t, err)
 	assert.NoError(t, client.Listen())
@@ -260,48 +278,13 @@ func TestInferAddressFamilyFromConn(t *testing.T) {
 func TestGetRequestedAddressFamily(t *testing.T) {
 	log := logging.NewDefaultLoggerFactory().NewLogger("test")
 
-	t.Run("Explicit IPv4 in config", func(t *testing.T) {
-		conn, err := net.ListenPacket("udp6", "[::]:0") //nolint:noctx
-		assert.NoError(t, err)
-		defer conn.Close() //nolint:errcheck
-
-		config := &ClientConfig{
-			Conn:                   conn,
-			RequestedAddressFamily: proto.RequestedFamilyIPv4,
-		}
-
-		// Should use explicit config even though conn is IPv6
-		family := getRequestedAddressFamily(log, config)
-		assert.Equal(t, proto.RequestedFamilyIPv4, family)
-	})
-
-	t.Run("Explicit IPv6 in config", func(t *testing.T) {
-		conn, err := net.ListenPacket("udp4", "0.0.0.0:0") //nolint:noctx
-		assert.NoError(t, err)
-		defer conn.Close() //nolint:errcheck
-
-		config := &ClientConfig{
-			Conn:                   conn,
-			RequestedAddressFamily: proto.RequestedFamilyIPv6,
-		}
-
-		// Should use explicit config even though conn is IPv4
-		family := getRequestedAddressFamily(log, config)
-		assert.Equal(t, proto.RequestedFamilyIPv6, family)
-	})
-
 	t.Run("Infer IPv4 from connection", func(t *testing.T) {
 		conn, err := net.ListenPacket("udp4", "0.0.0.0:0") //nolint:noctx
 		assert.NoError(t, err)
 		defer conn.Close() //nolint:errcheck
 
-		config := &ClientConfig{
-			Conn: conn,
-			// RequestedAddressFamily not set (zero value)
-		}
-
 		// Should infer IPv4 from connection
-		family := getRequestedAddressFamily(log, config)
+		family := getRequestedAddressFamily(log, conn)
 		assert.Equal(t, proto.RequestedFamilyIPv4, family)
 	})
 
@@ -310,23 +293,17 @@ func TestGetRequestedAddressFamily(t *testing.T) {
 		assert.NoError(t, err)
 		defer conn.Close() //nolint:errcheck
 
-		config := &ClientConfig{
-			Conn: conn,
-			// RequestedAddressFamily not set (zero value)
-		}
-
 		// Should infer IPv6 from connection
-		family := getRequestedAddressFamily(log, config)
+		family := getRequestedAddressFamily(log, conn)
 		assert.Equal(t, proto.RequestedFamilyIPv6, family)
 	})
 }
 
-func TestAppendRequestedAddressFamilyOrReservation(t *testing.T) {
+func TestAppendRequestedAddressFamily(t *testing.T) {
 	t.Run("IPv4 omits attribute", func(t *testing.T) {
-		setters := appendRequestedAddressFamilyOrReservation(
+		setters := appendRequestedAddressFamily(
 			[]stun.Setter{stun.TransactionID, stun.NewType(stun.MethodAllocate, stun.ClassRequest)},
 			proto.RequestedFamilyIPv4,
-			nil,
 		)
 
 		msg, err := stun.Build(setters...)
@@ -336,10 +313,9 @@ func TestAppendRequestedAddressFamilyOrReservation(t *testing.T) {
 	})
 
 	t.Run("IPv6 includes attribute", func(t *testing.T) {
-		setters := appendRequestedAddressFamilyOrReservation(
+		setters := appendRequestedAddressFamily(
 			[]stun.Setter{stun.TransactionID, stun.NewType(stun.MethodAllocate, stun.ClassRequest)},
 			proto.RequestedFamilyIPv6,
-			nil,
 		)
 
 		msg, err := stun.Build(setters...)
@@ -348,23 +324,6 @@ func TestAppendRequestedAddressFamilyOrReservation(t *testing.T) {
 		var raf proto.RequestedAddressFamily
 		require.NoError(t, raf.GetFrom(msg))
 		assert.Equal(t, proto.RequestedFamilyIPv6, raf)
-	})
-
-	t.Run("Reservation token takes precedence", func(t *testing.T) {
-		token := proto.ReservationToken{1, 2, 3, 4, 5, 6, 7, 8}
-		setters := appendRequestedAddressFamilyOrReservation(
-			[]stun.Setter{stun.TransactionID, stun.NewType(stun.MethodAllocate, stun.ClassRequest)},
-			proto.RequestedFamilyIPv6,
-			token,
-		)
-
-		msg, err := stun.Build(setters...)
-		require.NoError(t, err)
-
-		var parsedToken proto.ReservationToken
-		require.NoError(t, parsedToken.GetFrom(msg))
-		assert.Equal(t, token, parsedToken)
-		assert.False(t, msg.Contains(stun.AttrRequestedAddressFamily))
 	})
 }
 
@@ -419,8 +378,7 @@ func TestClientE2E(t *testing.T) {
 
 		client, err := NewClient(&ClientConfig{
 			Conn:                      stunClientConn,
-			STUNServerAddr:            testAddr,
-			TURNServerAddr:            testAddr,
+			Server:                    netip.MustParseAddrPort(testAddr),
 			Username:                  "foo",
 			Password:                  "pass",
 			PermissionRefreshInterval: time.Millisecond * 50,
@@ -467,10 +425,6 @@ func TestClientE2E(t *testing.T) {
 
 		sendPackets(allocation, remotePeerConn, remotePeerAddr.Port)
 		sendPackets(remotePeerConn, allocation, allocationAddr.Port)
-
-		assert.NotNil(t, client.TURNServerAddr())
-		assert.NotNil(t, client.Username())
-		assert.NotNil(t, client.Realm())
 
 		// Shutdown
 		assert.NoError(t, remotePeerConn.Close())
