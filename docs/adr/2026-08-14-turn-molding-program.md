@@ -1,6 +1,6 @@
 # TURN Fork Molding Program — 2026-08-14
 
-**Status:** Accepted; Track 1 complete (`v5.1.0-gs.1`); Track 2 in progress (Slices 1-2 complete, PRs #25 and #27; Slices 3 and 4 on the frontier); Track 3 gated, plan pending
+**Status:** Accepted; Track 1 complete (`v5.1.0-gs.1`); Track 2 in progress (Slices 1-3 complete, PRs #25, #27, and #29; Slice 4 on the frontier); Track 3 gated, plan pending
 
 ## What this is
 
@@ -21,7 +21,7 @@ The program that molds `the-sarge/turn` into wiremux's minimal owned TURN client
 | # | Track | Plan | Parent issue | Blocked by | Slices | Status |
 |---|---|---|---|---|---|---|
 | 1 | Cut and stabilize (M0) | [plan](2026-08-14-cut-and-stabilize-plan.md) | the-sarge/turn#3 | None | 2 | Complete: PR #8, PR #14; `v5.1.0-gs.1` published |
-| 2 | Modernize the kept API (M1) | [plan](2026-08-15-modernize-kept-api-plan.md) | the-sarge/turn#19 | Track 1 (complete); wiremux Slice 1.3 (complete, GridSwarm/wiremux#1162) | 5 | FRONTIER — Slices 1 (PR #25) and 2 (PR #27) complete; Slices 3 and 4 dispatchable (parallel-safe); 5 after 3 and 4 |
+| 2 | Modernize the kept API (M1) | [plan](2026-08-15-modernize-kept-api-plan.md) | the-sarge/turn#19 | Track 1 (complete); wiremux Slice 1.3 (complete, GridSwarm/wiremux#1162) | 5 | FRONTIER — Slices 1 (PR #25), 2 (PR #27), and 3 (PR #29) complete; Slice 4 dispatchable; 5 after 4 |
 | 3 | Optimize the packet path (M2) | plan pending | pending | Track 2; profiles from production wiremux traffic | TBD | GATED — requires a future `$architecture-handoff` run once its gate opens; no speculative optimization |
 
 Cross-track slice edges: the transitional upstream-fixture seam introduced by Track 1 Slice 2 is removed by Track 2 Slice 5. Track 2 order: 1→2→{3‖4}→5 (1→2 and 2→{3,4} are sequencing edges on the same functions; 3 and 4 are parallel-safe after 2; {3,4}→5 is genuine; each slice independently green). Track 2 Slice 5 tags `v5.2.0-gs.1` and files the wiremux adoption issue; wiremux-side adoption is consumer work outside this program. Recommended starter: Track 2 Slice 1.
