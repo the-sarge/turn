@@ -51,6 +51,15 @@ type UDPConn struct {
 	closeMutex             sync.Mutex        // Thread-safe; also gates workerWG.Add vs close
 	workerWG               sync.WaitGroup    // Joins bind/permission workers on Close
 	bindingRefreshInterval time.Duration     // Read-only
+
+	// terminalCause is the recorded cause of a self-seal (refresh failure or
+	// ChannelBind 400), set exactly once inside startClose's guarded arm.
+	// Protected by closeMutex; nil when the caller performed the seal.
+	terminalCause error
+	// callerClosed records that the caller's Close has run, so a repeated
+	// caller Close returns net.ErrClosed. Protected by closeMutex.
+	callerClosed bool
+
 	allocation
 }
 
@@ -75,7 +84,6 @@ func NewUDPConn(config *AllocationConfig) *UDPConn {
 			integrity:         config.Integrity,
 			_nonce:            config.Nonce,
 			_lifetime:         config.Lifetime,
-			log:               config.Log,
 			abortTransactions: config.AbortTransactions,
 		},
 	}
@@ -84,8 +92,12 @@ func NewUDPConn(config *AllocationConfig) *UDPConn {
 		conn.bindingRefreshInterval = config.BindingRefreshInterval
 	}
 	conn.onPermRefreshFailure = conn.failPreparedBindings
-
-	conn.log.Debugf("Initial lifetime: %d seconds", int(conn.lifetime().Seconds()))
+	// A permanent refresh failure terminalizes the allocation: startClose,
+	// never Close, because this runs on the refresh timer goroutine, which
+	// must not join itself (the ChannelBind-400 path documents the same rule).
+	conn.onAllocRefreshFailure = func(err error) {
+		conn.startClose(fmt.Errorf("%w: %w", ErrAllocationRefreshFailed, err))
+	}
 
 	conn.refreshAllocTimer = NewPeriodicTimer(
 		timerIDRefreshAlloc,
@@ -119,15 +131,9 @@ func NewUDPConn(config *AllocationConfig) *UDPConn {
 		bindingCheckInterval,
 	)
 
-	if conn.refreshAllocTimer.Start() {
-		conn.log.Debugf("Started refresh allocation timer")
-	}
-	if conn.refreshPermsTimer.Start() {
-		conn.log.Debugf("Started refresh permission timer")
-	}
-	if conn.checkBindingsTimer.Start() {
-		conn.log.Debugf("Started check bindings timer")
-	}
+	conn.refreshAllocTimer.Start()
+	conn.refreshPermsTimer.Start()
+	conn.checkBindingsTimer.Start()
 
 	return conn
 }
@@ -146,12 +152,7 @@ func (c *UDPConn) ReadFrom(p []byte) (int, netip.AddrPort, error) {
 		return n, ibData.from, nil
 
 	case <-c.closeCh:
-		return 0, netip.AddrPort{}, &net.OpError{
-			Op:   "read",
-			Net:  c.LocalAddr().Network(),
-			Addr: c.LocalAddr(),
-			Err:  errClosed,
-		}
+		return 0, netip.AddrPort{}, c.closedErr()
 	}
 }
 
@@ -186,7 +187,7 @@ func (c *UDPConn) PreparePeer(ctx context.Context, peer netip.AddrPort) error {
 		return context.Cause(ctx)
 	}
 	if c.isClosed() {
-		return errClosed
+		return c.closedErr()
 	}
 
 	if err := c.awaitPermission(ctx, peer); err != nil {
@@ -207,7 +208,7 @@ func (c *UDPConn) awaitPermission(ctx context.Context, peer netip.AddrPort) erro
 
 		done := c.ensurePermissionAttempt(perm, peer)
 		if done == nil {
-			return errClosed
+			return c.closedErr()
 		}
 
 		select {
@@ -215,7 +216,7 @@ func (c *UDPConn) awaitPermission(ctx context.Context, peer netip.AddrPort) erro
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-c.closeCh:
-			return errClosed
+			return c.closedErr()
 		}
 
 		if perm.state() == permStatePermitted {
@@ -252,7 +253,7 @@ func (c *UDPConn) ensurePermissionAttempt(perm *permission, peer netip.AddrPort)
 		var err error
 		for range maxRetryAttempts {
 			if c.isClosed() {
-				err = errClosed
+				err = net.ErrClosed
 
 				break
 			}
@@ -291,10 +292,10 @@ func (c *UDPConn) awaitBinding(ctx context.Context, bound *binding) error { //no
 				return err
 			}
 			if c.isClosed() {
-				return errClosed
+				return c.closedErr()
 			}
 
-			return errChannelBindFailed
+			return ErrChannelBindFailed
 		}
 
 		select {
@@ -302,7 +303,7 @@ func (c *UDPConn) awaitBinding(ctx context.Context, bound *binding) error { //no
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-c.closeCh:
-			return errClosed
+			return c.closedErr()
 		}
 
 		if final, err := bindingResult(bound); final {
@@ -322,9 +323,9 @@ func (c *UDPConn) awaitBinding(ctx context.Context, bound *binding) error { //no
 func bindingResult(bound *binding) (bool, error) {
 	if bound.ok() {
 		if time.Since(bound.refreshedAt()) >= channelBindingLifetime {
-			bound.terminalize(errChannelBindingExpired)
+			bound.terminalize(ErrChannelBindingExpired)
 
-			return true, errChannelBindingExpired
+			return true, ErrChannelBindingExpired
 		}
 		bound.prepared.Store(true)
 
@@ -335,7 +336,7 @@ func bindingResult(bound *binding) (bool, error) {
 			return true, err
 		}
 
-		return true, errChannelBindFailed
+		return true, ErrChannelBindFailed
 	}
 
 	return false, nil
@@ -390,7 +391,7 @@ func (c *UDPConn) addWorker() bool {
 func (c *UDPConn) failPreparedBindings(err error) {
 	for _, bound := range c.bindingMgr.all() {
 		if bound.prepared.Load() {
-			bound.terminalize(fmt.Errorf("%w: %w", errPermissionRefreshFailed, err))
+			bound.terminalize(fmt.Errorf("%w: %w", ErrPermissionRefreshFailed, err))
 		}
 	}
 }
@@ -401,12 +402,7 @@ func (c *UDPConn) failPreparedBindings(err error) {
 func (c *UDPConn) WriteTo(payload []byte, addr netip.AddrPort) (int, error) { //nolint:gocognit,cyclop
 	var err error
 	if c.isClosed() {
-		return 0, &net.OpError{
-			Op:   "write",
-			Net:  c.LocalAddr().Network(),
-			Addr: c.LocalAddr(),
-			Err:  errClosed,
-		}
+		return 0, c.closedErr()
 	}
 
 	// Check if we have a permission for the destination IP addr
@@ -442,14 +438,14 @@ func (c *UDPConn) WriteTo(payload []byte, addr netip.AddrPort) (int, error) { //
 	// falling back to Send indications.
 	if bound.prepared.Load() {
 		if bound.ok() && time.Since(bound.refreshedAt()) >= channelBindingLifetime {
-			bound.terminalize(errChannelBindingExpired)
+			bound.terminalize(ErrChannelBindingExpired)
 		}
 		if !bound.ok() {
 			if bindErr := bound.bindErr(); bindErr != nil {
 				return 0, bindErr
 			}
 
-			return 0, errChannelBindFailed
+			return 0, ErrChannelBindFailed
 		}
 	}
 
@@ -495,27 +491,57 @@ func (c *UDPConn) WriteTo(payload []byte, addr netip.AddrPort) (int, error) { //
 // bind/permission workers) have finished. It never closes or sets deadlines on
 // the caller-owned base socket, so a worker blocked on that socket is joined
 // only once the caller unblocks its I/O.
+//
+// Close always joins, then returns: the lifetime-0 emission error (or nil)
+// when this caller performed the seal; the recorded terminal cause when the
+// allocation had already sealed itself (refresh failure or ChannelBind 400);
+// net.ErrClosed on a repeated caller Close.
 func (c *UDPConn) Close() error {
-	first, err := c.startClose()
+	// The caller-duplicate decision and the seal-ownership decision happen in
+	// one closeMutex hold, so concurrent caller Closes cannot disagree about
+	// which of them performed the seal: exactly one caller observes the
+	// emission result and every duplicate returns net.ErrClosed.
+	c.closeMutex.Lock()
+	repeat := c.callerClosed
+	c.callerClosed = true
+	first, emitErr := c.startCloseLocked(nil)
+	c.closeMutex.Unlock()
 
 	c.refreshAllocTimer.StopAndWait()
 	c.refreshPermsTimer.StopAndWait()
 	c.checkBindingsTimer.StopAndWait()
 	c.workerWG.Wait()
 
-	if !first {
-		return errAlreadyClosed
+	if first {
+		return emitErr
+	}
+	if repeat {
+		return net.ErrClosed
 	}
 
-	return err
-}
-
-// startClose makes the allocation refuse new work and emits the deallocate
-// refresh. It performs no joins, so allocation-owned workers may call it safely.
-func (c *UDPConn) startClose() (bool, error) {
 	c.closeMutex.Lock()
 	defer c.closeMutex.Unlock()
 
+	return c.terminalCause
+}
+
+// startClose makes the allocation refuse new work and emits the deallocate
+// refresh. It performs no joins, so allocation-owned workers may call it
+// safely; a worker seal passes its cause, the caller's Close passes nil.
+//
+// The closeCh select is the double-emission guard: a self-seal racing a
+// caller Close yields exactly one lifetime-0 emission and one recorded
+// terminal cause, and a seal attempt after the allocation is already sealed
+// (such as an in-flight refresh aborted by Close) records nothing.
+func (c *UDPConn) startClose(cause error) {
+	c.closeMutex.Lock()
+	defer c.closeMutex.Unlock()
+
+	_, _ = c.startCloseLocked(cause)
+}
+
+// startCloseLocked is startClose's body; it requires closeMutex to be held.
+func (c *UDPConn) startCloseLocked(cause error) (bool, error) {
 	c.refreshAllocTimer.Stop()
 	c.refreshPermsTimer.Stop()
 	c.checkBindingsTimer.Stop()
@@ -535,7 +561,31 @@ func (c *UDPConn) startClose() (bool, error) {
 
 	c.onDeallocated(c.relayedAddr)
 
-	return true, c.refreshAllocation(0, true /* dontWait=true */)
+	emitErr := c.refreshAllocation(0, true /* dontWait=true */)
+	if cause != nil {
+		// Self-seal: record the terminal cause; a failed lifetime-0 emission
+		// is joined into it so the caller's Close can still observe it.
+		c.terminalCause = cause
+		if emitErr != nil {
+			c.terminalCause = errors.Join(cause, emitErr)
+		}
+	}
+
+	return true, emitErr
+}
+
+// closedErr is the operation error for a sealed allocation: net.ErrClosed,
+// wrapped with the recorded terminal cause when the allocation sealed itself.
+func (c *UDPConn) closedErr() error {
+	c.closeMutex.Lock()
+	cause := c.terminalCause
+	c.closeMutex.Unlock()
+
+	if cause != nil {
+		return fmt.Errorf("%w: %w", net.ErrClosed, cause)
+	}
+
+	return net.ErrClosed
 }
 
 // LocalAddr returns the local network address.
@@ -624,7 +674,8 @@ func (c *UDPConn) HandleInbound(data []byte, from netip.AddrPort) {
 	select {
 	case c.readCh <- &inboundData{data: copied, from: from}:
 	default:
-		c.log.Warnf("Receive buffer full")
+		// The receive queue is full: the datagram is dropped, matching UDP
+		// semantics. Documented on Allocation.ReadFrom.
 	}
 }
 
@@ -673,7 +724,7 @@ func (c *UDPConn) bindChannel(bound *binding, startState bindingState) error {
 	var err error
 	for range maxRetryAttempts {
 		if c.isClosed() {
-			return errClosed
+			return net.ErrClosed
 		}
 		if err = c.bind(bound); !errors.Is(err, errTryAgain) {
 			break
@@ -704,7 +755,6 @@ func (c *UDPConn) handleBindChannelError(bound *binding, startState bindingState
 		return true
 	}
 
-	c.log.Warnf("Failed to bind channel %d: %s", bound.number, err)
 	if errors.Is(err, errChannelBindTransactionFailed) {
 		if bindingStateWasReady(startState) {
 			bound.setState(bindingStateReadyUnknown)
@@ -717,7 +767,7 @@ func (c *UDPConn) handleBindChannelError(bound *binding, startState bindingState
 
 	bound.setState(bindingStateFailed)
 	if errors.Is(err, errChannelBindBadRequest) {
-		c.closeAfterChannelBindBadRequest(bound)
+		c.closeAfterChannelBindBadRequest(err)
 	}
 
 	return false
@@ -736,11 +786,6 @@ func (c *UDPConn) recoverChannelBindBadRequest(bound *binding, startState bindin
 	// server may still have the old binding, and switching channels would be
 	// worse because it can trigger "same peer with different channel number" (like what we get from Coturn).
 	// This Keep the saved mapping usable and retry refresh later.
-	c.log.Warnf(
-		"ChannelBind returned 400 for saved binding %s on channel %d; keeping binding ready",
-		bound.addr,
-		bound.number,
-	)
 	bound.setState(bindingStateReady)
 
 	return true
@@ -750,18 +795,13 @@ func bindingStateWasReady(state bindingState) bool {
 	return state == bindingStateReady || state == bindingStateReadyUnknown
 }
 
-func (c *UDPConn) closeAfterChannelBindBadRequest(bound *binding) {
-	c.log.Warnf(
-		"ChannelBind rejected with 400 for %s on channel %d; closing TURN allocation",
-		bound.addr,
-		bound.number,
-	)
-
-	// startClose, not Close: this runs on a Pion-owned bind worker, which must
-	// not join itself. The caller's Close still joins every worker.
-	if _, err := c.startClose(); err != nil {
-		c.log.Warnf("Failed to close TURN allocation after ChannelBind 400: %s", err)
-	}
+// closeAfterChannelBindBadRequest terminalizes the whole allocation after a
+// ChannelBind 400 on a fresh binding: startClose, not Close, because this
+// runs on an allocation-owned bind worker, which must not join itself. The
+// caller's Close still joins every worker and observes the recorded cause; a
+// failed lifetime-0 emission is joined into that cause by startClose.
+func (c *UDPConn) closeAfterChannelBindBadRequest(bindErr error) {
+	c.startClose(fmt.Errorf("%w: %w", ErrChannelBindFailed, bindErr))
 }
 
 func (c *UDPConn) bind(bound *binding) error {
@@ -791,8 +831,6 @@ func (c *UDPConn) bind(bound *binding) error {
 	if res.Type.Class == stun.ClassErrorResponse {
 		return c.handleChannelBindErrorResponse(res)
 	}
-
-	c.log.Debugf("Channel binding successful: %s %d", bound.addr, bound.number)
 
 	// Success.
 	return nil

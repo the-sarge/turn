@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pion/logging"
 	"github.com/pion/stun/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/the-sarge/turn/v5/internal/proto"
@@ -99,7 +98,6 @@ func newPrepareHarness(t *testing.T, gateBinds bool) *prepareHarness {
 		Integrity:          stun.NewShortTermIntegrity("pass"),
 		Nonce:              stun.NewNonce("nonce"),
 		Lifetime:           time.Hour,
-		Log:                logging.NewDefaultLoggerFactory().NewLogger("test"),
 	})
 	t.Cleanup(func() { _ = harness.conn.Close() })
 
@@ -290,11 +288,11 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 
 		writesBefore := harness.writeCount()
 		_, err := harness.conn.WriteTo([]byte("data"), harness.peer)
-		assert.ErrorIs(t, err, errPermissionRefreshFailed)
+		assert.ErrorIs(t, err, ErrPermissionRefreshFailed)
 		assert.Equal(t, writesBefore, harness.writeCount(),
 			"failed write for a prepared peer must not emit anything (no Send indication fallback)")
 
-		assert.ErrorIs(t, harness.conn.PreparePeer(context.Background(), harness.peer), errPermissionRefreshFailed,
+		assert.ErrorIs(t, harness.conn.PreparePeer(context.Background(), harness.peer), ErrPermissionRefreshFailed,
 			"readiness must be terminal after permission refresh failure")
 	})
 
@@ -335,7 +333,7 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 		// The waiter unblocks promptly; Close must keep waiting for the worker.
 		select {
 		case err := <-prepareResult:
-			assert.ErrorIs(t, err, errClosed)
+			assert.ErrorIs(t, err, net.ErrClosed)
 		case <-time.After(2 * time.Second):
 			assert.Fail(t, "PreparePeer waiter did not unblock on close")
 		}

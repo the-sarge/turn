@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pion/logging"
 	"github.com/pion/stun/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -73,7 +72,6 @@ func newAllocHarness(t *testing.T) *allocHarness {
 		Integrity:     stun.NewShortTermIntegrity("pass"),
 		Nonce:         stun.NewNonce("nonce"),
 		Lifetime:      time.Hour,
-		Log:           logging.NewDefaultLoggerFactory().NewLogger("test"),
 	})
 	t.Cleanup(func() { _ = conn.Close() })
 
@@ -213,10 +211,10 @@ func TestAllocateRejectsInvalidRelayedAddress(t *testing.T) {
 		Password: "pass",
 	})
 	require.NoError(t, err)
-	require.NoError(t, turnClient.Listen())
+	startTestPump(t, turnClient, clientSock)
 	defer turnClient.Close()
 
-	alloc, err := turnClient.Allocate()
+	alloc, err := turnClient.Allocate(context.Background())
 	assert.ErrorIs(t, err, ErrInvalidRelayedAddress)
 	assert.Nil(t, alloc)
 
@@ -232,13 +230,20 @@ func TestAllocateRejectsInvalidRelayedAddress(t *testing.T) {
 }
 
 // TestDeletedSurfaceDoesNotResolve pins the negative API contract: the moved
-// PrepareUDPPeer and the deleted deadline/LocalAddr surface must not resolve.
+// PrepareUDPPeer, the deleted deadline/LocalAddr surface, the deleted Listen
+// second idiom, and the removed LoggerFactory seam must not resolve.
 func TestDeletedSurfaceDoesNotResolve(t *testing.T) {
 	_, ok := reflect.TypeFor[*Client]().MethodByName("PrepareUDPPeer")
 	assert.False(t, ok, "Client.PrepareUDPPeer moved to Allocation.PreparePeer")
 
 	for _, name := range []string{"SetReadDeadline", "SetWriteDeadline", "SetDeadline", "LocalAddr"} {
-		_, ok := reflect.TypeFor[*Allocation]().MethodByName(name)
-		assert.False(t, ok, "Allocation must not expose %s", name)
+		_, found := reflect.TypeFor[*Allocation]().MethodByName(name)
+		assert.False(t, found, "Allocation must not expose %s", name)
 	}
+
+	_, ok = reflect.TypeFor[*Client]().MethodByName("Listen")
+	assert.False(t, ok, "Client.Listen is deleted: the consumer owns the read pump")
+
+	_, ok = reflect.TypeFor[ClientConfig]().FieldByName("LoggerFactory")
+	assert.False(t, ok, "ClientConfig.LoggerFactory is deleted: the module does not log")
 }

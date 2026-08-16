@@ -48,7 +48,10 @@ type Transaction struct {
 func NewTransaction(config *TransactionConfig) *Transaction {
 	var resultCh chan TransactionResult
 	if !config.IgnoreResult {
-		resultCh = make(chan TransactionResult)
+		// Capacity 1 makes every producer non-blocking: the transaction map's
+		// delete-under-lock discipline guarantees at most one write per
+		// transaction, so a producer never blocks on a departed waiter.
+		resultCh = make(chan TransactionResult, 1)
 	}
 
 	return &Transaction{
@@ -88,7 +91,9 @@ func (t *Transaction) StopRtxTimer() {
 	}
 }
 
-// WriteResult writes the result to the result channel.
+// WriteResult publishes the result to the buffered result channel. Only the
+// producer that removed the transaction from its map may call it, so the
+// write never blocks and never races a close.
 func (t *Transaction) WriteResult(res TransactionResult) bool {
 	if t.resultCh == nil {
 		return false
@@ -97,6 +102,13 @@ func (t *Transaction) WriteResult(res TransactionResult) bool {
 	t.resultCh <- res
 
 	return true
+}
+
+// ResultCh exposes the result channel for select-based waits. A received
+// value is a published result; a closed empty channel means a closer removed
+// the transaction.
+func (t *Transaction) ResultCh() <-chan TransactionResult {
+	return t.resultCh
 }
 
 // WaitForResult waits for the transaction result.
