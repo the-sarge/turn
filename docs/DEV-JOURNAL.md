@@ -104,3 +104,37 @@ PR [#16](https://github.com/the-sarge/turn/pull/16) closed CI follow-ups [#9](ht
 **Next**
 
 - No deferred finding from this batch survived for tracking. The repository's live program view remains [tracking issue #6](https://github.com/the-sarge/turn/issues/6).
+
+---
+
+## Track 2 Slice 1: consumer-crossing API cut - 2026-08-15 21:04 EDT
+
+**Main:** `633781fc93e6`
+**Actor:** Claude (implement-architecture-slice)
+
+**Summary**
+
+PR [#25](https://github.com/the-sarge/turn/pull/25) landed Track 2 (M1) Slice 1 of the modernize-kept-API plan as `633781f`, cutting the client-side public surface to exactly what wiremux crosses and making the server boundary `netip`-native. Child issue [#20](https://github.com/the-sarge/turn/issues/20) is closed; the frontier moved to Slice 2 ([#21](https://github.com/the-sarge/turn/issues/21)).
+
+**Completed**
+
+- Deleted STUN binding (`STUNServerAddr`, `SendBindingRequest`/`SendBindingRequestTo`, `STUNServerAddr()`, the STUN branch of `HandleInbound`, root `TestClientWithSTUN` — the nil-conn subtest survives as `TestNewClientRejectsNilConn`), public `CreatePermission`, getters `TURNServerAddr`/`Username`/`Realm`, config `Realm`/`Software`/`Net`/`RequestedAddressFamily` (with `addr_family.go`; socket inference stays), and the always-zero `evenPort`/`reservationToken` machinery.
+- Replaced `TURNServerAddr string` with `Server netip.AddrPort`, validated at `NewClient` by the strict mode of one unexported canonicalizer (`canonical.go`); `pion/transport/v4` is no longer a direct dependency and has no non-test import (it remains `// indirect` via `pion/stun/v3`).
+- `HandleInbound(data []byte, from net.Addr) error` now admits only datagrams whose canonical source is the configured `Server` (nil error and zero delivery otherwise); errors are returned only for malformed or unexpected protocol input from the server.
+- Unexported the protocol internals `WriteTo`/`PerformTransaction`/`OnDeallocated` by replacing the `internal/client.Client` interface with func fields on `AllocationConfig`; exported `ErrAlreadyAllocated`.
+- The PR's docs commit marks Slice 1 complete in the plan and program index and moves the frontier to Slice 2.
+
+**Decisions**
+
+- Zone rejection runs before `Unmap` in the canonicalizer so a zoned IPv4-mapped value cannot silently canonicalize (RAS review cluster C-003); the normative contract remains [Slice 1 of the M1 plan](adr/2026-08-15-modernize-kept-api-plan.md).
+
+**Validation**
+
+- Red-first canonicalizer table tests (both modes) and `TestHandleInboundAdmitsOnlyServer`; guard mutation on the server-source comparison observed the ignore test fail; negative compile checks for every removed symbol.
+- `task verify` and exact-head `task preflight` passed at `389356365f3227953326f90126bee97077ec25a1` against base `4d779e51dbdc04d5a77bf53aac23b405d588cee7`.
+- RAS review `20260815T201904-9ec0634b372be667f254b48e` (one Fix First, fixed) and exact-head verification at `3893563` with a clear blocking projection; hosted pull-request certification [31918388633](https://github.com/the-sarge/turn/actions/runs/31918388633) passed on the certified head including `ci-required`.
+
+**Next**
+
+- Slice 2 ([#21](https://github.com/the-sarge/turn/issues/21), exported `Allocation` with a `netip` data plane, deadline surface deleted) is the dispatchable frontier; Slices 3 and 4 follow it in parallel, then Slice 5 tags `v5.2.0-gs.1`. Live program view: [tracking issue #6](https://github.com/the-sarge/turn/issues/6).
+- Deferred from review (no new issue: already owned by the plan): retained `Listen()` exits its loop on the new `errUnexpectedServerDatagram`; `Listen` is contract-frozen this slice and deleted by Slice 3 (validated against merged `633781f`, `client.go:214-218`).
