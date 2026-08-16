@@ -138,3 +138,38 @@ PR [#25](https://github.com/the-sarge/turn/pull/25) landed Track 2 (M1) Slice 1 
 
 - Slice 2 ([#21](https://github.com/the-sarge/turn/issues/21), exported `Allocation` with a `netip` data plane, deadline surface deleted) is the dispatchable frontier; Slices 3 and 4 follow it in parallel, then Slice 5 tags `v5.2.0-gs.1`. Live program view: [tracking issue #6](https://github.com/the-sarge/turn/issues/6).
 - Deferred from review (no new issue: already owned by the plan): retained `Listen()` exits its loop on the new `errUnexpectedServerDatagram`; `Listen` is contract-frozen this slice and deleted by Slice 3 (validated against merged `633781f`, `client.go:214-218`).
+
+---
+
+## M1 Slice 2: exported Allocation, netip data plane - 2026-08-15 23:06 EDT
+
+**Main:** `7ef5cd05e5d4`
+**Actor:** Claude (implement-architecture-slice)
+
+**Summary**
+
+PR [#27](https://github.com/the-sarge/turn/pull/27) landed Track 2 (M1) Slice 2 of the modernize-kept-API plan as `7ef5cd0`, introducing the exported `Allocation` with a `netip` data plane and deleting the dishonest deadline surface. Child issue [#21](https://github.com/the-sarge/turn/issues/21) is closed; the frontier moved to Slices 3 ([#22](https://github.com/the-sarge/turn/issues/22)) and 4 ([#23](https://github.com/the-sarge/turn/issues/23)), which are parallel-safe.
+
+**Completed**
+
+- Exported `Allocation` (root package, thin explicit delegation over `internal/client.UDPConn`) returned by `Allocate() (*Allocation, error)`: `RelayedAddr() netip.AddrPort`, `PreparePeer(ctx, netip.AddrPort) error`, `ReadFrom` returning canonical `netip.AddrPort` labels, `WriteTo(payload, netip.AddrPort)`, `Close`. `Client.PrepareUDPPeer` and `errUDPAllocationNotFound` are deleted; `ErrInvalidPeer` and `ErrInvalidRelayedAddress` are exported.
+- Deadline surface deleted: `readTimer`, `SetDeadline`/`SetReadDeadline`/`SetWriteDeadline`, and root `TestClientReadTimout`.
+- Peer canonicalization now runs through the unmapping mode of Slice 1's canonicalizer at four seams (`PreparePeer`, `WriteTo`, inbound label creation, `Allocate` relayed validation); inbound peer labels are stored as canonical `netip.AddrPort` at creation so `ReadFrom` returns them without per-packet conversion; zoned peers reject with `ErrInvalidPeer` (the old zoned-alias stripping in `WriteTo` is deleted by design).
+- An invalid server-reported relayed address (zero port, unspecified, multicast) is released with a lifetime-0 Refresh and rejected with `ErrInvalidRelayedAddress`; the canonical relayed address is validated once at `Allocate` and is authoritative for `RelayedAddr()`.
+- Permission map keyed per peer IP (`netip.Addr`), preserving the prior IP-string fingerprint semantics; `internal/ipnet` deleted as fully unreferenced.
+- The PR's docs commit marks Slice 2 complete in the plan and program index and moves the frontier to Slices 3 and 4.
+
+**Decisions**
+
+- Root tests' scripted TURN servers moved from hardcoded `0.0.0.0:3478` to dynamic `127.0.0.1:0` ports after local certification collided with an unrelated local process holding UDP 3478; assertions are unchanged. The normative contract remains [Slice 2 of the M1 plan](adr/2026-08-15-modernize-kept-api-plan.md).
+
+**Validation**
+
+- Red-first invalid-peer table and mapped-alias positive anchor at the root canonicalization owner; scripted invalid-relayed-address test proving `ErrInvalidRelayedAddress`, one lifetime-0 Refresh emission, and the cleared allocation pointer; guard mutation on the relayed-address validity check observed that test fail on all three assertions; reflection negative check that the removed surface does not resolve.
+- `task verify` and exact-head `task preflight` passed at `f5898114906b35e72ff401679412636d1046d25c` against base `22af5e16481c3cc7f01fb28d91e0f8dede0331af`.
+- RAS review `20260816T022140-f7f6355664c8098be7ab0f49` (one Fix First, docs-only, fixed in `409a66e`; the RAS verify rerun was skipped under the shared docs-only policy) and replacement review `20260816T024544-d2e19ff94fb82c8c9849739f` (clean: no Fix First, no Follow Up); hosted pull-request certification [31923068675](https://github.com/the-sarge/turn/actions/runs/31923068675) passed on the certified head including `ci-required`.
+
+**Next**
+
+- Slices 3 ([#22](https://github.com/the-sarge/turn/issues/22)) and 4 ([#23](https://github.com/the-sarge/turn/issues/23)) are the dispatchable frontier (parallel-safe); Slice 5 ([#24](https://github.com/the-sarge/turn/issues/24)) follows both and tags `v5.2.0-gs.1`. Live program view: [tracking issue #6](https://github.com/the-sarge/turn/issues/6).
+- Deferred from review (no new issue: owned by Slice 3's failures-as-values rework of `internal/client/errors.go`): the `timeoutError`/`newTimeoutError` helper survives with only a test caller (validated against merged `7ef5cd0`, `internal/client/errors.go:28-45`, caller `internal/client/udp_conn_test.go:411`).
