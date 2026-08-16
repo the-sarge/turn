@@ -22,8 +22,6 @@ import (
 	"github.com/the-sarge/turn/v5/internal/proto"
 )
 
-const testAddr = "127.0.0.1:3478"
-
 func TestNewClientRejectsNilConn(t *testing.T) {
 	_, err := NewClient(&ClientConfig{
 		Server: netip.MustParseAddrPort("192.0.2.1:3478"),
@@ -160,8 +158,8 @@ func TestHandleInboundAdmitsOnlyServer(t *testing.T) {
 // The subsequent Write on the allocation will cause a CreatePermission
 // which will be forced to handle a stale nonce response.
 func TestClientNonceExpiration(t *testing.T) {
-	udpListener, err := net.ListenPacket("udp4", "0.0.0.0:3478") // nolint: noctx
-	assert.NoError(t, err)
+	udpListener, err := net.ListenPacket("udp4", "127.0.0.1:0") // nolint: noctx
+	require.NoError(t, err)
 
 	server, err := pionturn.NewServer(pionturn.ServerConfig{
 		AuthHandler: func(ra *pionturn.RequestAttributes) (userID string, key []byte, ok bool) {
@@ -185,7 +183,7 @@ func TestClientNonceExpiration(t *testing.T) {
 
 	client, err := NewClient(&ClientConfig{
 		Conn:     conn,
-		Server:   netip.MustParseAddrPort(testAddr),
+		Server:   netip.MustParseAddrPort(udpListener.LocalAddr().String()),
 		Username: "foo",
 		Password: "pass",
 	})
@@ -301,8 +299,8 @@ func (c *channelBindFilterConn) ReadFrom(p []byte) (n int, addr net.Addr, err er
 
 func TestClientE2E(t *testing.T) {
 	doTest := func(disableChannelBind bool) {
-		udpListener, err := net.ListenPacket("udp4", "0.0.0.0:3478") // nolint: noctx
-		assert.NoError(t, err)
+		udpListener, err := net.ListenPacket("udp4", "127.0.0.1:0") // nolint: noctx
+		require.NoError(t, err)
 
 		server, err := pionturn.NewServer(pionturn.ServerConfig{
 			AuthHandler: func(ra *pionturn.RequestAttributes) (userID string, key []byte, ok bool) {
@@ -329,7 +327,7 @@ func TestClientE2E(t *testing.T) {
 
 		client, err := NewClient(&ClientConfig{
 			Conn:                      stunClientConn,
-			Server:                    netip.MustParseAddrPort(testAddr),
+			Server:                    netip.MustParseAddrPort(udpListener.LocalAddr().String()),
 			Username:                  "foo",
 			Password:                  "pass",
 			PermissionRefreshInterval: time.Millisecond * 50,
