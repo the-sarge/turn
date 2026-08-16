@@ -451,8 +451,9 @@ func (c *Client) onDeallocated(net.Addr) {
 // complete their pending transaction, Data indications and ChannelData are
 // delivered to the allocation. An error is returned only for malformed or
 // unexpected protocol input from the Server (a parse failure, a STUN request,
-// ChannelData on an unbound channel, or a datagram that is neither STUN nor
-// ChannelData); the caller may discard it.
+// a Data indication whose peer address cannot be canonicalized
+// (ErrInvalidPeer), ChannelData on an unbound channel, or a datagram that is
+// neither STUN nor ChannelData); the caller may discard it.
 func (c *Client) HandleInbound(data []byte, from net.Addr) error {
 	source, ok := canonicalSourceAddr(from)
 	if !ok || source != c.server {
