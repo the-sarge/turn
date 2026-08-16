@@ -173,3 +173,35 @@ PR [#27](https://github.com/the-sarge/turn/pull/27) landed Track 2 (M1) Slice 2 
 
 - Slices 3 ([#22](https://github.com/the-sarge/turn/issues/22)) and 4 ([#23](https://github.com/the-sarge/turn/issues/23)) are the dispatchable frontier (parallel-safe); Slice 5 ([#24](https://github.com/the-sarge/turn/issues/24)) follows both and tags `v5.2.0-gs.1`. Live program view: [tracking issue #6](https://github.com/the-sarge/turn/issues/6).
 - Deferred from review (no new issue: owned by Slice 3's failures-as-values rework of `internal/client/errors.go`): the `timeoutError`/`newTimeoutError` helper survives with only a test caller (validated against merged `7ef5cd0`, `internal/client/errors.go:28-45`, caller `internal/client/udp_conn_test.go:411`).
+
+---
+
+## Track 2 Slice 3: context-first allocation and failures as values - 2026-08-16 00:50 EDT
+
+**Main:** `0d61cfe818df`
+**Actor:** Claude (implement-architecture-slice)
+
+**Summary**
+
+PR [#29](https://github.com/the-sarge/turn/pull/29) landed Track 2 (M1) Slice 3 of the modernize-kept-API plan as `0d61cfe`: context-first allocation (`Allocate(ctx)`), one lifecycle idiom (`Listen` deleted, `pion/logging` removed), and failures as values (refresh failures terminalize with a recorded cause; `net.ErrClosed` idiom; exported sentinels). Child issue [#22](https://github.com/the-sarge/turn/issues/22) is closed; the frontier is Slice 4 ([#23](https://github.com/the-sarge/turn/issues/23)), with Slice 5 ([#24](https://github.com/the-sarge/turn/issues/24)) after it.
+
+**Completed**
+
+- `Allocate(ctx context.Context) (*Allocation, error)`: the transaction result channel is buffered (capacity 1) so a producer never blocks on a departed waiter; map membership under `mutexTrMap` is the single linearization point; a published response wins over cancellation; a closed channel returns the closed error wrapping `net.ErrClosed` (closure precedence over cancellation); `onRtxTimeout` performs the retransmit socket write outside the lock and re-checks ownership before publishing or re-arming, so cancellation never waits behind caller-socket I/O. Zero deadline/close calls on the caller's socket, pinned by an observer wrapper.
+- `Listen()`, `listenTryLock`, and `errAlreadyListening` deleted; the fork's tests use an unexported `startTestPump` helper; negative reflection checks pin that `Client.Listen` and `ClientConfig.LoggerFactory` no longer resolve.
+- `pion/logging` removed per the slice's per-site ledger (36 non-test sites at branch base, all dispositioned, none silently kept); `go.mod` keeps it only `// indirect` via `pion/stun/v3`.
+- Permanent allocation-refresh failure terminalizes the allocation through `startClose` (its third caller, after caller close and ChannelBind-400) with cause `ErrAllocationRefreshFailed`: fixes `refreshAllocation`'s error-response branch that returned nil for every well-formed non-438 error (now a typed `*stun.TurnError`); the terminal cause is recorded in `startClose`'s guarded arm; a failed lifetime-0 emission is joined into it; post-seal `ReadFrom`/`WriteTo`/`PreparePeer` return `net.ErrClosed` wrapped with the cause; `Allocation.Close` always joins, then returns the emission result, the recorded terminal cause, or `net.ErrClosed` on repeated calls, with concurrent caller Closes linearized in one `closeMutex` hold.
+- `errClosed`/`errAlreadyClosed` replaced by `net.ErrClosed`; error wraps converted to `%w`; exported sentinels `ErrClosed`, `ErrTransactionTimeout`, `ErrAllocationRefreshFailed`, `ErrPermissionRefreshFailed`, `ErrChannelBindFailed`, `ErrChannelBindingExpired`.
+- The PR's docs commit marks Slice 3 complete in the plan and program index and moves the frontier to Slice 4.
+
+**Validation**
+
+- Red-first per the slice evidence budget: cancellation table test (cancel-before-send, both waits, published-success-wins), blocked-retransmit observer test, producer-race test, cancel-versus-`Client.Close` precedence test, late-success discard test with the documented same-`Conn` 437 retry consequence, refresh-failure table test (timeout / non-438 `*stun.TurnError` / stale-nonce exhaustion), seal-versus-`Close` race test (exactly one lifetime-0 emission), self-seal emission-failure join test, concurrent-caller-`Close` test.
+- Guard mutations, one per enforcement owner, applied and reverted: removing the `ctx.Done()` select arm failed the cancellation test; removing the refresh-failure `startClose` call failed the terminalization test.
+- Exact-head `task preflight` passed at `94bc8e9eabe511f12fdb13f9d3d0012165c3a56c` against base `d3d5c6606bb8d6b5f3d81d500c96f91f7511a133`.
+- RAS review `20260816T035925-e190c1dfbb3d0770fba2903b` (two Fix First: concurrent-Close linearization, `ErrTransactionTimeout` evidence; both fixed in `94bc8e9`), RAS verify at the exact head (blocking projection clear, 6/6 prior clusters covered), replacement review `20260816T043018-22c0bd0a50663cbc25b6cc45` (clean); hosted pull-request certification [31927241117](https://github.com/the-sarge/turn/actions/runs/31927241117) passed on the certified head including `ci-required`.
+
+**Next**
+
+- Slice 4 ([#23](https://github.com/the-sarge/turn/issues/23)) is the dispatchable frontier; Slice 5 ([#24](https://github.com/the-sarge/turn/issues/24)) follows it and tags `v5.2.0-gs.1`. Live program view: [tracking issue #6](https://github.com/the-sarge/turn/issues/6).
+- Deferred from review into [#30](https://github.com/the-sarge/turn/issues/30) (validated against merged `0d61cfe`): whether operations already in flight at seal time must carry the recorded terminal cause (`internal/client/udp_conn.go:256`, `:225-229`, `:727`), plus the inherited `timeoutError` test-only helper hygiene (`internal/client/errors.go:50-66`). Two marginal review observations were dispositioned without follow-ups: the scheduler-driven (not barrier-forced) concurrent-Close regression test, and the pre-existing mapped-transaction residue after a failed ignore-result initial write.
