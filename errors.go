@@ -3,7 +3,41 @@
 
 package turn
 
-import "errors"
+import (
+	"errors"
+	"net"
+
+	"github.com/the-sarge/turn/v5/internal/client"
+)
+
+// ErrClosed is net.ErrClosed: errors.Is(err, ErrClosed) on any error from
+// this package means the client or allocation is closed, or a wrapped cause
+// was itself a socket close — never a synthetic stand-in for another failure.
+var ErrClosed = net.ErrClosed
+
+// ErrTransactionTimeout reports a STUN transaction whose retransmissions
+// were all exhausted without a server response.
+var ErrTransactionTimeout = errors.New("turn: transaction timeout: all retransmissions failed")
+
+// ErrAllocationRefreshFailed reports a permanent allocation-refresh failure:
+// an exhausted refresh transaction, a well-formed non-438 error response, or
+// stale-nonce retry exhaustion. The allocation seals itself with this cause;
+// pending waiters wake, every subsequent operation returns ErrClosed wrapped
+// with it, and the caller's Close returns it.
+var ErrAllocationRefreshFailed = client.ErrAllocationRefreshFailed
+
+// ErrPermissionRefreshFailed reports a permission refresh that kept failing
+// after retries. Prepared peers terminalize with it: their writes fail
+// rather than ever falling back to Send indications.
+var ErrPermissionRefreshFailed = client.ErrPermissionRefreshFailed
+
+// ErrChannelBindFailed reports a channel binding that could not be
+// established or has failed for a prepared peer.
+var ErrChannelBindFailed = client.ErrChannelBindFailed
+
+// ErrChannelBindingExpired reports a confirmed channel binding whose
+// server-side lifetime expired before the write.
+var ErrChannelBindingExpired = client.ErrChannelBindingExpired
 
 // ErrAlreadyAllocated is returned by Allocate when the client already owns a
 // live allocation. Close that allocation before allocating again.
@@ -23,9 +57,8 @@ var (
 	errNilConn       = errors.New("turn: conn cannot not be nil")
 	errInvalidServer = errors.New(
 		"turn: Server must be a canonical netip.AddrPort (unicast, unmapped, zone-free, nonzero port)")
-	errAlreadyListening              = errors.New("turn: already listening")
+	errNilContext                    = errors.New("turn: context must not be nil")
 	errFailedToRetransmitTransaction = errors.New("turn: failed to retransmit transaction")
-	errAllRetransmissionsFailed      = errors.New("all retransmissions failed for")
 	errChannelBindNotFound           = errors.New("no binding found for channel")
 	errOneAllocateOnly               = errors.New("only one Allocate() caller is allowed")
 	errUnexpectedServerDatagram      = errors.New("turn: datagram from server is neither STUN nor ChannelData")

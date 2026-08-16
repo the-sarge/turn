@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pion/logging"
 	"github.com/pion/stun/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/the-sarge/turn/v5/internal/proto"
@@ -22,7 +21,6 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		return UDPConn{
 			allocation: allocation{
 				clientHooks: client.hooks(),
-				log:         logging.NewDefaultLoggerFactory().NewLogger("test"),
 			},
 			bindingMgr:             bm,
 			bindingRefreshInterval: defaultBindingRefreshInterval,
@@ -293,7 +291,6 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 			Integrity:          stun.NewShortTermIntegrity("pass"),
 			Nonce:              stun.NewNonce("nonce"),
 			Lifetime:           time.Hour,
-			Log:                logging.NewDefaultLoggerFactory().NewLogger("test"),
 		})
 		defer func() { _ = conn.Close() }()
 
@@ -331,7 +328,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		}
 
 		_, err := conn.WriteTo([]byte("still closed"), peerAddr)
-		assert.ErrorIs(t, err, errClosed)
+		assert.ErrorIs(t, err, net.ErrClosed)
 	})
 
 	t.Run("ChannelBind 400 after unknown binding closes allocation", func(t *testing.T) {
@@ -372,7 +369,6 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 			Integrity:          stun.NewShortTermIntegrity("pass"),
 			Nonce:              stun.NewNonce("nonce"),
 			Lifetime:           time.Hour,
-			Log:                logging.NewDefaultLoggerFactory().NewLogger("test"),
 		})
 		defer func() { _ = conn.Close() }()
 
@@ -431,7 +427,6 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 			Integrity:          stun.NewShortTermIntegrity("pass"),
 			Nonce:              stun.NewNonce("nonce"),
 			Lifetime:           time.Hour,
-			Log:                logging.NewDefaultLoggerFactory().NewLogger("test"),
 		})
 		defer func() { _ = conn.Close() }()
 
@@ -542,7 +537,6 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 				realm:       stun.NewRealm("realm"),
 				integrity:   stun.NewShortTermIntegrity("pass"),
 				_nonce:      stun.NewNonce("nonce"),
-				log:         logging.NewDefaultLoggerFactory().NewLogger("test"),
 			},
 			bindingMgr: newBindingManager(),
 		}
@@ -591,7 +585,6 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 				realm:       stun.NewRealm("realm"),
 				integrity:   stun.NewShortTermIntegrity("pass"),
 				_nonce:      stun.NewNonce("nonce"),
-				log:         logging.NewDefaultLoggerFactory().NewLogger("test"),
 			},
 			bindingMgr: bm,
 		}

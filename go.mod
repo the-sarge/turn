@@ -3,7 +3,6 @@ module github.com/the-sarge/turn/v5
 go 1.24.0
 
 require (
-	github.com/pion/logging v0.2.4
 	github.com/pion/stun/v3 v3.1.6
 	github.com/pion/turn/v5 v5.0.12
 	github.com/stretchr/testify v1.11.1
@@ -12,6 +11,7 @@ require (
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/pion/dtls/v3 v3.1.4 // indirect
+	github.com/pion/logging v0.2.4 // indirect
 	github.com/pion/randutil v0.1.0 // indirect
 	github.com/pion/transport/v4 v4.1.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect

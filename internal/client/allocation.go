@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pion/logging"
 	"github.com/pion/stun/v3"
 	"github.com/the-sarge/turn/v5/internal/proto"
 )
@@ -31,7 +30,6 @@ type AllocationConfig struct {
 	Username                  stun.Username
 	Realm                     stun.Realm
 	Lifetime                  time.Duration
-	Log                       logging.LeveledLogger
 	PermissionRefreshInterval time.Duration
 	BindingRefreshInterval    time.Duration
 	BindingCheckInterval      time.Duration
@@ -56,25 +54,29 @@ type allocation struct {
 	refreshAllocTimer *PeriodicTimer        // Thread-safe
 	refreshPermsTimer *PeriodicTimer        // Thread-safe
 	mutex             sync.RWMutex          // Thread-safe
-	log               logging.LeveledLogger // Read-only
 
 	// onPermRefreshFailure, when set, observes a permission refresh that kept
 	// failing after retries. Read-only after construction.
 	onPermRefreshFailure func(error)
+
+	// onAllocRefreshFailure, when set, observes a permanent allocation-refresh
+	// failure: one exhausted refresh transaction, one well-formed non-438
+	// error response, or stale-nonce retry exhaustion. Read-only after
+	// construction.
+	onAllocRefreshFailure func(error)
 
 	// abortTransactions, when set, interrupts the allocation's pending
 	// transaction waits. Read-only after construction.
 	abortTransactions func()
 }
 
+// setNonceFromMsg updates the nonce from a 438 response carrying one. A 438
+// without a NONCE leaves the stale nonce standing, so the retry loop exhausts
+// and the failure reaches the caller's disposition as a value.
 func (a *allocation) setNonceFromMsg(msg *stun.Message) {
-	// Update nonce
 	var nonce stun.Nonce
 	if err := nonce.GetFrom(msg); err == nil {
 		a.setNonce(nonce)
-		a.log.Debug("Refresh allocation: 438, got new nonce.")
-	} else {
-		a.log.Warn("Refresh allocation: 438 but no nonce.")
 	}
 }
 
@@ -90,22 +92,17 @@ func (a *allocation) refreshAllocation(lifetime time.Duration, dontWait bool) er
 		stun.Fingerprint,
 	)
 	if err != nil {
-		return fmt.Errorf("%w: %s", errFailedToBuildRefreshRequest, err.Error())
+		return fmt.Errorf("%w: %w", errFailedToBuildRefreshRequest, err)
 	}
 
-	a.log.Debugf("Send refresh request (dontWait=%v)", dontWait)
 	trRes, err := a.performTransaction(msg, a.serverAddr, dontWait)
 	if err != nil {
-		return fmt.Errorf("%w: %s", errFailedToRefreshAllocation, err.Error())
+		return fmt.Errorf("%w: %w", errFailedToRefreshAllocation, err)
 	}
 
 	if dontWait {
-		a.log.Debug("Refresh request sent")
-
 		return nil
 	}
-
-	a.log.Debug("Refresh request sent, and waiting response")
 
 	res := trRes.Msg
 	if res.Type.Class == stun.ClassErrorResponse {
@@ -117,7 +114,12 @@ func (a *allocation) refreshAllocation(lifetime time.Duration, dontWait bool) er
 				return errTryAgain
 			}
 
-			return err
+			// A well-formed non-438 error response is a permanent refresh
+			// rejection: surface it as a typed value.
+			return &stun.TurnError{
+				StunMessageType: res.Type,
+				ErrorCodeAttr:   code,
+			}
 		}
 
 		return fmt.Errorf("%s", res.Type) //nolint:err113
@@ -126,11 +128,10 @@ func (a *allocation) refreshAllocation(lifetime time.Duration, dontWait bool) er
 	// Getting lifetime from response
 	var updatedLifetime proto.Lifetime
 	if err := updatedLifetime.GetFrom(res); err != nil {
-		return fmt.Errorf("%w: %s", errFailedToGetLifetime, err.Error())
+		return fmt.Errorf("%w: %w", errFailedToGetLifetime, err)
 	}
 
 	a.setLifetime(updatedLifetime.Duration)
-	a.log.Debugf("Updated lifetime: %d seconds", int(a.lifetime().Seconds()))
 
 	return nil
 }
@@ -138,54 +139,52 @@ func (a *allocation) refreshAllocation(lifetime time.Duration, dontWait bool) er
 func (a *allocation) refreshPermissions() error {
 	addrs := a.permMap.addrs()
 	if len(addrs) == 0 {
-		a.log.Debug("No permission to refresh")
-
 		return nil
 	}
 	if err := a.CreatePermissions(addrs...); err != nil {
-		if errors.Is(err, errTryAgain) {
-			return errTryAgain
-		}
-		a.log.Errorf("Fail to refresh permissions: %s", err)
-
 		return err
 	}
-	a.log.Debug("Refresh permissions successful")
 
 	return nil
 }
 
 func (a *allocation) onRefreshTimers(id int) {
-	a.log.Debugf("Refresh timer %d expired", id)
 	switch id {
 	case timerIDRefreshAlloc:
-		var err error
-		lifetime := a.lifetime()
-		// Limit the max retries on errTryAgain to 3
-		// when stale nonce returns, sencond retry should succeed
-		for range maxRetryAttempts {
-			err = a.refreshAllocation(lifetime, false)
-			if !errors.Is(err, errTryAgain) {
-				break
-			}
-		}
-		if err != nil {
-			a.log.Warnf("Failed to refresh allocation: %s", err)
-		}
+		a.refreshAllocationWithRetries()
 	case timerIDRefreshPerms:
-		var err error
-		for range maxRetryAttempts {
-			err = a.refreshPermissions()
-			if !errors.Is(err, errTryAgain) {
-				break
-			}
+		a.refreshPermissionsWithRetries()
+	}
+}
+
+func (a *allocation) refreshAllocationWithRetries() {
+	var err error
+	lifetime := a.lifetime()
+	// Limit the max retries on errTryAgain to 3
+	// when stale nonce returns, sencond retry should succeed
+	for range maxRetryAttempts {
+		err = a.refreshAllocation(lifetime, false)
+		if !errors.Is(err, errTryAgain) {
+			break
 		}
-		if err != nil {
-			a.log.Warnf("Failed to refresh permissions: %s", err)
-			if a.onPermRefreshFailure != nil {
-				a.onPermRefreshFailure(err)
-			}
+	}
+	if err != nil && a.onAllocRefreshFailure != nil {
+		// The periodic schedule at lifetime/2 offers no effective retry
+		// before server expiry: a standing failure is permanent.
+		a.onAllocRefreshFailure(err)
+	}
+}
+
+func (a *allocation) refreshPermissionsWithRetries() {
+	var err error
+	for range maxRetryAttempts {
+		err = a.refreshPermissions()
+		if !errors.Is(err, errTryAgain) {
+			break
 		}
+	}
+	if err != nil && a.onPermRefreshFailure != nil {
+		a.onPermRefreshFailure(err)
 	}
 }
 
@@ -200,7 +199,6 @@ func (a *allocation) setNonce(nonce stun.Nonce) {
 	a.mutex.Lock()
 	defer a.mutex.Unlock()
 
-	a.log.Debugf("Set new nonce with %d bytes", len(nonce))
 	a._nonce = nonce
 }
 

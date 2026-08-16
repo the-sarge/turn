@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pion/logging"
 	"github.com/pion/stun/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -33,15 +32,14 @@ func newSilentServerAllocation(t *testing.T, withAbort bool) *client.UDPConn {
 	require.NoError(t, err)
 
 	cl, err := NewClient(&ClientConfig{
-		Conn:          clientSock,
-		Server:        netip.MustParseAddrPort(serverSock.LocalAddr().String()),
-		Username:      "user",
-		Password:      "secret",
-		RTO:           25 * time.Millisecond,
-		LoggerFactory: logging.NewDefaultLoggerFactory(),
+		Conn:     clientSock,
+		Server:   netip.MustParseAddrPort(serverSock.LocalAddr().String()),
+		Username: "user",
+		Password: "secret",
+		RTO:      25 * time.Millisecond,
 	})
 	require.NoError(t, err)
-	require.NoError(t, cl.Listen())
+	startTestPump(t, cl, clientSock)
 
 	config := &client.AllocationConfig{
 		WriteTo:            cl.writeTo,
@@ -54,7 +52,6 @@ func newSilentServerAllocation(t *testing.T, withAbort bool) *client.UDPConn {
 		Integrity:          stun.NewShortTermIntegrity("secret"),
 		Nonce:              stun.NewNonce("nonce"),
 		Lifetime:           time.Hour,
-		Log:                logging.NewDefaultLoggerFactory().NewLogger("test"),
 	}
 	if withAbort {
 		config.AbortTransactions = func() {

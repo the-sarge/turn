@@ -6,6 +6,7 @@
 package turn
 
 import (
+	"context"
 	b64 "encoding/base64"
 	"net"
 	"net/netip"
@@ -13,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pion/logging"
 	"github.com/pion/stun/v3"
 	pionturn "github.com/pion/turn/v5"
 	"github.com/stretchr/testify/assert"
@@ -188,9 +188,9 @@ func TestClientNonceExpiration(t *testing.T) {
 		Password: "pass",
 	})
 	assert.NoError(t, err)
-	assert.NoError(t, client.Listen())
+	startTestPump(t, client, conn)
 
-	allocation, err := client.Allocate()
+	allocation, err := client.Allocate(context.Background())
 	assert.NoError(t, err)
 
 	_, err = allocation.WriteTo([]byte{0x00}, netip.MustParseAddrPort("127.0.0.1:8080"))
@@ -225,15 +225,13 @@ func TestInferAddressFamilyFromConn(t *testing.T) {
 }
 
 func TestGetRequestedAddressFamily(t *testing.T) {
-	log := logging.NewDefaultLoggerFactory().NewLogger("test")
-
 	t.Run("Infer IPv4 from connection", func(t *testing.T) {
 		conn, err := net.ListenPacket("udp4", "0.0.0.0:0") //nolint:noctx
 		assert.NoError(t, err)
 		defer conn.Close() //nolint:errcheck
 
 		// Should infer IPv4 from connection
-		family := getRequestedAddressFamily(log, conn)
+		family := getRequestedAddressFamily(conn)
 		assert.Equal(t, proto.RequestedFamilyIPv4, family)
 	})
 
@@ -243,7 +241,7 @@ func TestGetRequestedAddressFamily(t *testing.T) {
 		defer conn.Close() //nolint:errcheck
 
 		// Should infer IPv6 from connection
-		family := getRequestedAddressFamily(log, conn)
+		family := getRequestedAddressFamily(conn)
 		assert.Equal(t, proto.RequestedFamilyIPv6, family)
 	})
 }
@@ -335,9 +333,9 @@ func TestClientE2E(t *testing.T) {
 			bindingCheckInterval:      time.Millisecond * 50,
 		})
 		assert.NoError(t, err)
-		assert.NoError(t, client.Listen())
+		startTestPump(t, client, stunClientConn)
 
-		allocation, err := client.Allocate()
+		allocation, err := client.Allocate(context.Background())
 		assert.NoError(t, err)
 
 		remotePeerConn, err := net.ListenPacket("udp4", "0.0.0.0:0") // nolint: noctx
