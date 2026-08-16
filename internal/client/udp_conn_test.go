@@ -6,6 +6,7 @@ package client
 import (
 	"errors"
 	"net"
+	"net/netip"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -71,7 +72,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 				unblock := make(chan struct{})
 
 				bm := newBindingManager()
-				bound := bm.create(&net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 1234})
+				bound := bm.create(netip.MustParseAddrPort("127.0.0.1:1234"))
 				conn := makeConn(&mockClient{
 					performTransaction: func(msg *stun.Message, addr net.Addr, dontWait bool) (TransactionResult, error) {
 						<-unblock
@@ -171,7 +172,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
 				bm := newBindingManager()
-				bound := bm.create(&net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 1234})
+				bound := bm.create(netip.MustParseAddrPort("127.0.0.1:1234"))
 				conn := makeConn(&mockClient{performTransaction: tt.transactionFn}, bm)
 
 				nonceT0 := conn.nonce()
@@ -215,7 +216,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		var failed atomic.Bool
 
 		bm := newBindingManager()
-		bound := bm.create(&net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 1234})
+		bound := bm.create(netip.MustParseAddrPort("127.0.0.1:1234"))
 		originalCh := bound.number
 		conn := makeConn(&mockClient{
 			performTransaction: func(msg *stun.Message, addr net.Addr, dontWait bool) (TransactionResult, error) {
@@ -244,7 +245,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 
 	t.Run("ChannelBind 400 closes allocation", func(t *testing.T) {
 		relayedAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 54321}
-		peerAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 50000}
+		peerAddr := netip.MustParseAddrPort("127.0.0.1:50000")
 		serverAddr := &net.UDPAddr{IP: net.ParseIP("10.0.0.1"), Port: 3478}
 
 		deallocatedCh := make(chan net.Addr, 1)
@@ -335,7 +336,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 
 	t.Run("ChannelBind 400 after unknown binding closes allocation", func(t *testing.T) {
 		relayedAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 54321}
-		peerAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 1234}
+		peerAddr := netip.MustParseAddrPort("127.0.0.1:1234")
 		serverAddr := &net.UDPAddr{IP: net.ParseIP("10.0.0.1"), Port: 3478}
 
 		var channelBindAttempts atomic.Int32
@@ -398,7 +399,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 
 	t.Run("ChannelBind 400 after lost ready refresh keeps saved binding", func(t *testing.T) {
 		relayedAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 54321}
-		peerAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 1234}
+		peerAddr := netip.MustParseAddrPort("127.0.0.1:1234")
 		serverAddr := &net.UDPAddr{IP: net.ParseIP("10.0.0.1"), Port: 3478}
 
 		var channelBindAttempts atomic.Int32
@@ -454,7 +455,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 
 	t.Run("ChannelBind 400 refresh keeps saved binding", func(t *testing.T) {
 		bm := newBindingManager()
-		bound := bm.create(&net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 1234})
+		bound := bm.create(netip.MustParseAddrPort("127.0.0.1:1234"))
 		staleRefreshedAt := time.Now().Add(-(defaultBindingRefreshInterval + time.Minute))
 		var channelBindAttempts atomic.Int32
 		bound.setState(bindingStateReady)
@@ -489,10 +490,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 			},
 		}
 
-		addr := &net.UDPAddr{
-			IP:   net.ParseIP("127.0.0.1"),
-			Port: 1234,
-		}
+		addr := netip.MustParseAddrPort("127.0.0.1:1234")
 
 		pm := newPermissionMap()
 		assert.True(t, pm.insert(addr, &permission{
@@ -533,10 +531,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 			},
 		}
 
-		addr := &net.UDPAddr{
-			IP:   net.ParseIP("127.0.0.1"),
-			Port: 1234,
-		}
+		addr := netip.MustParseAddrPort("127.0.0.1:1234")
 
 		conn := UDPConn{
 			allocation: allocation{
@@ -568,7 +563,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 	})
 
 	t.Run("ChannelBind transaction failure retains channel number", func(t *testing.T) {
-		addr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 9999}
+		addr := netip.MustParseAddrPort("127.0.0.1:9999")
 		serverAddr := &net.UDPAddr{IP: net.ParseIP("10.0.0.1"), Port: 3478}
 
 		pm := newPermissionMap()
@@ -635,7 +630,7 @@ func TestCreatePermissions(t *testing.T) {
 			integrity:   stun.NewShortTermIntegrity("pass"),
 			_nonce:      stun.NewNonce("nonce"),
 		}
-		addr := &net.UDPAddr{IP: net.IPv4(5, 6, 7, 8), Port: 12345}
+		addr := netip.MustParseAddrPort("5.6.7.8:12345")
 		err := a.CreatePermissions(addr)
 		assert.NoError(t, err)
 		assert.True(t, called)
@@ -663,7 +658,7 @@ func TestCreatePermissions(t *testing.T) {
 			integrity:   stun.NewShortTermIntegrity("pass"),
 			_nonce:      stun.NewNonce("nonce"),
 		}
-		addr := &net.UDPAddr{IP: net.IPv4(5, 6, 7, 8), Port: 12345}
+		addr := netip.MustParseAddrPort("5.6.7.8:12345")
 		err := a.CreatePermissions(addr)
 		var turnErr *stun.TurnError
 		assert.Error(t, err)

@@ -52,6 +52,19 @@ func canonicalAddrPort(ap netip.AddrPort, mode canonicalMode) (netip.AddrPort, b
 	return netip.AddrPortFrom(addr, ap.Port()), true
 }
 
+// canonicalWireAddr converts an IP/port pair parsed from a TURN wire
+// attribute (a relayed address or a Data-indication peer) to its canonical
+// form, guarding the slice conversion and port range before handing the value
+// to canonicalAddrPort in unmap mode.
+func canonicalWireAddr(ip net.IP, port int) (netip.AddrPort, bool) {
+	addr, ok := netip.AddrFromSlice(ip)
+	if !ok || port < 1 || port > 65535 {
+		return netip.AddrPort{}, false
+	}
+
+	return canonicalAddrPort(netip.AddrPortFrom(addr, uint16(port)), canonicalUnmap)
+}
+
 // canonicalSourceAddr converts an inbound datagram source to its canonical
 // form. Only a non-nil *net.UDPAddr is a candidate; every other dynamic type
 // reports false. The conversion guards the two lossy steps of

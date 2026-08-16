@@ -9,7 +9,6 @@ var (
 	errFake                                = errors.New("fake error")
 	errTryAgain                            = errors.New("try again")
 	errClosed                              = errors.New("use of closed network connection")
-	errUDPAddrCast                         = errors.New("addr is not a UDP address")
 	errAlreadyClosed                       = errors.New("already closed")
 	errDoubleLock                          = errors.New("try-lock is already locked")
 	errTransactionClosed                   = errors.New("transaction closed")
@@ -23,7 +22,6 @@ var (
 	errChannelBindFailed                   = errors.New("channel bind failed")
 	errChannelBindingExpired               = errors.New("confirmed channel binding expired")
 	errPermissionRefreshFailed             = errors.New("permission refresh failed")
-	errInvalidUDPAddr                      = errors.New("invalid UDP address")
 	errNilContext                          = errors.New("context must not be nil")
 )
 

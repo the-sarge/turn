@@ -74,7 +74,7 @@ func newSilentServerAllocation(t *testing.T, withAbort bool) *client.UDPConn {
 }
 
 func TestCloseInterruptsTransactionWaits(t *testing.T) {
-	peer := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 1234}
+	peer := netip.MustParseAddrPort("127.0.0.1:1234")
 
 	t.Run("without abort Close waits out the retransmission budget", func(t *testing.T) {
 		conn := newSilentServerAllocation(t, false)

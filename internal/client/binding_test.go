@@ -4,7 +4,8 @@
 package client
 
 import (
-	"net"
+	"fmt"
+	"net/netip"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -31,11 +32,10 @@ func TestBindingManager(t *testing.T) {
 	})
 
 	t.Run("method test", func(t *testing.T) {
-		lo := net.IPv4(127, 0, 0, 1)
 		count := 100
 		bm := newBindingManager()
 		for i := range count {
-			addr := &net.UDPAddr{IP: lo, Port: 10000 + i}
+			addr := netip.MustParseAddrPort(fmt.Sprintf("127.0.0.1:%d", 10000+i))
 			b0 := bm.create(addr)
 			b1, ok := bm.findByAddr(addr)
 			assert.True(t, ok, "should succeed")
@@ -57,7 +57,7 @@ func TestBindingManager(t *testing.T) {
 		assert.Equal(t, count, len(bm.addrMap), "should match")
 
 		for i := range count {
-			addr := &net.UDPAddr{IP: lo, Port: 10000 + i}
+			addr := netip.MustParseAddrPort(fmt.Sprintf("127.0.0.1:%d", 10000+i))
 			if i%2 == 0 {
 				assert.True(t, bm.deleteByAddr(addr), "should return true")
 			} else {
@@ -71,7 +71,7 @@ func TestBindingManager(t *testing.T) {
 	})
 
 	t.Run("failure test", func(t *testing.T) {
-		addr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 7777}
+		addr := netip.MustParseAddrPort("127.0.0.1:7777")
 		m := newBindingManager()
 		var ok bool
 		_, ok = m.findByAddr(addr)

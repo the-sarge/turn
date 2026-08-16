@@ -4,7 +4,7 @@
 package client
 
 import (
-	"net"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -34,7 +34,7 @@ const (
 type binding struct {
 	number       uint16          // Read-only
 	st           bindingState    // Thread-safe (atomic op)
-	addr         net.Addr        // Read-only
+	addr         netip.AddrPort  // Read-only
 	mgr          *bindingManager // Read-only
 	muBind       sync.Mutex      // Thread-safe, for ChannelBind ops
 	attemptDone  chan struct{}   // Protected by muBind; non-nil while a bind attempt is in flight
@@ -112,7 +112,7 @@ func (b *binding) ok() bool {
 // Thread-safe binding map.
 type bindingManager struct {
 	chanMap map[uint16]*binding
-	addrMap map[string]*binding
+	addrMap map[netip.AddrPort]*binding
 	next    uint16
 	mutex   sync.RWMutex
 }
@@ -120,7 +120,7 @@ type bindingManager struct {
 func newBindingManager() *bindingManager {
 	return &bindingManager{
 		chanMap: map[uint16]*binding{},
-		addrMap: map[string]*binding{},
+		addrMap: map[netip.AddrPort]*binding{},
 		next:    minChannelNumber,
 	}
 }
@@ -136,17 +136,17 @@ func (mgr *bindingManager) assignChannelNumber() uint16 {
 	return n
 }
 
-func (mgr *bindingManager) create(addr net.Addr) *binding {
+func (mgr *bindingManager) create(addr netip.AddrPort) *binding {
 	return mgr.getOrCreate(addr)
 }
 
 // getOrCreate returns the existing binding for addr, or creates one, so that
 // concurrent callers for the same peer share a single channel number.
-func (mgr *bindingManager) getOrCreate(addr net.Addr) *binding {
+func (mgr *bindingManager) getOrCreate(addr netip.AddrPort) *binding {
 	mgr.mutex.Lock()
 	defer mgr.mutex.Unlock()
 
-	if b, ok := mgr.addrMap[addr.String()]; ok {
+	if b, ok := mgr.addrMap[addr]; ok {
 		return b
 	}
 
@@ -158,16 +158,16 @@ func (mgr *bindingManager) getOrCreate(addr net.Addr) *binding {
 	}
 
 	mgr.chanMap[b.number] = b
-	mgr.addrMap[b.addr.String()] = b
+	mgr.addrMap[b.addr] = b
 
 	return b
 }
 
-func (mgr *bindingManager) findByAddr(addr net.Addr) (*binding, bool) {
+func (mgr *bindingManager) findByAddr(addr netip.AddrPort) (*binding, bool) {
 	mgr.mutex.RLock()
 	defer mgr.mutex.RUnlock()
 
-	b, ok := mgr.addrMap[addr.String()]
+	b, ok := mgr.addrMap[addr]
 
 	return b, ok
 }
@@ -181,16 +181,16 @@ func (mgr *bindingManager) findByNumber(number uint16) (*binding, bool) {
 	return b, ok
 }
 
-func (mgr *bindingManager) deleteByAddr(addr net.Addr) bool {
+func (mgr *bindingManager) deleteByAddr(addr netip.AddrPort) bool {
 	mgr.mutex.Lock()
 	defer mgr.mutex.Unlock()
 
-	b, ok := mgr.addrMap[addr.String()]
+	b, ok := mgr.addrMap[addr]
 	if !ok {
 		return false
 	}
 
-	delete(mgr.addrMap, addr.String())
+	delete(mgr.addrMap, addr)
 	delete(mgr.chanMap, b.number)
 
 	return true
@@ -205,7 +205,7 @@ func (mgr *bindingManager) deleteByNumber(number uint16) bool {
 		return false
 	}
 
-	delete(mgr.addrMap, b.addr.String())
+	delete(mgr.addrMap, b.addr)
 	delete(mgr.chanMap, number)
 
 	return true
