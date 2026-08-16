@@ -1,7 +1,7 @@
 # Modernize the Kept API (M1) Implementation Plan
 
 **Date:** 2026-08-15
-**Status:** Accepted; Slice 1 complete (PR #25); Slices 2-5 pending
+**Status:** Accepted; Slice 1 complete (PR #25); Slice 2 complete (PR #27); Slices 3-5 pending
 **Track:** 2 of 3 in the 2026-08-14 TURN fork molding program
 **Depends on:** Track 1 (complete: `v5.1.0-gs.1` at `1ee874e`) and wiremux Slice 1.3 (complete: GridSwarm/wiremux#1162 merged as `ccd61c4`) — both gates are open
 **Related:** [Program index](2026-08-14-turn-molding-program.md), [Molding program scope](2026-08-14-molding-program-scope.md) (D1–D5, program shape M1), [Owned-library ADR](2026-08-14-owned-library-fork.md), [Cut and stabilize plan](2026-08-14-cut-and-stabilize-plan.md) (transitional fixture seam), [Prepared-only writes ADR](2026-08-15-prepared-only-writes.md), [Fork-owned fixture ADR](2026-08-15-fork-owned-test-fixture.md), wiremux consumer contract `docs/adr/2026-08-09-turn-carrier-prerequisites-plan.md` (GridSwarm/wiremux, Slice 1.3 and the 2026-08-14 fork-pivot amendment)
@@ -57,12 +57,12 @@ Kept protocol behavior that M1 preserves byte-for-byte on the wire: Allocate cha
 | Slice | Status/disposition | Delivers | Blocked by | Removes temporary seam |
 |---|---|---|---|---|
 | 1 | complete (PR #25) | Client-side surface cut to the consumer's crossing; `Server netip.AddrPort`; server-source admission in `HandleInbound`; protocol internals unexported; `pion/transport` no longer a direct dependency | None | n/a |
-| 2 | new | Exported `*Allocation` with `netip` data plane and `PreparePeer`; deadline surface deleted; server-reported relayed address validated | 1 | n/a |
+| 2 | complete (PR #27) | Exported `*Allocation` with `netip` data plane and `PreparePeer`; deadline surface deleted; server-reported relayed address validated | 1 | n/a |
 | 3 | new | `Allocate(ctx)` with non-blocking producers; `Listen` deleted; `pion/logging` removed with a per-site ledger; allocation-refresh failure terminalizes with a cause; `net.ErrClosed`, `%w`, exported sentinels | 2 | n/a |
 | 4 | new | Prepared-only `WriteTo`; Send-indication path deleted; ChannelData-only invariant structural | 2 | n/a |
 | 5 | new | Exported `turntest` fixture; root tests re-pointed; upstream `pion/turn/v5` dropped; README refreshed; tag `v5.2.0-gs.1`; wiremux adoption issue filed | 3, 4 | Upstream `pion/turn/v5@v5.0.12` test-only fixture (Track 1 Slice 2 seam) |
 
-Edges 1→2 and 2→{3,4} are sequencing edges on the same functions, not correctness dependencies: Slice 2 introduces the `Allocation` type whose `WriteTo`/`Close`/`ReadFrom` Slices 3 and 4 then change in place, so writing them once against Slice 2's signatures avoids rewriting the same functions twice and line-conflicting PRs on `internal/client/udp_conn.go`. Slices 3 and 4 are parallel-safe after Slice 2 merges: their overlap is one `errClosed` line inside `WriteTo` (`udp_conn.go:471`) and root-test hunks, with rebase cost bounded to those. Edge {3,4}→5 is genuine: the fixture is written once against the final client behavior, and the tag requires every M1 slice merged. Each slice is independently green and mergeable at its own position. Frontier now: Slice 2. Frontier after Slice 2: Slices 3 and 4.
+Edges 1→2 and 2→{3,4} are sequencing edges on the same functions, not correctness dependencies: Slice 2 introduces the `Allocation` type whose `WriteTo`/`Close`/`ReadFrom` Slices 3 and 4 then change in place, so writing them once against Slice 2's signatures avoids rewriting the same functions twice and line-conflicting PRs on `internal/client/udp_conn.go`. Slices 3 and 4 are parallel-safe after Slice 2 merges: their overlap is one `errClosed` line inside `WriteTo` (`udp_conn.go:471`) and root-test hunks, with rebase cost bounded to those. Edge {3,4}→5 is genuine: the fixture is written once against the final client behavior, and the tag requires every M1 slice merged. Each slice is independently green and mergeable at its own position. Frontier now: Slices 3 and 4 (parallel-safe). Frontier after Slices 3 and 4: Slice 5.
 
 ## Implementation Slices
 
