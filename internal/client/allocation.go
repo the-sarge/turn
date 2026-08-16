@@ -55,7 +55,6 @@ type allocation struct {
 	_lifetime         time.Duration         // Needs mutex x
 	refreshAllocTimer *PeriodicTimer        // Thread-safe
 	refreshPermsTimer *PeriodicTimer        // Thread-safe
-	readTimer         *time.Timer           // Thread-safe
 	mutex             sync.RWMutex          // Thread-safe
 	log               logging.LeveledLogger // Read-only
 

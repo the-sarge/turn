@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -22,7 +23,7 @@ import (
 type prepareHarness struct {
 	conn      *UDPConn
 	mock      *mockClient
-	peer      *net.UDPAddr
+	peer      netip.AddrPort
 	permCount atomic.Int32
 	bindCount atomic.Int32
 	bindGate  chan struct{} // If non-nil, ChannelBind transactions block on it
@@ -38,7 +39,7 @@ func newPrepareHarness(t *testing.T, gateBinds bool) *prepareHarness {
 	t.Helper()
 
 	harness := &prepareHarness{
-		peer: &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 1234},
+		peer: netip.MustParseAddrPort("127.0.0.1:1234"),
 	}
 	if gateBinds {
 		harness.bindGate = make(chan struct{})
@@ -136,38 +137,6 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 		assert.Equal(t, 5, n)
 		assert.True(t, proto.IsChannelData(harness.lastWrite()),
 			"write after successful PreparePeer must be ChannelData, not Send indication")
-	})
-
-	t.Run("invalid peers rejected", func(t *testing.T) {
-		harness := newPrepareHarness(t, false)
-
-		assert.ErrorIs(t, harness.conn.PreparePeer(context.Background(),
-			&net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 1234}), errUDPAddrCast)
-		assert.ErrorIs(t, harness.conn.PreparePeer(context.Background(),
-			&net.UDPAddr{IP: net.ParseIP("0.0.0.0"), Port: 1234}), errInvalidUDPAddr)
-		assert.ErrorIs(t, harness.conn.PreparePeer(context.Background(),
-			&net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0}), errInvalidUDPAddr)
-		assert.ErrorIs(t, harness.conn.PreparePeer(context.Background(),
-			&net.UDPAddr{IP: net.ParseIP("224.0.0.1"), Port: 1234}), errInvalidUDPAddr)
-		assert.ErrorIs(t, harness.conn.PreparePeer(context.Background(),
-			&net.UDPAddr{IP: net.ParseIP("fe80::1"), Port: 1234, Zone: "en0"}), errInvalidUDPAddr)
-	})
-
-	t.Run("peer aliases share the prepared binding", func(t *testing.T) {
-		harness := newPrepareHarness(t, false)
-		peer := &net.UDPAddr{IP: net.ParseIP("::1"), Port: 5678}
-
-		assert.NoError(t, harness.conn.PreparePeer(context.Background(), peer))
-		assert.Equal(t, int32(1), harness.bindCount.Load())
-
-		// A zoned alias of the prepared peer must map onto its channel binding
-		// instead of bypassing it via Send indication.
-		alias := &net.UDPAddr{IP: net.ParseIP("::1"), Port: 5678, Zone: "en0"}
-		_, err := harness.conn.WriteTo([]byte("via alias"), alias)
-		assert.NoError(t, err)
-		assert.True(t, proto.IsChannelData(harness.lastWrite()),
-			"write to an alias of a prepared peer must be ChannelData")
-		assert.Equal(t, int32(1), harness.bindCount.Load(), "alias must not create a second binding")
 	})
 
 	t.Run("terminal failure survives an in-flight bind success", func(t *testing.T) {

@@ -1,11 +1,10 @@
 // SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
-// Package turn provides GridSwarm's owned UDP TURN client, centered on Client.Allocate and Client.PrepareUDPPeer.
+// Package turn provides GridSwarm's owned UDP TURN client, centered on Client.Allocate and Allocation.PreparePeer.
 package turn
 
 import (
-	"context"
 	b64 "encoding/base64"
 	"fmt"
 	"math"
@@ -336,8 +335,12 @@ func (c *Client) sendAllocateRequest(protocol proto.Protocol) ( //nolint:cyclop
 	return relayed, lifetime, nonce, nil
 }
 
-// Allocate sends a TURN allocation request to the given transport address.
-func (c *Client) Allocate() (net.PacketConn, error) {
+// Allocate requests a UDP relay allocation from the configured server and
+// returns it as an Allocation. The server-reported relayed address is
+// canonicalized once here and becomes authoritative for RelayedAddr; if it
+// cannot be canonicalized, the allocation is released with a lifetime-0
+// Refresh and Allocate returns ErrInvalidRelayedAddress.
+func (c *Client) Allocate() (*Allocation, error) {
 	if err := c.allocTryLock.Lock(); err != nil {
 		return nil, fmt.Errorf("%w: %s", errOneAllocateOnly, err.Error())
 	}
@@ -379,22 +382,16 @@ func (c *Client) Allocate() (net.PacketConn, error) {
 	})
 	c.setRelayedUDPConn(relayedConn)
 
-	return relayedConn, nil
-}
+	canonicalRelayed, ok := canonicalWireAddr(relayed.IP, relayed.Port)
+	if !ok {
+		// Release the server-side allocation (lifetime-0 Refresh) and clear
+		// the client's pointer via OnDeallocated before rejecting.
+		_ = relayedConn.Close()
 
-// PrepareUDPPeer creates a permission for peer on the client's UDP allocation
-// and waits until the TURN server confirms a channel binding for it. After it
-// returns nil, writes to peer use ChannelData (or fail) for the lifetime of
-// the allocation; they never fall back to Send indications. Concurrent calls
-// for the same peer share one permission and one bind; canceling ctx wakes
-// only that caller and leaves the shared work running.
-func (c *Client) PrepareUDPPeer(ctx context.Context, peer net.Addr) error {
-	conn := c.relayedUDPConn()
-	if conn == nil {
-		return errUDPAllocationNotFound
+		return nil, fmt.Errorf("%w: %s", ErrInvalidRelayedAddress, relayedAddr)
 	}
 
-	return conn.PreparePeer(ctx, peer)
+	return newAllocation(relayedConn, canonicalRelayed), nil
 }
 
 // performTransaction performs STUN transaction.
@@ -492,9 +489,11 @@ func (c *Client) handleSTUNMessage(data []byte, from net.Addr) error { //nolint:
 			if err := peerAddr.GetFrom(msg); err != nil {
 				return err
 			}
-			from = &net.UDPAddr{
-				IP:   peerAddr.IP,
-				Port: peerAddr.Port,
+			// The canonical peer label is created here, once per datagram, so
+			// ReadFrom returns it without per-packet conversion.
+			source, ok := canonicalWireAddr(peerAddr.IP, peerAddr.Port)
+			if !ok {
+				return fmt.Errorf("%w: data indication from %s", ErrInvalidPeer, peerAddr)
 			}
 
 			var data proto.Data
@@ -502,7 +501,7 @@ func (c *Client) handleSTUNMessage(data []byte, from net.Addr) error { //nolint:
 				return err
 			}
 
-			c.log.Tracef("Data indication received from %s", from)
+			c.log.Tracef("Data indication received from %s", source)
 
 			relayedConn := c.relayedUDPConn()
 			if relayedConn == nil {
@@ -510,7 +509,7 @@ func (c *Client) handleSTUNMessage(data []byte, from net.Addr) error { //nolint:
 
 				return nil // Silently discard
 			}
-			relayedConn.HandleInbound(data, from)
+			relayedConn.HandleInbound(data, source)
 		default:
 			c.log.Debug("Received unsupported STUN method")
 		}

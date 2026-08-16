@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net"
 	"net/netip"
 	"sync"
@@ -18,10 +17,6 @@ import (
 	"github.com/pion/stun/v3"
 	"github.com/the-sarge/turn/v5/internal/proto"
 )
-
-func noDeadline() time.Time {
-	return time.Time{}
-}
 
 const (
 	maxReadQueueSize              = 1024
@@ -38,13 +33,16 @@ const (
 	timerIDCheckBindings
 )
 
+// inboundData is one relayed datagram. from is the canonical peer label,
+// stored at creation so ReadFrom returns it without per-packet conversion.
 type inboundData struct {
 	data []byte
-	from net.Addr
+	from netip.AddrPort
 }
 
-// UDPConn is the implementation of the Conn and PacketConn interfaces for UDP network connections.
-// compatible with net.PacketConn and net.Conn.
+// UDPConn is one live UDP relay allocation. Peer addresses cross its methods
+// as canonical netip.AddrPort values; the root package owns canonicalization
+// and validation, so every peer reaching this type is already canonical.
 type UDPConn struct {
 	bindingMgr             *bindingManager   // Thread-safe
 	checkBindingsTimer     *PeriodicTimer    // Thread-safe
@@ -71,7 +69,6 @@ func NewUDPConn(config *AllocationConfig) *UDPConn {
 			},
 			relayedAddr:       config.RelayedAddr,
 			serverAddr:        config.ServerAddr,
-			readTimer:         time.NewTimer(time.Duration(math.MaxInt64)),
 			permMap:           newPermissionMap(),
 			username:          config.Username,
 			realm:             config.Realm,
@@ -135,47 +132,30 @@ func NewUDPConn(config *AllocationConfig) *UDPConn {
 	return conn
 }
 
-// ReadFrom reads a packet from the connection,
-// copying the payload into p. It returns the number of
-// bytes copied into p and the return address that
-// was on the packet.
-// It returns the number of bytes read (0 <= n <= len(p))
-// and any error encountered. Callers should always process
-// the n > 0 bytes returned before considering the error err.
-// ReadFrom can be made to time out and return
-// an Error with Timeout() == true after a fixed time limit;
-// see SetDeadline and SetReadDeadline.
-func (c *UDPConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
-	for {
-		select {
-		case ibData := <-c.readCh:
-			n := copy(p, ibData.data)
-			if n < len(ibData.data) {
-				return 0, nil, io.ErrShortBuffer
-			}
+// ReadFrom reads one relayed datagram, copying the payload into p. It returns
+// the number of bytes copied and the canonical source peer, blocking until a
+// datagram arrives or the allocation closes.
+func (c *UDPConn) ReadFrom(p []byte) (int, netip.AddrPort, error) {
+	select {
+	case ibData := <-c.readCh:
+		n := copy(p, ibData.data)
+		if n < len(ibData.data) {
+			return 0, netip.AddrPort{}, io.ErrShortBuffer
+		}
 
-			return n, ibData.from, nil
+		return n, ibData.from, nil
 
-		case <-c.readTimer.C:
-			return 0, nil, &net.OpError{
-				Op:   "read",
-				Net:  c.LocalAddr().Network(),
-				Addr: c.LocalAddr(),
-				Err:  newTimeoutError("i/o timeout"),
-			}
-
-		case <-c.closeCh:
-			return 0, nil, &net.OpError{
-				Op:   "read",
-				Net:  c.LocalAddr().Network(),
-				Addr: c.LocalAddr(),
-				Err:  errClosed,
-			}
+	case <-c.closeCh:
+		return 0, netip.AddrPort{}, &net.OpError{
+			Op:   "read",
+			Net:  c.LocalAddr().Network(),
+			Addr: c.LocalAddr(),
+			Err:  errClosed,
 		}
 	}
 }
 
-func (a *allocation) createPermission(perm *permission, addr net.Addr) error {
+func (a *allocation) createPermission(perm *permission, addr netip.AddrPort) error {
 	perm.mutex.Lock()
 	defer perm.mutex.Unlock()
 
@@ -192,19 +172,15 @@ func (a *allocation) createPermission(perm *permission, addr net.Addr) error {
 	return nil
 }
 
-// PreparePeer creates a permission for peer and waits until the TURN server
-// confirms a channel binding for it. After it returns nil, writes to peer use
-// ChannelData (or fail) for the lifetime of the allocation; they never fall
-// back to Send indications. Concurrent callers for the same peer share one
-// permission and one bind attempt; canceling ctx wakes only that caller (with
-// its cause) and leaves the shared work running.
-func (c *UDPConn) PreparePeer(ctx context.Context, peer net.Addr) error {
+// PreparePeer creates a permission for the canonical peer and waits until the
+// TURN server confirms a channel binding for it. After it returns nil, writes
+// to peer use ChannelData (or fail) for the lifetime of the allocation; they
+// never fall back to Send indications. Concurrent callers for the same peer
+// share one permission and one bind attempt; canceling ctx wakes only that
+// caller (with its cause) and leaves the shared work running.
+func (c *UDPConn) PreparePeer(ctx context.Context, peer netip.AddrPort) error {
 	if ctx == nil {
 		return errNilContext
-	}
-	udpPeer, err := canonicalUDPPeer(peer)
-	if err != nil {
-		return err
 	}
 	if err := ctx.Err(); err != nil {
 		return context.Cause(ctx)
@@ -213,40 +189,16 @@ func (c *UDPConn) PreparePeer(ctx context.Context, peer net.Addr) error {
 		return errClosed
 	}
 
-	if err := c.awaitPermission(ctx, udpPeer); err != nil {
+	if err := c.awaitPermission(ctx, peer); err != nil {
 		return err
 	}
 
-	return c.awaitBinding(ctx, c.bindingMgr.getOrCreate(udpPeer))
-}
-
-// canonicalUDPPeer validates peer and reduces it to a canonical form so that
-// aliases of the same peer (IPv4-mapped IPv6, zoned addresses) share one
-// permission and one channel binding.
-func canonicalUDPPeer(peer net.Addr) (*net.UDPAddr, error) {
-	udpPeer, ok := peer.(*net.UDPAddr)
-	if !ok || udpPeer == nil {
-		return nil, errUDPAddrCast
-	}
-	if udpPeer.Port <= 0 || udpPeer.Port > math.MaxUint16 || udpPeer.Zone != "" {
-		return nil, errInvalidUDPAddr
-	}
-
-	addr, ok := netip.AddrFromSlice(udpPeer.IP)
-	if !ok {
-		return nil, errInvalidUDPAddr
-	}
-	addr = addr.Unmap()
-	if addr.IsUnspecified() || addr.IsMulticast() {
-		return nil, errInvalidUDPAddr
-	}
-
-	return &net.UDPAddr{IP: net.IP(addr.AsSlice()), Port: udpPeer.Port}, nil
+	return c.awaitBinding(ctx, c.bindingMgr.getOrCreate(peer))
 }
 
 // awaitPermission blocks until a permission for peer is installed, the shared
 // create attempt fails, or ctx is canceled.
-func (c *UDPConn) awaitPermission(ctx context.Context, peer net.Addr) error {
+func (c *UDPConn) awaitPermission(ctx context.Context, peer netip.AddrPort) error {
 	for {
 		perm := c.permMap.getOrCreate(peer)
 		if perm.state() == permStatePermitted {
@@ -282,7 +234,7 @@ func (c *UDPConn) awaitPermission(ctx context.Context, peer net.Addr) error {
 // ensurePermissionAttempt returns a channel that closes when the in-flight
 // CreatePermission attempt (existing or newly started) completes. It returns
 // nil once the allocation is closing.
-func (c *UDPConn) ensurePermissionAttempt(perm *permission, peer net.Addr) chan struct{} {
+func (c *UDPConn) ensurePermissionAttempt(perm *permission, peer netip.AddrPort) chan struct{} {
 	perm.attemptMutex.Lock()
 	defer perm.attemptMutex.Unlock()
 
@@ -443,29 +395,11 @@ func (c *UDPConn) failPreparedBindings(err error) {
 	}
 }
 
-// WriteTo writes a packet with payload to addr.
-// WriteTo can be made to time out and return
-// an Error with Timeout() == true after a fixed time limit;
-// see SetDeadline and SetWriteDeadline.
-// On packet-oriented connections, write timeouts are rare.
-func (c *UDPConn) WriteTo(payload []byte, addr net.Addr) (int, error) { //nolint:gocognit,cyclop
+// WriteTo writes a packet with payload to the canonical peer addr. Writes to
+// a prepared peer use its channel binding or fail; writes to an unprepared
+// peer may fall back to Send indications while a binding is established.
+func (c *UDPConn) WriteTo(payload []byte, addr netip.AddrPort) (int, error) { //nolint:gocognit,cyclop
 	var err error
-	udpAddr, ok := addr.(*net.UDPAddr)
-	if !ok || udpAddr == nil {
-		return 0, errUDPAddrCast
-	}
-	// Reduce aliases (IPv4-mapped IPv6, zoned addresses) to the canonical peer
-	// so they share its permission and channel binding. Peers that cannot be
-	// canonicalized are left as-is.
-	if canonical, cerr := canonicalUDPPeer(udpAddr); cerr == nil {
-		addr = canonical
-	} else if udpAddr.Zone != "" {
-		unzoned := *udpAddr
-		unzoned.Zone = ""
-		if canonical, cerr = canonicalUDPPeer(&unzoned); cerr == nil {
-			addr = canonical
-		}
-	}
 	if c.isClosed() {
 		return 0, &net.OpError{
 			Op:   "write",
@@ -526,7 +460,7 @@ func (c *UDPConn) WriteTo(payload []byte, addr net.Addr) (int, error) { //nolint
 		c.maybeBind(bound)
 
 		// Send data using SendIndication
-		peerAddr := addr2PeerAddress(addr)
+		peerAddr := peerAddress(addr)
 		var msg *stun.Message
 		msg, err = stun.Build(
 			stun.TransactionID,
@@ -618,74 +552,24 @@ func (c *UDPConn) isClosed() bool {
 	}
 }
 
-// SetDeadline sets the read and write deadlines associated
-// with the connection. It is equivalent to calling both
-// SetReadDeadline and SetWriteDeadline.
-//
-// A deadline is an absolute time after which I/O operations
-// fail with a timeout (see type Error) instead of
-// blocking. The deadline applies to all future and pending
-// I/O, not just the immediately following call to ReadFrom or
-// WriteTo. After a deadline has been exceeded, the connection
-// can be refreshed by setting a deadline in the future.
-//
-// An idle timeout can be implemented by repeatedly extending
-// the deadline after successful ReadFrom or WriteTo calls.
-//
-// A zero value for t means I/O operations will not time out.
-func (c *UDPConn) SetDeadline(t time.Time) error {
-	return c.SetReadDeadline(t)
-}
-
-// SetReadDeadline sets the deadline for future ReadFrom calls
-// and any currently-blocked ReadFrom call.
-// A zero value for t means ReadFrom will not time out.
-func (c *UDPConn) SetReadDeadline(t time.Time) error {
-	var d time.Duration
-	if t.Equal(noDeadline()) {
-		d = time.Duration(math.MaxInt64)
-	} else {
-		d = time.Until(t)
+// peerAddress converts a canonical peer to its wire attribute form.
+func peerAddress(addr netip.AddrPort) proto.PeerAddress {
+	return proto.PeerAddress{
+		IP:   net.IP(addr.Addr().AsSlice()),
+		Port: int(addr.Port()),
 	}
-	c.readTimer.Reset(d)
-
-	return nil
-}
-
-// SetWriteDeadline sets the deadline for future WriteTo calls
-// and any currently-blocked WriteTo call.
-// Even if write times out, it may return n > 0, indicating that
-// some of the data was successfully written.
-// A zero value for t means WriteTo will not time out.
-func (c *UDPConn) SetWriteDeadline(time.Time) error {
-	// Write never blocks.
-	return nil
-}
-
-func addr2PeerAddress(addr net.Addr) proto.PeerAddress {
-	var peerAddr proto.PeerAddress
-	switch a := addr.(type) {
-	case *net.UDPAddr:
-		peerAddr.IP = a.IP
-		peerAddr.Port = a.Port
-	case *net.TCPAddr:
-		peerAddr.IP = a.IP
-		peerAddr.Port = a.Port
-	}
-
-	return peerAddr
 }
 
 // CreatePermissions Issues a CreatePermission request for the supplied addresses
 // as described in https://datatracker.ietf.org/doc/html/rfc5766#section-9
-func (a *allocation) CreatePermissions(addrs ...net.Addr) error {
+func (a *allocation) CreatePermissions(addrs ...netip.AddrPort) error {
 	setters := []stun.Setter{
 		stun.TransactionID,
 		stun.NewType(stun.MethodCreatePermission, stun.ClassRequest),
 	}
 
 	for _, addr := range addrs {
-		setters = append(setters, addr2PeerAddress(addr))
+		setters = append(setters, peerAddress(addr))
 	}
 
 	setters = append(setters,
@@ -730,8 +614,9 @@ func (a *allocation) CreatePermissions(addrs ...net.Addr) error {
 	return nil
 }
 
-// HandleInbound passes inbound data in UDPConn.
-func (c *UDPConn) HandleInbound(data []byte, from net.Addr) {
+// HandleInbound passes one relayed datagram to the allocation. from is the
+// canonical source peer label, stored as-is and returned by ReadFrom.
+func (c *UDPConn) HandleInbound(data []byte, from netip.AddrPort) {
 	// Copy data
 	copied := make([]byte, len(data))
 	copy(copied, data)
@@ -743,12 +628,12 @@ func (c *UDPConn) HandleInbound(data []byte, from net.Addr) {
 	}
 }
 
-// FindAddrByChannelNumber returns a peer address associated with the
-// channel number on this UDPConn.
-func (c *UDPConn) FindAddrByChannelNumber(chNum uint16) (net.Addr, bool) {
+// FindAddrByChannelNumber returns the canonical peer address associated with
+// the channel number on this UDPConn.
+func (c *UDPConn) FindAddrByChannelNumber(chNum uint16) (netip.AddrPort, bool) {
 	b, ok := c.bindingMgr.findByNumber(chNum)
 	if !ok {
-		return nil, false
+		return netip.AddrPort{}, false
 	}
 
 	return b.addr, true
@@ -883,7 +768,7 @@ func (c *UDPConn) bind(bound *binding) error {
 	setters := []stun.Setter{
 		stun.TransactionID,
 		stun.NewType(stun.MethodChannelBind, stun.ClassRequest),
-		addr2PeerAddress(bound.addr),
+		peerAddress(bound.addr),
 		proto.ChannelNumber(bound.number),
 		c.username,
 		c.realm,

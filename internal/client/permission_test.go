@@ -4,7 +4,7 @@
 package client
 
 import (
-	"net"
+	"net/netip"
 	"sort"
 	"strings"
 	"testing"
@@ -30,64 +30,47 @@ func TestPermissionMap(t *testing.T) {
 
 		perm1 := &permission{st: permStateIdle}
 		perm2 := &permission{st: permStatePermitted}
-		perm3 := &permission{st: permStateIdle}
-		udpAddr1, _ := net.ResolveUDPAddr("udp", "1.2.3.4:5000")
-		udpAddr2, _ := net.ResolveUDPAddr("udp", "5.6.7.8:8888")
-		tcpAddr, _ := net.ResolveTCPAddr("tcp", "7.8.9.10:5000")
-		assert.True(t, pm.insert(udpAddr1, perm1))
+		addr1 := netip.MustParseAddrPort("1.2.3.4:5000")
+		addr2 := netip.MustParseAddrPort("5.6.7.8:8888")
+		assert.True(t, pm.insert(addr1, perm1))
 		assert.Equal(t, 1, len(pm.permMap))
-		assert.True(t, pm.insert(udpAddr2, perm2))
+		assert.True(t, pm.insert(addr2, perm2))
 		assert.Equal(t, 2, len(pm.permMap))
-		assert.True(t, pm.insert(tcpAddr, perm3))
-		assert.Equal(t, 3, len(pm.permMap))
 
-		perms, ok := pm.find(udpAddr1)
+		perms, ok := pm.find(addr1)
 		assert.True(t, ok)
 		assert.Equal(t, perm1, perms)
 		assert.Equal(t, permStateIdle, perms.st)
 
-		perms, ok = pm.find(udpAddr2)
+		perms, ok = pm.find(addr2)
 		assert.True(t, ok)
 		assert.Equal(t, perm2, perms)
 		assert.Equal(t, permStatePermitted, perms.st)
 
-		perms, ok = pm.find(tcpAddr)
-		assert.True(t, ok)
-		assert.Equal(t, perm3, perms)
-		assert.Equal(t, permStateIdle, perms.st)
-
 		addrs := pm.addrs()
-		ips := []net.IP{}
-
-		for _, addr := range addrs {
-			switch addr.(type) {
-			case *net.UDPAddr:
-				addr, err := net.ResolveUDPAddr(addr.Network(), addr.String())
-				assert.NoError(t, err)
-
-				ips = append(ips, addr.IP)
-			case *net.TCPAddr:
-				addr, err := net.ResolveTCPAddr(addr.Network(), addr.String())
-				assert.NoError(t, err)
-
-				ips = append(ips, addr.IP)
-			}
-		}
-
-		assert.Equal(t, 3, len(ips))
-		sort.Slice(ips, func(i, j int) bool {
-			return strings.Compare(ips[i].String(), ips[j].String()) < 0
+		assert.Equal(t, 2, len(addrs))
+		sort.Slice(addrs, func(i, j int) bool {
+			return strings.Compare(addrs[i].String(), addrs[j].String()) < 0
 		})
+		assert.Equal(t, addr1, addrs[0])
+		assert.Equal(t, addr2, addrs[1])
 
-		assert.True(t, ips[0].Equal(udpAddr1.IP))
-		assert.True(t, ips[1].Equal(udpAddr2.IP))
-		assert.True(t, ips[2].Equal(tcpAddr.IP))
-
-		pm.delete(tcpAddr)
-		assert.Equal(t, 2, len(pm.permMap))
-		pm.delete(udpAddr1)
+		pm.delete(addr1)
 		assert.Equal(t, 1, len(pm.permMap))
-		pm.delete(udpAddr2)
+		pm.delete(addr2)
 		assert.Equal(t, 0, len(pm.permMap))
+	})
+
+	t.Run("Permissions are per peer IP", func(t *testing.T) {
+		pm := newPermissionMap()
+
+		perm := pm.getOrCreate(netip.MustParseAddrPort("1.2.3.4:5000"))
+		samePeerOtherPort := pm.getOrCreate(netip.MustParseAddrPort("1.2.3.4:6000"))
+		assert.Equal(t, perm, samePeerOtherPort, "peers differing only by port share one permission")
+		assert.Equal(t, 1, len(pm.permMap))
+
+		found, ok := pm.find(netip.MustParseAddrPort("1.2.3.4:7000"))
+		assert.True(t, ok)
+		assert.Equal(t, perm, found)
 	})
 }
