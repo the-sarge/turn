@@ -263,3 +263,32 @@ Review loop per the shared baseline: one RAS review (run `20260817T194942-8b68fd
 - Wiremux-side adoption of `v5.2.0-gs.1` (GridSwarm/wiremux#1180) — consumer work outside this program.
 - Review follow-ups live in tracker #6: #30, #33, and new #36 (turntest regression tests for the 437 and Data-indication paths).
 - Track 3 (M2, packet path) remains gated on its plan and production wiremux traffic profiles; program index is the live view.
+
+---
+
+## M1 review follow-ups batch closed: #30/#33/#36 - 2026-08-17 17:22 EDT
+
+**Main:** `ad9e83ae1ac5`
+**Actor:** Claude (planit)
+
+**Summary**
+
+The three open Track 2 (M1) review follow-ups closed in one batch: PR #38 (squash `ad9e83a`) resolved [#30](https://github.com/the-sarge/turn/issues/30) (seal precedence for in-flight operations, operator decision: adopt), [#33](https://github.com/the-sarge/turn/issues/33) (expired-binding branch of `WriteTo`, test-only), and [#36](https://github.com/the-sarge/turn/issues/36) (turntest regression tests for 437 re-Allocate and Data indication, test-only). The #30 error-wrapping fix is the batch's only shipped-behavior change. With this, every Track 2 review follow-up is resolved; only consumer adoption (GridSwarm/wiremux#1180) remains, outside this program.
+
+**Completed**
+
+- Seal precedence (#30): the closing permission worker (`ensurePermissionAttempt`) and `bindChannel`'s closing check now route through `closedErr()`, so an operation already in flight when the allocation terminalizes records `net.ErrClosed` wrapped with the recorded terminal cause instead of bare `net.ErrClosed`. `errors.Is(err, net.ErrClosed)` holds on every path before and after. Hygiene rider from the same issue: `timeoutError`/`newTimeoutError` moved from `internal/client/errors.go` into `udp_conn_test.go`, its only caller's file.
+- Expiry coverage (#33): `TestWriteToPreparedOnly` gained the prepared-then-binding-expired row (back-dated `refreshedAt`, `ErrChannelBindingExpired`, zero bytes, zero datagrams) and `TestPreparePeer` the `bindingResult` re-entry case.
+- Fixture regressions (#36): `TestSecondAllocateMismatch` (second `turn.Client` sharing the socket via a dual-fed read pump; typed `*stun.TurnError` with `stun.CodeAllocMismatch`) and `TestDataIndicationAfterBindingExpiry` (200ms `ChannelBindTimeout` waited out under a live permission; peer traffic reaches `Allocation.ReadFrom` via the Data-indication arm). No growth of the fixture's request subset per the fixture ADR.
+
+**Validation**
+
+- Red-first for #30: a stale-nonce harness knob holds a permission attempt in its retry loop across a `startClose` self-seal; the recorded attempt error asserted to carry both `net.ErrClosed` and the cause — red on bare `net.ErrClosed` before the fix, green after.
+- Two guard mutations applied and reverted: deleting `WriteTo`'s expiry branch failed only the new #33 row; disabling turntest's `case permitted:` arm failed only the Data-indication test.
+- `task verify` green (0 lint issues); `go test -race` green on `internal/client` and `turntest`; exact-head `task preflight` passed at `708e2ef` against base `3f77aa8`.
+- RAS review `20260817T205444-b5e2d9201e08aa77a2a7e852` (initial; briefed with the three issue bodies verbatim plus ceilings): zero scoped clusters. The claude-opus reviewer failed structural validation; its two rejected records were recovered from the raw artifact and independently dispositioned `defer` (both low, verification-aid hygiene — see Next). No fix-now findings, so no replacement review. Hosted pull-request certification [32070054208](https://github.com/the-sarge/turn/actions/runs/32070054208) passed on the certified head including `ci-required`; squash-merged pinned to that head.
+
+**Next**
+
+- Program-external only: wiremux adoption of `v5.2.0-gs.1` (GridSwarm/wiremux#1180). Track 3 (M2) remains gated. Live program view: [tracking issue #6](https://github.com/the-sarge/turn/issues/6).
+- Dispositioned without a follow-up (revalidated at merged `ad9e83a`; hygiene of verification aids, not behavior): `harness.permGate` is written after the connection's timer goroutines start (`internal/client/prepare_test.go:365`, same pattern as the pre-existing `:249`) — a formal data race kept latent by the 120s default permission-refresh interval; and the Data-indication test's reader goroutine swallows the `ReadFrom` error (`turntest/turntest_test.go:247`), so an allocation-side read failure would misreport as the generic timeout.
