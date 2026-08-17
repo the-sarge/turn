@@ -236,3 +236,30 @@ PR [#32](https://github.com/the-sarge/turn/pull/32) landed Track 2 (M1) Slice 4 
 
 - Slice 5 ([#24](https://github.com/the-sarge/turn/issues/24)) is the dispatchable frontier: fork-owned `turntest` fixture, upstream `pion/turn/v5` dropped, README refreshed, tag `v5.2.0-gs.1`, wiremux adoption issue filed. Live program view: [tracking issue #6](https://github.com/the-sarge/turn/issues/6).
 - Deferred from review into [#33](https://github.com/the-sarge/turn/issues/33) (validated against merged `05c0048`): the expired-binding branch of `WriteTo` (`internal/client/udp_conn.go:417-418`) and `bindingResult` (`:325-328`) has no test referencing `ErrChannelBindingExpired`; pre-existing, retained unchanged, one table row would cover it. Dispositioned without a follow-up: `permissionMap.find`/`insert` and `bindingManager.create` now have only test callers (focused-test arrangement helpers; hygiene, not behavior).
+
+---
+
+## M1 complete: turntest fixture, upstream removed, v5.2.0-gs.1 - 2026-08-17 16:22 EDT
+
+**Main:** `a65f236b1fc3`
+**Actor:** Claude (implement-architecture-slice)
+
+**Summary**
+
+Track 2 (M1) Slice 5 merged and the milestone closed: the fork now owns its integration fixture. PR #35 (squash `a65f236`) added the exported `turntest` package — a scripted in-process TURN responder covering exactly the request subset this client emits, with the knobs both this repository's and wiremux's tests need — re-pointed the root integration tests to it, and removed `github.com/pion/turn/v5` from the module graph entirely, retiring Track 1's documented transitional test-fixture seam. Annotated tag `v5.2.0-gs.1` was published on the merged head after green default-branch CI, closing M1 (#19).
+
+**Completed**
+
+- `turntest`: `New(Options)`/`Start(testing.TB, Options)`, `Addr()`, `AllocationCount()`, `InjectStaleNonce()`, `Close()` joining every server-owned goroutine; Allocate (437 on same-five-tuple re-Allocate), Refresh (lifetime-0 delete; one 438 after stale-nonce injection), CreatePermission (403 under `DenyPermissions`), ChannelBind (400 under `RejectChannelBind`), ChannelData both directions, Data indication for permitted-but-unbound peers; knobs `RelayIPOverride`, `AllocationLifetime`, `PermissionTimeout`/`ChannelBindTimeout`, `IPv6`. STUN framing/integrity parsed by `pion/stun`, TURN attributes by `internal/proto`; no hand parsing, example-level guarantee per the fixture ADR.
+- Root `TestClientNonceExpiration` and `TestClientE2E` re-pointed first as characterization tests, then the upstream dependency deleted; `pion/logging` and `pion/transport/v4` remain `// indirect` via `pion/stun/v3` only. README rewritten for the M1 API. Plan and program index carry the completed frontier in the same PR.
+- Post-merge ritual: tag `v5.2.0-gs.1` at `a65f236` (resolves via `go get`; `v5.0.13-gs.1`/`v5.1.0-gs.1` untouched); wiremux adoption issue filed (GridSwarm/wiremux#1180) and recorded in tracker #6; parent #19 closed.
+
+**Validation**
+
+Review loop per the shared baseline: one RAS review (run `20260817T194942-8b68fd404f053c8e2f92383e`); two docs-only `fix-now` findings fixed in `c5c69ba`, the RAS verify/replacement cycle skipped under the low/nit docs-only policy; dispositions recorded on PR #35. Full suite green under `-race`; acceptance import scans clean; `go mod tidy` clean; `task verify` and exact-head `task preflight` green at `c5c69ba`; hosted CI bound the certified head via the one-shot `ci-certify` label with `ci-required=SUCCESS` before merge; main CI green at `a65f236` before tagging.
+
+**Next**
+
+- Wiremux-side adoption of `v5.2.0-gs.1` (GridSwarm/wiremux#1180) — consumer work outside this program.
+- Review follow-ups live in tracker #6: #30, #33, and new #36 (turntest regression tests for the 437 and Data-indication paths).
+- Track 3 (M2, packet path) remains gated on its plan and production wiremux traffic profiles; program index is the live view.
