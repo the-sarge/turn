@@ -266,10 +266,10 @@ func TestAppendRequestedAddressFamily(t *testing.T) {
 	})
 }
 
-// TestClientE2E is the ChannelData-path preservation gate against the upstream
-// fixture: after PreparePeer, every outbound relayed datagram travels as
-// ChannelData over the confirmed binding, and inbound relayed datagrams are
-// delivered to ReadFrom.
+// TestClientE2E is the ChannelData-path preservation gate, carried over from
+// the removed upstream fixture and now run against turntest: after
+// PreparePeer, every outbound relayed datagram travels as ChannelData over the
+// confirmed binding, and inbound relayed datagrams are delivered to ReadFrom.
 func TestClientE2E(t *testing.T) {
 	server, err := turntest.New(turntest.Options{
 		Realm:              "pion.ly",
