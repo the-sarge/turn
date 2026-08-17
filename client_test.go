@@ -155,8 +155,9 @@ func TestHandleInboundAdmitsOnlyServer(t *testing.T) {
 }
 
 // Create an allocation, and then delete all nonces
-// The subsequent Write on the allocation will cause a CreatePermission
-// which will be forced to handle a stale nonce response.
+// The subsequent PreparePeer on the allocation will cause a CreatePermission
+// and ChannelBind which will be forced to handle a stale nonce response; the
+// write that follows travels as ChannelData over the confirmed binding.
 func TestClientNonceExpiration(t *testing.T) {
 	udpListener, err := net.ListenPacket("udp4", "127.0.0.1:0") // nolint: noctx
 	require.NoError(t, err)
