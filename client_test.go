@@ -15,11 +15,11 @@ import (
 	"time"
 
 	"github.com/pion/stun/v3"
-	pionturn "github.com/pion/turn/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/the-sarge/turn/v5/internal/client"
 	"github.com/the-sarge/turn/v5/internal/proto"
+	"github.com/the-sarge/turn/v5/turntest"
 )
 
 func TestNewClientRejectsNilConn(t *testing.T) {
@@ -154,37 +154,24 @@ func TestHandleInboundAdmitsOnlyServer(t *testing.T) {
 	})
 }
 
-// Create an allocation, and then delete all nonces
+// Create an allocation, and then invalidate the server's nonce.
 // The subsequent PreparePeer on the allocation will cause a CreatePermission
 // and ChannelBind which will be forced to handle a stale nonce response; the
 // write that follows travels as ChannelData over the confirmed binding.
 func TestClientNonceExpiration(t *testing.T) {
-	udpListener, err := net.ListenPacket("udp4", "127.0.0.1:0") // nolint: noctx
-	require.NoError(t, err)
-
-	server, err := pionturn.NewServer(pionturn.ServerConfig{
-		AuthHandler: func(ra *pionturn.RequestAttributes) (userID string, key []byte, ok bool) {
-			return ra.Username, pionturn.GenerateAuthKey(ra.Username, ra.Realm, "pass"), true
-		},
-		PacketConnConfigs: []pionturn.PacketConnConfig{
-			{
-				PacketConn: udpListener,
-				RelayAddressGenerator: &pionturn.RelayAddressGeneratorStatic{
-					RelayAddress: net.ParseIP("127.0.0.1"),
-					Address:      "0.0.0.0",
-				},
-			},
-		},
-		Realm: "pion.ly",
+	server, err := turntest.New(turntest.Options{
+		Realm:    "pion.ly",
+		Username: "foo",
+		Password: "pass",
 	})
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	conn, err := net.ListenPacket("udp4", "0.0.0.0:0") // nolint: noctx
 	assert.NoError(t, err)
 
 	client, err := NewClient(&ClientConfig{
 		Conn:     conn,
-		Server:   netip.MustParseAddrPort(udpListener.LocalAddr().String()),
+		Server:   server.Addr(),
 		Username: "foo",
 		Password: "pass",
 	})
@@ -193,6 +180,8 @@ func TestClientNonceExpiration(t *testing.T) {
 
 	allocation, err := client.Allocate(context.Background())
 	assert.NoError(t, err)
+
+	server.InjectStaleNonce()
 
 	peer := netip.MustParseAddrPort("127.0.0.1:8080")
 	assert.NoError(t, allocation.PreparePeer(context.Background(), peer))
@@ -282,35 +271,22 @@ func TestAppendRequestedAddressFamily(t *testing.T) {
 // ChannelData over the confirmed binding, and inbound relayed datagrams are
 // delivered to ReadFrom.
 func TestClientE2E(t *testing.T) {
-	udpListener, err := net.ListenPacket("udp4", "127.0.0.1:0") // nolint: noctx
-	require.NoError(t, err)
-
-	server, err := pionturn.NewServer(pionturn.ServerConfig{
-		AuthHandler: func(ra *pionturn.RequestAttributes) (userID string, key []byte, ok bool) {
-			return ra.Username, pionturn.GenerateAuthKey(ra.Username, ra.Realm, "pass"), true
-		},
-		PacketConnConfigs: []pionturn.PacketConnConfig{
-			{
-				PacketConn: udpListener,
-				RelayAddressGenerator: &pionturn.RelayAddressGeneratorStatic{
-					RelayAddress: net.ParseIP("127.0.0.1"),
-					Address:      "0.0.0.0",
-				},
-			},
-		},
+	server, err := turntest.New(turntest.Options{
 		Realm:              "pion.ly",
+		Username:           "foo",
+		Password:           "pass",
 		AllocationLifetime: time.Second,
 		PermissionTimeout:  time.Millisecond * 100,
 		ChannelBindTimeout: time.Millisecond * 100,
 	})
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	stunClientConn, err := net.ListenPacket("udp4", "0.0.0.0:0") // nolint: noctx
 	assert.NoError(t, err)
 
 	client, err := NewClient(&ClientConfig{
 		Conn:                      stunClientConn,
-		Server:                    netip.MustParseAddrPort(udpListener.LocalAddr().String()),
+		Server:                    server.Addr(),
 		Username:                  "foo",
 		Password:                  "pass",
 		PermissionRefreshInterval: time.Millisecond * 50,
