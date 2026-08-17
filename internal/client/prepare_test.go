@@ -20,15 +20,16 @@ import (
 
 // prepareHarness drives a NewUDPConn against a scripted mock TURN server.
 type prepareHarness struct {
-	conn      *UDPConn
-	mock      *mockClient
-	peer      netip.AddrPort
-	permCount atomic.Int32
-	bindCount atomic.Int32
-	bindGate  chan struct{} // If non-nil, ChannelBind transactions block on it
-	permGate  chan struct{} // If non-nil, CreatePermission transactions block on it
-	failPerms atomic.Bool   // If set, CreatePermission transactions return 403
-	writes    struct {
+	conn       *UDPConn
+	mock       *mockClient
+	peer       netip.AddrPort
+	permCount  atomic.Int32
+	bindCount  atomic.Int32
+	bindGate   chan struct{} // If non-nil, ChannelBind transactions block on it
+	permGate   chan struct{} // If non-nil, CreatePermission transactions block on it
+	failPerms  atomic.Bool   // If set, CreatePermission transactions return 403
+	staleNonce atomic.Bool   // If set, CreatePermission transactions return 438
+	writes     struct {
 		sync.Mutex
 		data [][]byte
 	}
@@ -56,6 +57,13 @@ func newPrepareHarness(t *testing.T, gateBinds bool) *prepareHarness {
 					return TransactionResult{Msg: stun.MustBuild(
 						stun.NewType(stun.MethodCreatePermission, stun.ClassErrorResponse),
 						stun.ErrorCodeAttribute{Code: stun.CodeForbidden, Reason: []byte("Forbidden")},
+					)}, nil
+				}
+				if harness.staleNonce.Load() {
+					return TransactionResult{Msg: stun.MustBuild(
+						stun.NewType(stun.MethodCreatePermission, stun.ClassErrorResponse),
+						stun.ErrorCodeAttribute{Code: stun.CodeStaleNonce, Reason: []byte("Stale Nonce")},
+						stun.NewNonce("nonce2"),
 					)}, nil
 				}
 
@@ -351,6 +359,51 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 			assert.Fail(t, "Close did not return after the bind worker finished")
 		}
 	})
+
+	t.Run("attempt in flight during self-seal records the terminal cause", func(t *testing.T) {
+		harness := newPrepareHarness(t, false)
+		harness.permGate = make(chan struct{})
+		harness.staleNonce.Store(true)
+
+		// A permission attempt is mid-transaction when the allocation seals
+		// itself. The stale-nonce reply sends the worker around its retry loop,
+		// where it observes the seal; the result it records for any waiter that
+		// joined the attempt must carry the recorded terminal cause, not bare
+		// net.ErrClosed.
+		perm := harness.conn.permMap.getOrCreate(harness.peer)
+		done := harness.conn.ensurePermissionAttempt(perm, harness.peer)
+		assert.NotNil(t, done)
+		assert.Eventually(t, func() bool {
+			return harness.permCount.Load() == 1
+		}, 5*time.Second, 10*time.Millisecond)
+
+		harness.conn.startClose(errFake)
+		close(harness.permGate)
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			assert.Fail(t, "permission attempt did not finish after the seal")
+		}
+
+		perm.attemptMutex.Lock()
+		err := perm.attemptErr
+		perm.attemptMutex.Unlock()
+		assert.ErrorIs(t, err, net.ErrClosed)
+		assert.ErrorIs(t, err, errFake,
+			"an in-flight attempt finishing after the seal must record the terminal cause")
+	})
+
+	t.Run("re-entry after binding expiry is terminal", func(t *testing.T) {
+		harness := newPrepareHarness(t, false)
+
+		assert.NoError(t, harness.conn.PreparePeer(context.Background(), harness.peer))
+		bound := harness.conn.bindingMgr.getOrCreate(harness.peer)
+		bound.setRefreshedAt(time.Now().Add(-channelBindingLifetime))
+
+		err := harness.conn.PreparePeer(context.Background(), harness.peer)
+		assert.ErrorIs(t, err, ErrChannelBindingExpired,
+			"a preparing caller re-entering an expired binding must observe the expiry")
+	})
 }
 
 // TestWriteToPreparedOnly is the finite state table for the prepared-only
@@ -391,6 +444,17 @@ func TestWriteToPreparedOnly(t *testing.T) {
 				harness.conn.onRefreshTimers(timerIDRefreshPerms)
 			},
 			wantErr:    ErrPermissionRefreshFailed,
+			wantWrites: 0,
+		},
+		{
+			name: "prepared then binding expired",
+			arrange: func(t *testing.T, harness *prepareHarness) {
+				t.Helper()
+				assert.NoError(t, harness.conn.PreparePeer(context.Background(), harness.peer))
+				bound := harness.conn.bindingMgr.getOrCreate(harness.peer)
+				bound.setRefreshedAt(time.Now().Add(-channelBindingLifetime))
+			},
+			wantErr:    ErrChannelBindingExpired,
 			wantWrites: 0,
 		},
 		{
