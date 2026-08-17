@@ -205,3 +205,34 @@ PR [#29](https://github.com/the-sarge/turn/pull/29) landed Track 2 (M1) Slice 3 
 
 - Slice 4 ([#23](https://github.com/the-sarge/turn/issues/23)) is the dispatchable frontier; Slice 5 ([#24](https://github.com/the-sarge/turn/issues/24)) follows it and tags `v5.2.0-gs.1`. Live program view: [tracking issue #6](https://github.com/the-sarge/turn/issues/6).
 - Deferred from review into [#30](https://github.com/the-sarge/turn/issues/30) (validated against merged `0d61cfe`): whether operations already in flight at seal time must carry the recorded terminal cause (`internal/client/udp_conn.go:256`, `:225-229`, `:727`), plus the inherited `timeoutError` test-only helper hygiene (`internal/client/errors.go:50-66`). Two marginal review observations were dispositioned without follow-ups: the scheduler-driven (not barrier-forced) concurrent-Close regression test, and the pre-existing mapped-transaction residue after a failed ignore-result initial write.
+
+---
+
+## Track 2 Slice 4: prepared-only writes - 2026-08-17 15:14 EDT
+
+**Main:** `05c00489b0eb`
+**Actor:** Claude (implement-architecture-slice)
+
+**Summary**
+
+PR [#32](https://github.com/the-sarge/turn/pull/32) landed Track 2 (M1) Slice 4 of the modernize-kept-API plan as `05c0048`: prepared-only writes. `Allocation.WriteTo` now requires a prepared, confirmed channel binding and either sends ChannelData or fails with zero network output; the Send-indication write path is deleted rather than guarded, so the lifetime ChannelData-only invariant is structural — no non-test code in the root package or `internal/client` can build a Send indication. Child issue [#23](https://github.com/the-sarge/turn/issues/23) is closed; the frontier is Slice 5 ([#24](https://github.com/the-sarge/turn/issues/24)), whose blockers (Slices 3 and 4) are both complete.
+
+**Completed**
+
+- `WriteTo` (`internal/client/udp_conn.go`) is the single guard: closed → `net.ErrClosed` (wrapped with the terminal cause when self-sealed); no prepared binding for the canonical peer → new exported `ErrNotPrepared` (root and `internal/client`), zero bytes, zero output; prepared but expired/failed/permission-refresh-failed → the recorded cause, zero output; otherwise ChannelData over the confirmed binding. Deleted: the Send-indication build, on-write permission creation, and the write-path `maybeBind`. `maybeBind` stays for the `checkBindingsTimer` refresh path; permissions and bindings are created only by `PreparePeer`, so refresh membership is unchanged.
+- The `*net.TCPAddr` branch of `addr2PeerAddress` named by the plan had already been removed by Slice 2 (`peerAddress(netip.AddrPort)`); nothing to delete.
+- Root `TestClientNonceExpiration` and `TestClientE2E` prepare the peer before the first write (the ChannelData-path preservation gate against the upstream fixture); `TestClientE2E`'s `disableChannelBind` variant and `channelBindFilterConn` are retired, as is `TestUDPConn` "WriteTo() returns real payload length" (an indication assertion); `TestUDPConn` "WriteTo()" marks its binding prepared.
+- The PR's docs commit marks Slice 4 complete in the plan and program index and moves the frontier to Slice 5.
+
+**Validation**
+
+- Red-first per the slice evidence budget: `TestWriteToPreparedOnly` four-state table (unprepared / prepared-and-ready / prepared-then-terminal / closed) over the mock harness with write, permission, and bind counts — red on the unprepared row before the change (a Send indication, an on-write permission, and a bind were observed), green after; `TestPreparePeer` anchors "readiness success then ChannelData writes" and "permission refresh failure fails writes, never Send indication" unchanged; adapted root scenarios green against `pion/turn/v5@v5.0.12` before the deletion.
+- One guard mutation applied and reverted: replacing the prepared check with binding creation failed only the unprepared row.
+- Negative grep: no non-test file in the root package or `internal/client` references `stun.MethodSend` or `proto.SendIndication` (`internal/proto` keeps its helper under the no-trimming rule). `task check`, `task race`, `task docs-check` green; `go mod tidy` clean.
+- Exact-head `task preflight` passed at `9d69147057e015ae113eed5ce594081115f46b79` against base `6f47379dfceeda13353a1c4ef209b60421378c6f`.
+- RAS review `20260817T185346-76e5949a8c74a44d16df6fe6` (initial; zero Fix First, zero Follow Up, three low Do-Not-Act-On clusters). Dispositions: C-002 `fix-now` docs-only (the adapted nonce test's comment still said the write creates the permission; corrected in `9d69147`, RAS rerun skipped by the docs-only policy); C-001 and C-003 `defer`. Hosted pull-request certification [32058514479](https://github.com/the-sarge/turn/actions/runs/32058514479) passed on the certified head including `ci-required`; squash-merged pinned to that head.
+
+**Next**
+
+- Slice 5 ([#24](https://github.com/the-sarge/turn/issues/24)) is the dispatchable frontier: fork-owned `turntest` fixture, upstream `pion/turn/v5` dropped, README refreshed, tag `v5.2.0-gs.1`, wiremux adoption issue filed. Live program view: [tracking issue #6](https://github.com/the-sarge/turn/issues/6).
+- Deferred from review into [#33](https://github.com/the-sarge/turn/issues/33) (validated against merged `05c0048`): the expired-binding branch of `WriteTo` (`internal/client/udp_conn.go:417-418`) and `bindingResult` (`:325-328`) has no test referencing `ErrChannelBindingExpired`; pre-existing, retained unchanged, one table row would cover it. Dispositioned without a follow-up: `permissionMap.find`/`insert` and `bindingManager.create` now have only test callers (focused-test arrangement helpers; hygiene, not behavior).
