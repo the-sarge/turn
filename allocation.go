@@ -56,7 +56,13 @@ func (a *Allocation) ReadFrom(p []byte) (int, netip.AddrPort, error) {
 	return a.conn.ReadFrom(p)
 }
 
-// WriteTo writes a packet with payload to peer via the relay.
+// WriteTo writes payload to peer via the relay as ChannelData over the
+// channel binding PreparePeer confirmed. Writes are prepared-only: a peer for
+// which PreparePeer has not succeeded on this allocation returns
+// ErrNotPrepared with zero network output; a prepared binding that has since
+// expired or failed returns its cause (for example ErrChannelBindingExpired
+// or ErrPermissionRefreshFailed) with zero network output. WriteTo never
+// creates a permission, starts a binding, or sends a Send indication.
 func (a *Allocation) WriteTo(payload []byte, peer netip.AddrPort) (int, error) {
 	canonical, ok := canonicalAddrPort(peer, canonicalUnmap)
 	if !ok {
