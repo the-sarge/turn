@@ -253,7 +253,10 @@ func (c *UDPConn) ensurePermissionAttempt(perm *permission, peer netip.AddrPort)
 		var err error
 		for range maxRetryAttempts {
 			if c.isClosed() {
-				err = net.ErrClosed
+				// Seal precedence: a waiter that joins this attempt gets the
+				// recorded terminal cause, exactly like an operation started
+				// after the seal.
+				err = c.closedErr()
 
 				break
 			}
@@ -667,7 +670,10 @@ func (c *UDPConn) bindChannel(bound *binding, startState bindingState) error {
 	var err error
 	for range maxRetryAttempts {
 		if c.isClosed() {
-			return net.ErrClosed
+			// Seal precedence: the binding result a waiter joins carries the
+			// recorded terminal cause, exactly like an operation started after
+			// the seal.
+			return c.closedErr()
 		}
 		if err = c.bind(bound); !errors.Is(err, errTryAgain) {
 			break

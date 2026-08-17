@@ -16,6 +16,26 @@ import (
 	"github.com/the-sarge/turn/v5/internal/proto"
 )
 
+// timeoutError simulates a transaction failure whose Timeout() is true, like
+// an exhausted retransmission budget.
+type timeoutError struct {
+	msg string
+}
+
+func newTimeoutError(msg string) error {
+	return &timeoutError{
+		msg: msg,
+	}
+}
+
+func (e *timeoutError) Error() string {
+	return e.msg
+}
+
+func (e *timeoutError) Timeout() bool {
+	return true
+}
+
 func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 	makeConn := func(client *mockClient, bm *bindingManager) UDPConn {
 		return UDPConn{
