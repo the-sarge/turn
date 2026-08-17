@@ -386,8 +386,8 @@ func (c *UDPConn) addWorker() bool {
 }
 
 // failPreparedBindings terminalizes every prepared binding: once a peer is
-// prepared, losing its permission must fail writes rather than fall back to
-// Send indications.
+// prepared, losing its permission must fail its writes with the recorded
+// cause; there is no other write path to fall back to.
 func (c *UDPConn) failPreparedBindings(err error) {
 	for _, bound := range c.bindingMgr.all() {
 		if bound.prepared.Load() {
@@ -396,93 +396,36 @@ func (c *UDPConn) failPreparedBindings(err error) {
 	}
 }
 
-// WriteTo writes a packet with payload to the canonical peer addr. Writes to
-// a prepared peer use its channel binding or fail; writes to an unprepared
-// peer may fall back to Send indications while a binding is established.
-func (c *UDPConn) WriteTo(payload []byte, addr netip.AddrPort) (int, error) { //nolint:gocognit,cyclop
-	var err error
+// WriteTo writes payload to the canonical peer addr as ChannelData over the
+// peer's prepared channel binding. It is the single guard of the prepared-only
+// write invariant: a peer that PreparePeer has not confirmed on this
+// allocation gets ErrNotPrepared with zero network output; a prepared binding
+// that has since expired or failed returns its recorded cause with zero
+// network output. WriteTo never creates a permission, starts a bind, or emits
+// anything other than ChannelData — no Send-indication constructor exists in
+// this client.
+func (c *UDPConn) WriteTo(payload []byte, addr netip.AddrPort) (int, error) {
 	if c.isClosed() {
 		return 0, c.closedErr()
 	}
 
-	// Check if we have a permission for the destination IP addr
-	perm, ok := c.permMap.find(addr)
-	if !ok {
-		perm = &permission{}
-		c.permMap.insert(addr, perm)
-	}
-
-	for range maxRetryAttempts {
-		// c.createPermission() would block, per destination IP (, or perm),
-		// until the perm state becomes "requested". Purpose of this is to
-		// guarantee the order of packets (within the same perm).
-		// Note that CreatePermission transaction may not be complete before
-		// all the data transmission. This is done assuming that the request
-		// will be most likely successful and we can tolerate some loss of
-		// UDP packet (or reorder), inorder to minimize the latency in most cases.
-		if err = c.createPermission(perm, addr); !errors.Is(err, errTryAgain) {
-			break
-		}
-	}
-	if err != nil {
-		return 0, err
-	}
-
-	// Bind channel
 	bound, ok := c.bindingMgr.findByAddr(addr)
-	if !ok {
-		bound = c.bindingMgr.create(addr)
+	if !ok || !bound.prepared.Load() {
+		return 0, ErrNotPrepared
 	}
 
-	// A prepared peer promised ChannelData-only writes: fail instead of ever
-	// falling back to Send indications.
-	if bound.prepared.Load() {
-		if bound.ok() && time.Since(bound.refreshedAt()) >= channelBindingLifetime {
-			bound.terminalize(ErrChannelBindingExpired)
-		}
-		if !bound.ok() {
-			if bindErr := bound.bindErr(); bindErr != nil {
-				return 0, bindErr
-			}
-
-			return 0, ErrChannelBindFailed
-		}
+	if bound.ok() && time.Since(bound.refreshedAt()) >= channelBindingLifetime {
+		bound.terminalize(ErrChannelBindingExpired)
 	}
-
-	//nolint:nestif
 	if !bound.ok() {
-		// Try to establish an initial binding with the server.
-		// Writes still occur via indications meanwhile.
-		c.maybeBind(bound)
-
-		// Send data using SendIndication
-		peerAddr := peerAddress(addr)
-		var msg *stun.Message
-		msg, err = stun.Build(
-			stun.TransactionID,
-			stun.NewType(stun.MethodSend, stun.ClassIndication),
-			proto.Data(payload),
-			peerAddr,
-			stun.Fingerprint,
-		)
-		if err != nil {
-			return 0, err
+		if bindErr := bound.bindErr(); bindErr != nil {
+			return 0, bindErr
 		}
 
-		if _, err = c.writeTo(msg.Raw, c.serverAddr); err != nil {
-			return 0, err
-		}
-
-		return len(payload), nil
+		return 0, ErrChannelBindFailed
 	}
 
-	// Binding is ready beyond this point, so send over it.
-	_, err = c.sendChannelData(payload, bound.number)
-	if err != nil {
-		return 0, err
-	}
-
-	return len(payload), nil
+	return c.sendChannelData(payload, bound.number)
 }
 
 // Close closes the connection.

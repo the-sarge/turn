@@ -352,3 +352,86 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 		}
 	})
 }
+
+// TestWriteToPreparedOnly is the finite state table for the prepared-only
+// write invariant: a write to a peer emits ChannelData or fails with zero
+// network output. Only the prepared-and-ready state produces a datagram, and
+// that datagram is ChannelData; no state creates a permission or starts a
+// bind on the write path.
+func TestWriteToPreparedOnly(t *testing.T) {
+	tests := []struct {
+		name         string
+		arrange      func(t *testing.T, harness *prepareHarness)
+		wantErr      error
+		wantWrites   int  // datagrams emitted by the WriteTo under test
+		wantNoServer bool // no permission or bind transaction may run at all
+	}{
+		{
+			name:         "unprepared peer",
+			arrange:      func(*testing.T, *prepareHarness) {},
+			wantErr:      ErrNotPrepared,
+			wantWrites:   0,
+			wantNoServer: true,
+		},
+		{
+			name: "prepared and ready",
+			arrange: func(t *testing.T, harness *prepareHarness) {
+				t.Helper()
+				assert.NoError(t, harness.conn.PreparePeer(context.Background(), harness.peer))
+			},
+			wantErr:    nil,
+			wantWrites: 1,
+		},
+		{
+			name: "prepared then terminal",
+			arrange: func(t *testing.T, harness *prepareHarness) {
+				t.Helper()
+				assert.NoError(t, harness.conn.PreparePeer(context.Background(), harness.peer))
+				harness.failPerms.Store(true)
+				harness.conn.onRefreshTimers(timerIDRefreshPerms)
+			},
+			wantErr:    ErrPermissionRefreshFailed,
+			wantWrites: 0,
+		},
+		{
+			name: "closed",
+			arrange: func(t *testing.T, harness *prepareHarness) {
+				t.Helper()
+				assert.NoError(t, harness.conn.PreparePeer(context.Background(), harness.peer))
+				assert.NoError(t, harness.conn.Close())
+			},
+			wantErr:    net.ErrClosed,
+			wantWrites: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			harness := newPrepareHarness(t, false)
+			tt.arrange(t, harness)
+
+			writesBefore := harness.writeCount()
+			n, err := harness.conn.WriteTo([]byte("payload"), harness.peer)
+			writes := harness.writeCount() - writesBefore
+
+			if tt.wantErr == nil {
+				assert.NoError(t, err)
+				assert.Equal(t, len("payload"), n)
+			} else {
+				assert.ErrorIs(t, err, tt.wantErr)
+				assert.Equal(t, 0, n, "a failed write reports zero bytes")
+			}
+			assert.Equal(t, tt.wantWrites, writes, "network output count")
+			if writes > 0 {
+				assert.True(t, proto.IsChannelData(harness.lastWrite()),
+					"the only datagram a write may emit is ChannelData")
+			}
+			if tt.wantNoServer {
+				assert.Equal(t, int32(0), harness.permCount.Load(),
+					"WriteTo must not create a permission")
+				assert.Equal(t, int32(0), harness.bindCount.Load(),
+					"WriteTo must not start a bind")
+			}
+		})
+	}
+}

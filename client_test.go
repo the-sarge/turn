@@ -193,7 +193,9 @@ func TestClientNonceExpiration(t *testing.T) {
 	allocation, err := client.Allocate(context.Background())
 	assert.NoError(t, err)
 
-	_, err = allocation.WriteTo([]byte{0x00}, netip.MustParseAddrPort("127.0.0.1:8080"))
+	peer := netip.MustParseAddrPort("127.0.0.1:8080")
+	assert.NoError(t, allocation.PreparePeer(context.Background(), peer))
+	_, err = allocation.WriteTo([]byte{0x00}, peer)
 	assert.NoError(t, err)
 
 	// Shutdown
@@ -274,134 +276,113 @@ func TestAppendRequestedAddressFamily(t *testing.T) {
 	})
 }
 
-type channelBindFilterConn struct {
-	net.PacketConn
-
-	doFilter bool
-}
-
-func (c *channelBindFilterConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
-	for {
-		n, addr, err = c.PacketConn.ReadFrom(p)
-
-		if c.doFilter {
-			stunMsg := &stun.Message{Raw: p[:n]}
-			if err := stunMsg.Decode(); err == nil && stunMsg.Type.Method == stun.MethodChannelBind {
-				continue
-			}
-		}
-
-		return
-	}
-}
-
+// TestClientE2E is the ChannelData-path preservation gate against the upstream
+// fixture: after PreparePeer, every outbound relayed datagram travels as
+// ChannelData over the confirmed binding, and inbound relayed datagrams are
+// delivered to ReadFrom.
 func TestClientE2E(t *testing.T) {
-	doTest := func(disableChannelBind bool) {
-		udpListener, err := net.ListenPacket("udp4", "127.0.0.1:0") // nolint: noctx
-		require.NoError(t, err)
+	udpListener, err := net.ListenPacket("udp4", "127.0.0.1:0") // nolint: noctx
+	require.NoError(t, err)
 
-		server, err := pionturn.NewServer(pionturn.ServerConfig{
-			AuthHandler: func(ra *pionturn.RequestAttributes) (userID string, key []byte, ok bool) {
-				return ra.Username, pionturn.GenerateAuthKey(ra.Username, ra.Realm, "pass"), true
-			},
-			PacketConnConfigs: []pionturn.PacketConnConfig{
-				{
-					PacketConn: &channelBindFilterConn{udpListener, disableChannelBind},
-					RelayAddressGenerator: &pionturn.RelayAddressGeneratorStatic{
-						RelayAddress: net.ParseIP("127.0.0.1"),
-						Address:      "0.0.0.0",
-					},
+	server, err := pionturn.NewServer(pionturn.ServerConfig{
+		AuthHandler: func(ra *pionturn.RequestAttributes) (userID string, key []byte, ok bool) {
+			return ra.Username, pionturn.GenerateAuthKey(ra.Username, ra.Realm, "pass"), true
+		},
+		PacketConnConfigs: []pionturn.PacketConnConfig{
+			{
+				PacketConn: udpListener,
+				RelayAddressGenerator: &pionturn.RelayAddressGeneratorStatic{
+					RelayAddress: net.ParseIP("127.0.0.1"),
+					Address:      "0.0.0.0",
 				},
 			},
-			Realm:              "pion.ly",
-			AllocationLifetime: time.Second,
-			PermissionTimeout:  time.Millisecond * 100,
-			ChannelBindTimeout: time.Millisecond * 100,
-		})
-		assert.NoError(t, err)
+		},
+		Realm:              "pion.ly",
+		AllocationLifetime: time.Second,
+		PermissionTimeout:  time.Millisecond * 100,
+		ChannelBindTimeout: time.Millisecond * 100,
+	})
+	assert.NoError(t, err)
 
-		stunClientConn, err := net.ListenPacket("udp4", "0.0.0.0:0") // nolint: noctx
-		assert.NoError(t, err)
+	stunClientConn, err := net.ListenPacket("udp4", "0.0.0.0:0") // nolint: noctx
+	assert.NoError(t, err)
 
-		client, err := NewClient(&ClientConfig{
-			Conn:                      stunClientConn,
-			Server:                    netip.MustParseAddrPort(udpListener.LocalAddr().String()),
-			Username:                  "foo",
-			Password:                  "pass",
-			PermissionRefreshInterval: time.Millisecond * 50,
-			bindingRefreshInterval:    time.Millisecond * 50,
-			bindingCheckInterval:      time.Millisecond * 50,
-		})
-		assert.NoError(t, err)
-		startTestPump(t, client, stunClientConn)
+	client, err := NewClient(&ClientConfig{
+		Conn:                      stunClientConn,
+		Server:                    netip.MustParseAddrPort(udpListener.LocalAddr().String()),
+		Username:                  "foo",
+		Password:                  "pass",
+		PermissionRefreshInterval: time.Millisecond * 50,
+		bindingRefreshInterval:    time.Millisecond * 50,
+		bindingCheckInterval:      time.Millisecond * 50,
+	})
+	assert.NoError(t, err)
+	startTestPump(t, client, stunClientConn)
 
-		allocation, err := client.Allocate(context.Background())
-		assert.NoError(t, err)
+	allocation, err := client.Allocate(context.Background())
+	assert.NoError(t, err)
 
-		remotePeerConn, err := net.ListenPacket("udp4", "0.0.0.0:0") // nolint: noctx
-		assert.NoError(t, err)
+	remotePeerConn, err := net.ListenPacket("udp4", "0.0.0.0:0") // nolint: noctx
+	assert.NoError(t, err)
 
-		remotePeerAddr, ok := remotePeerConn.LocalAddr().(*net.UDPAddr)
-		assert.True(t, ok)
+	remotePeerAddr, ok := remotePeerConn.LocalAddr().(*net.UDPAddr)
+	assert.True(t, ok)
 
-		relayedAddr := allocation.RelayedAddr()
+	relayedAddr := allocation.RelayedAddr()
 
-		sendPackets := func(write func([]byte) error, read func([]byte) (int, error)) {
-			const expectedPktCount = 25
-			expectedPacket := []byte{0xDE, 0xAD, 0xBE, 0xEF}
+	sendPackets := func(write func([]byte) error, read func([]byte) (int, error)) {
+		const expectedPktCount = 25
+		expectedPacket := []byte{0xDE, 0xAD, 0xBE, 0xEF}
 
-			pktCount := atomic.Uint32{}
-			go func() {
-				buff := make([]byte, len(expectedPacket))
-				for pktCount.Load() < expectedPktCount {
-					i, readErr := read(buff)
-					assert.NoError(t, readErr)
-
-					assert.Equal(t, expectedPacket, buff[:i])
-					pktCount.Add(1)
-				}
-			}()
+		pktCount := atomic.Uint32{}
+		go func() {
+			buff := make([]byte, len(expectedPacket))
 			for pktCount.Load() < expectedPktCount {
-				assert.NoError(t, write(expectedPacket))
+				i, readErr := read(buff)
+				assert.NoError(t, readErr)
 
-				time.Sleep(time.Millisecond * 25)
+				assert.Equal(t, expectedPacket, buff[:i])
+				pktCount.Add(1)
 			}
+		}()
+		for pktCount.Load() < expectedPktCount {
+			assert.NoError(t, write(expectedPacket))
+
+			time.Sleep(time.Millisecond * 25)
 		}
-
-		peer := netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), uint16(remotePeerAddr.Port)) //nolint:gosec // test port
-		sendPackets(
-			func(p []byte) error {
-				_, writeErr := allocation.WriteTo(p, peer)
-
-				return writeErr
-			},
-			func(p []byte) (int, error) {
-				n, _, readErr := remotePeerConn.ReadFrom(p)
-
-				return n, readErr
-			},
-		)
-		relayedUDP := net.UDPAddrFromAddrPort(relayedAddr)
-		sendPackets(
-			func(p []byte) error {
-				_, writeErr := remotePeerConn.WriteTo(p, relayedUDP)
-
-				return writeErr
-			},
-			func(p []byte) (int, error) {
-				n, _, readErr := allocation.ReadFrom(p)
-
-				return n, readErr
-			},
-		)
-
-		// Shutdown
-		assert.NoError(t, remotePeerConn.Close())
-		assert.NoError(t, allocation.Close())
-		assert.NoError(t, stunClientConn.Close())
-		assert.NoError(t, server.Close())
 	}
 
-	doTest(true)
-	doTest(false)
+	peer := netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), uint16(remotePeerAddr.Port)) //nolint:gosec // test port
+	require.NoError(t, allocation.PreparePeer(context.Background(), peer))
+	sendPackets(
+		func(p []byte) error {
+			_, writeErr := allocation.WriteTo(p, peer)
+
+			return writeErr
+		},
+		func(p []byte) (int, error) {
+			n, _, readErr := remotePeerConn.ReadFrom(p)
+
+			return n, readErr
+		},
+	)
+	relayedUDP := net.UDPAddrFromAddrPort(relayedAddr)
+	sendPackets(
+		func(p []byte) error {
+			_, writeErr := remotePeerConn.WriteTo(p, relayedUDP)
+
+			return writeErr
+		},
+		func(p []byte) (int, error) {
+			n, _, readErr := allocation.ReadFrom(p)
+
+			return n, readErr
+		},
+	)
+
+	// Shutdown
+	assert.NoError(t, remotePeerConn.Close())
+	assert.NoError(t, allocation.Close())
+	assert.NoError(t, stunClientConn.Close())
+	assert.NoError(t, server.Close())
 }

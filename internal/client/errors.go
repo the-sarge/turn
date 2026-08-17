@@ -30,6 +30,9 @@ var (
 	// ErrChannelBindingExpired reports a confirmed channel binding whose
 	// server-side lifetime has expired.
 	ErrChannelBindingExpired = errors.New("confirmed channel binding expired")
+	// ErrNotPrepared reports a write to a peer that has no prepared,
+	// confirmed channel binding: nothing was sent.
+	ErrNotPrepared = errors.New("peer not prepared: no confirmed channel binding")
 )
 
 var (

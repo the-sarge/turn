@@ -39,6 +39,11 @@ var ErrChannelBindFailed = client.ErrChannelBindFailed
 // server-side lifetime expired before the write.
 var ErrChannelBindingExpired = client.ErrChannelBindingExpired
 
+// ErrNotPrepared reports a WriteTo to a peer for which PreparePeer has not
+// succeeded on this allocation. Nothing is sent: writes are ChannelData over
+// a prepared binding or fail with zero network output.
+var ErrNotPrepared = client.ErrNotPrepared
+
 // ErrAlreadyAllocated is returned by Allocate when the client already owns a
 // live allocation. Close that allocation before allocating again.
 var ErrAlreadyAllocated = errors.New("turn: already allocated")

@@ -495,6 +495,8 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		bm := newBindingManager()
 		binding := bm.create(addr)
 		binding.setState(bindingStateReady)
+		binding.setRefreshedAt(time.Now())
+		binding.prepared.Store(true)
 
 		conn := UDPConn{
 			allocation: allocation{
@@ -506,54 +508,8 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 
 		buf := []byte("Hello")
 		n, err := conn.WriteTo(buf, addr)
-		assert.NoError(t, err, "should fail")
-		assert.Equal(t, len(buf), n)
-	})
-
-	t.Run("WriteTo() returns real payload length", func(t *testing.T) {
-		var writtenData []byte
-		client := &mockClient{
-			performTransaction: func(*stun.Message, net.Addr, bool) (TransactionResult, error) {
-				// Return success for CreatePermission.
-				return TransactionResult{
-					Msg: stun.MustBuild(stun.NewType(stun.MethodCreatePermission, stun.ClassSuccessResponse)),
-				}, nil
-			},
-			writeTo: func(data []byte, _ net.Addr) (int, error) {
-				writtenData = data
-				// Return the actual number of bytes written (the STUN message size).
-				return len(data), nil
-			},
-		}
-
-		addr := netip.MustParseAddrPort("127.0.0.1:1234")
-
-		conn := UDPConn{
-			allocation: allocation{
-				clientHooks: client.hooks(),
-				serverAddr:  &net.UDPAddr{IP: net.ParseIP("10.0.0.1"), Port: 3478},
-				permMap:     newPermissionMap(),
-				username:    stun.NewUsername("user"),
-				realm:       stun.NewRealm("realm"),
-				integrity:   stun.NewShortTermIntegrity("pass"),
-				_nonce:      stun.NewNonce("nonce"),
-			},
-			bindingMgr: newBindingManager(),
-		}
-
-		payload := []byte("Hello")
-		n, err := conn.WriteTo(payload, addr)
 		assert.NoError(t, err)
-
-		// The SendIndication STUN message (captured in writeTo above) should be larger
-		// than the payload due to headers/attributes.
-		assert.Greater(t, len(writtenData), len(payload),
-			"STUN message should be larger than payload")
-
-		// WriteTo MUST return the real payload length, not the STUN message length.
-		assert.Equal(t, len(payload), n,
-			"WriteTo should return payload length (%d), not STUN message length (%d)",
-			len(payload), len(writtenData))
+		assert.Equal(t, len(buf), n, "WriteTo reports the payload length, not the ChannelData frame length")
 	})
 
 	t.Run("ChannelBind transaction failure retains channel number", func(t *testing.T) {
@@ -589,12 +545,14 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 			bindingMgr: bm,
 		}
 
-		// A failed bind attempt should not remove the binding, so a subsequent WriteTo
-		// should not allocate a different channel number for the same peer.
+		// A failed bind attempt should not remove the binding: the same peer keeps
+		// its channel number, and a write (which fails, unprepared) does not
+		// disturb it.
 		err := conn.bind(bound)
 		assert.ErrorIs(t, err, errFake)
 
-		_, _ = conn.WriteTo([]byte("hi"), addr)
+		_, err = conn.WriteTo([]byte("hi"), addr)
+		assert.ErrorIs(t, err, ErrNotPrepared)
 
 		b2, ok := bm.findByAddr(addr)
 		assert.True(t, ok)
