@@ -800,16 +800,24 @@ func (c *UDPConn) handleChannelBindErrorResponse(res *stun.Message) error {
 		return fmt.Errorf("%w: unexpected response type %s", errCannotBindChannel, res.Type) // nolint:err113
 	}
 
-	switch code.Code {
-	case stun.CodeStaleNonce:
+	if code.Code == stun.CodeStaleNonce {
 		c.setNonceFromMsg(res)
 
 		return errTryAgain
-	case stun.CodeBadRequest:
-		return fmt.Errorf("%w: %w: received error %d", errCannotBindChannel, errChannelBindBadRequest, code.Code)
-	default:
-		return fmt.Errorf("%w: received error %d", errCannotBindChannel, code.Code) // nolint:err113
 	}
+
+	turnError := &stun.TurnError{
+		StunMessageType: res.Type,
+		ErrorCodeAttr:   code,
+	}
+	if code.Code == stun.CodeBadRequest {
+		return fmt.Errorf(
+			"%w: %w: received error %d: %w",
+			errCannotBindChannel, errChannelBindBadRequest, code.Code, turnError,
+		)
+	}
+
+	return fmt.Errorf("%w: received error %d: %w", errCannotBindChannel, code.Code, turnError) // nolint:err113
 }
 
 func (c *UDPConn) sendChannelData(data []byte, chNum uint16) (int, error) {

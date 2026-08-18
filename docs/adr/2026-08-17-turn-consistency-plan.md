@@ -1,12 +1,12 @@
 # TURN Consistency and Bounded-State Implementation Plan
 
 **Date:** 2026-08-17
-**Status:** Accepted; not implemented
+**Status:** Accepted; T3.S1 implemented by PR #53; T3.S2 remains on the frontier
 **Track:** 3 of 3 in the 2026-08-17 architecture deepening program
 **Depends on:** Nothing; both slices are independent of Tracks 1 and 2 and of each other
 **Related:** [Program index](2026-08-17-architecture-deepening-program.md), [Modernize the kept API plan](2026-08-15-modernize-kept-api-plan.md), [Prepared-only writes ADR](2026-08-15-prepared-only-writes.md)
 **Normative scope:** Current outcome, boundaries, invariants, acceptance evidence, blockers, and stop conditions
-**Audit history:** Independently audited against `e251b6b` on 2026-08-17; both slices passed after typed-error recovery/exhaustion and concurrent final-channel capacity contracts were closed; no implementation or overlapping open issue/PR exists
+**Audit history:** Independently audited against `e251b6b` on 2026-08-17; both slices passed after typed-error recovery/exhaustion and concurrent final-channel capacity contracts were closed; T3.S1 implemented by PR #53
 
 ## Goal
 
@@ -40,7 +40,7 @@ Delete `binding.mgr` and the dead test-only `create`, delete, and size methods i
 
 | Slice | Status/disposition | Delivers | Blocked by | Removes temporary seam |
 |---|---|---|---|---|
-| T3.S1 | New | ChannelBind preserves typed TURN errors while existing 438/400 policy stays local | None | n/a |
+| T3.S1 | Complete via PR #53 | ChannelBind preserves typed TURN errors while existing 438/400 policy stays local | None | n/a |
 | T3.S2 | New | Channel-number allocation is bounded and binding manager mutation surface contracts | None | Removes dead binding manager test-only mutation methods in this slice |
 
 T3.S1 and T3.S2 are parallel-safe in behavior and have no genuine blocking edge. They touch nearby `udp_conn.go` regions, so the second branch may need an ordinary rebase after the first merges; a likely text conflict is not an architectural dependency.
@@ -50,6 +50,8 @@ T3.S1 and T3.S2 are parallel-safe in behavior and have no genuine blocking edge.
 ### Slice T3.S1 — Preserve typed TURN errors through ChannelBind policy
 
 **What it delivers:** One PR changing ChannelBind error classification so the classifier-created error for every well-formed non-438 response contributes a `*stun.TurnError`. Code 400 also preserves `errCannotBindChannel` and `errChannelBindBadRequest`; a fresh/unknown binding exposes that error through its failure/terminal chain, while the existing previously-ready recovery intentionally consumes it and returns nil. Code 438 still updates nonce and returns `errTryAgain`, including after retry exhaustion; success and malformed-response behavior remain unchanged. Setter order and emitted bytes do not change.
+
+**Implementation:** PR #53 is the slice's one intended product PR.
 
 **Existing-work disposition:** New slice.
 
@@ -113,9 +115,9 @@ T3.S1 and T3.S2 are parallel-safe in behavior and have no genuine blocking edge.
 
 ## Acceptance Criteria
 
-- [ ] The classifier-created error for every well-formed non-438 ChannelBind response carries a typed `*stun.TurnError`; fresh/unknown failures expose it, while previously-ready 400 recovery intentionally consumes it and returns nil. The finite supported response/code/state domain, owners, universal guarantee, and evidence are declared in T3.S1.
-- [ ] ChannelBind 400 retains existing ready-binding recovery and fresh-binding Allocation seal behavior, and 438 retains nonce retry behavior.
-- [ ] ChannelBind request setters, bytes, and retry counts remain unchanged.
+- [x] The classifier-created error for every well-formed non-438 ChannelBind response carries a typed `*stun.TurnError`; fresh/unknown failures expose it, while previously-ready 400 recovery intentionally consumes it and returns nil. The finite supported response/code/state domain, owners, universal guarantee, and evidence are declared in T3.S1.
+- [x] ChannelBind 400 retains existing ready-binding recovery and fresh-binding Allocation seal behavior, and 438 retains nonce retry behavior.
+- [x] ChannelBind request setters, bytes, and retry counts remain unchanged.
 - [ ] Every live binding in one Allocation has a unique channel number in `[0x4000,0x7fff]`, and both maps remain a bijection; the finite supported peer/range domain, owner, universal/canonical-subset guarantee, and evidence are declared in T3.S2.
 - [ ] An existing peer remains resolvable at capacity; after successful permission, the next distinct peer fails with `ErrChannelBindFailed`, does not overwrite state, and starts no ChannelBind request; permission rejection/cancellation/closure retain their earlier outcomes.
 - [ ] `binding.mgr` and test-only create/delete/size mutation paths are absent; tests retain live behavior coverage through production-shaped seams.
