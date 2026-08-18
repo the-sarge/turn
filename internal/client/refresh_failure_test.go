@@ -84,7 +84,7 @@ func newRefreshFailureHarness(
 		Integrity:          stun.NewShortTermIntegrity("pass"),
 		Nonce:              stun.NewNonce("nonce"),
 		Lifetime:           time.Hour, // The periodic timer never fires inside a test.
-	})
+	}, func() {})
 
 	return harness
 }

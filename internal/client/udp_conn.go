@@ -44,13 +44,32 @@ type inboundData struct {
 // as canonical netip.AddrPort values; the root package owns canonicalization
 // and validation, so every peer reaching this type is already canonical.
 type UDPConn struct {
-	bindingMgr             *bindingManager   // Thread-safe
-	checkBindingsTimer     *PeriodicTimer    // Thread-safe
-	readCh                 chan *inboundData // Thread-safe
-	closeCh                chan struct{}     // Thread-safe
-	closeMutex             sync.Mutex        // Thread-safe; also gates workerWG.Add vs close
-	workerWG               sync.WaitGroup    // Joins bind/permission workers on Close
-	bindingRefreshInterval time.Duration     // Read-only
+	// Package-crossing operations are immutable production/mock adapters. They
+	// do not own or mutate Allocation lifecycle state.
+	writeTo            func(data []byte, to net.Addr) (int, error)
+	performTransaction func(msg *stun.Message, to net.Addr, dontWait bool) (TransactionResult, error)
+	onDeallocated      func(relayedAddr net.Addr)
+	abortTransactions  func()
+
+	relayedAddr net.Addr // Read-only
+	serverAddr  net.Addr // Read-only
+	permMap     *permissionMap
+	integrity   stun.MessageIntegrity // Read-only
+	username    stun.Username         // Read-only
+	realm       stun.Realm            // Read-only
+	_nonce      stun.Nonce            // Protected by mutex
+	_lifetime   time.Duration         // Protected by mutex
+
+	refreshAllocTimer      *PeriodicTimer
+	refreshPermsTimer      *PeriodicTimer
+	mutex                  sync.RWMutex // Protects nonce and lifetime
+	bindingMgr             *bindingManager
+	checkBindingsTimer     *PeriodicTimer
+	readCh                 chan *inboundData
+	closeCh                chan struct{}
+	closeMutex             sync.Mutex     // Also gates workerWG.Add vs close
+	workerWG               sync.WaitGroup // Joins bind/permission workers on Close
+	bindingRefreshInterval time.Duration  // Read-only
 
 	// terminalCause is the recorded cause of a self-seal (refresh failure or
 	// ChannelBind 400), set exactly once inside startClose's guarded arm.
@@ -59,46 +78,38 @@ type UDPConn struct {
 	// callerClosed records that the caller's Close has run, so a repeated
 	// caller Close returns net.ErrClosed. Protected by closeMutex.
 	callerClosed bool
-
-	allocation
 }
 
-// NewUDPConn creates a new instance of UDPConn.
-func NewUDPConn(config *AllocationConfig) *UDPConn {
+// NewUDPConn creates a new instance of UDPConn. abortTransactions is a
+// required capability: every allocation must be able to wake its pending
+// transaction waits before deallocation and lifetime-zero release.
+func NewUDPConn(config *AllocationConfig, abortTransactions func()) *UDPConn {
+	if abortTransactions == nil {
+		panic("client: missing abort capability") //nolint:forbidigo // Programmer-invalid internal construction.
+	}
+
 	conn := &UDPConn{
+		writeTo:                config.WriteTo,
+		performTransaction:     config.PerformTransaction,
+		onDeallocated:          config.OnDeallocated,
+		abortTransactions:      abortTransactions,
+		relayedAddr:            config.RelayedAddr,
+		serverAddr:             config.ServerAddr,
+		permMap:                newPermissionMap(),
+		integrity:              config.Integrity,
+		username:               config.Username,
+		realm:                  config.Realm,
+		_nonce:                 config.Nonce,
+		_lifetime:              config.Lifetime,
 		bindingMgr:             newBindingManager(),
 		readCh:                 make(chan *inboundData, maxReadQueueSize),
 		closeCh:                make(chan struct{}),
 		bindingRefreshInterval: defaultBindingRefreshInterval,
-		allocation: allocation{
-			clientHooks: clientHooks{
-				writeTo:            config.WriteTo,
-				performTransaction: config.PerformTransaction,
-				onDeallocated:      config.OnDeallocated,
-			},
-			relayedAddr:       config.RelayedAddr,
-			serverAddr:        config.ServerAddr,
-			permMap:           newPermissionMap(),
-			username:          config.Username,
-			realm:             config.Realm,
-			integrity:         config.Integrity,
-			_nonce:            config.Nonce,
-			_lifetime:         config.Lifetime,
-			abortTransactions: config.AbortTransactions,
-		},
 	}
 
 	if config.BindingRefreshInterval != 0 {
 		conn.bindingRefreshInterval = config.BindingRefreshInterval
 	}
-	conn.onPermRefreshFailure = conn.failPreparedBindings
-	// A permanent refresh failure terminalizes the allocation: startClose,
-	// never Close, because this runs on the refresh timer goroutine, which
-	// must not join itself (the ChannelBind-400 path documents the same rule).
-	conn.onAllocRefreshFailure = func(err error) {
-		conn.startClose(fmt.Errorf("%w: %w", ErrAllocationRefreshFailed, err))
-	}
-
 	conn.refreshAllocTimer = NewPeriodicTimer(
 		timerIDRefreshAlloc,
 		conn.onRefreshTimers,
@@ -156,14 +167,14 @@ func (c *UDPConn) ReadFrom(p []byte) (int, netip.AddrPort, error) {
 	}
 }
 
-func (a *allocation) createPermission(perm *permission, addr netip.AddrPort) error {
+func (c *UDPConn) createPermission(perm *permission, addr netip.AddrPort) error {
 	perm.mutex.Lock()
 	defer perm.mutex.Unlock()
 
 	if perm.state() == permStateIdle {
 		// Punch a hole! (this would block a bit..)
-		if err := a.CreatePermissions(addr); err != nil {
-			a.permMap.delete(addr)
+		if err := c.CreatePermissions(addr); err != nil {
+			c.permMap.delete(addr)
 
 			return err
 		}
@@ -501,9 +512,7 @@ func (c *UDPConn) startCloseLocked(cause error) (bool, error) {
 
 	// Wake workers blocked on in-flight transaction waits so Close does not
 	// wait out the retransmission budget against an unresponsive server.
-	if c.abortTransactions != nil {
-		c.abortTransactions()
-	}
+	c.abortTransactions()
 
 	c.onDeallocated(c.relayedAddr)
 
@@ -558,7 +567,7 @@ func peerAddress(addr netip.AddrPort) proto.PeerAddress {
 
 // CreatePermissions Issues a CreatePermission request for the supplied addresses
 // as described in https://datatracker.ietf.org/doc/html/rfc5766#section-9
-func (a *allocation) CreatePermissions(addrs ...netip.AddrPort) error {
+func (c *UDPConn) CreatePermissions(addrs ...netip.AddrPort) error {
 	setters := []stun.Setter{
 		stun.TransactionID,
 		stun.NewType(stun.MethodCreatePermission, stun.ClassRequest),
@@ -569,10 +578,10 @@ func (a *allocation) CreatePermissions(addrs ...netip.AddrPort) error {
 	}
 
 	setters = append(setters,
-		a.username,
-		a.realm,
-		a.nonce(),
-		a.integrity,
+		c.username,
+		c.realm,
+		c.nonce(),
+		c.integrity,
 		stun.Fingerprint)
 
 	msg, err := stun.Build(setters...)
@@ -580,7 +589,7 @@ func (a *allocation) CreatePermissions(addrs ...netip.AddrPort) error {
 		return err
 	}
 
-	trRes, err := a.performTransaction(msg, a.serverAddr, false)
+	trRes, err := c.performTransaction(msg, c.serverAddr, false)
 	if err != nil {
 		return err
 	}
@@ -591,7 +600,7 @@ func (a *allocation) CreatePermissions(addrs ...netip.AddrPort) error {
 		var code stun.ErrorCodeAttribute
 		if err = code.GetFrom(res); err == nil {
 			if code.Code == stun.CodeStaleNonce {
-				a.setNonceFromMsg(res)
+				c.setNonceFromMsg(res)
 
 				return errTryAgain
 			}

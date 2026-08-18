@@ -21,8 +21,8 @@ import (
 
 // newSilentServerAllocation builds a UDP allocation whose transactions go to a
 // server that never responds, driving the real transaction/retransmission
-// machinery. withAbort mirrors the wiring Allocate performs.
-func newSilentServerAllocation(t *testing.T, withAbort bool) *client.UDPConn {
+// machinery. Its abort adapter mirrors the wiring Allocate performs.
+func newSilentServerAllocation(t *testing.T) (*client.UDPConn, <-chan string) {
 	t.Helper()
 
 	var listenConfig net.ListenConfig
@@ -40,24 +40,34 @@ func newSilentServerAllocation(t *testing.T, withAbort bool) *client.UDPConn {
 	})
 	require.NoError(t, err)
 	startTestPump(t, cl, clientSock)
+	closeOrder := make(chan string, 3)
 
 	config := &client.AllocationConfig{
-		WriteTo:            cl.writeTo,
-		PerformTransaction: cl.performTransaction,
-		OnDeallocated:      cl.onDeallocated,
-		RelayedAddr:        &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 54321},
-		ServerAddr:         cl.serverAddr,
-		Username:           stun.NewUsername("user"),
-		Realm:              stun.NewRealm("realm"),
-		Integrity:          stun.NewShortTermIntegrity("secret"),
-		Nonce:              stun.NewNonce("nonce"),
-		Lifetime:           time.Hour,
-	}
-	if withAbort {
-		config.AbortTransactions = cl.transactions.AbortCurrent
+		WriteTo: cl.writeTo,
+		PerformTransaction: func(msg *stun.Message, to net.Addr, dontWait bool) (client.TransactionResult, error) {
+			if msg.Type.Method == stun.MethodRefresh && dontWait {
+				closeOrder <- "release"
+			}
+
+			return cl.performTransaction(msg, to, dontWait)
+		},
+		OnDeallocated: func(addr net.Addr) {
+			closeOrder <- "deallocated"
+			cl.onDeallocated(addr)
+		},
+		RelayedAddr: &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 54321},
+		ServerAddr:  cl.serverAddr,
+		Username:    stun.NewUsername("user"),
+		Realm:       stun.NewRealm("realm"),
+		Integrity:   stun.NewShortTermIntegrity("secret"),
+		Nonce:       stun.NewNonce("nonce"),
+		Lifetime:    time.Hour,
 	}
 
-	conn := client.NewUDPConn(config)
+	conn := client.NewUDPConn(config, func() {
+		cl.transactions.AbortCurrent()
+		closeOrder <- "abort"
+	})
 	t.Cleanup(func() {
 		_ = conn.Close()
 		cl.Close()
@@ -65,36 +75,14 @@ func newSilentServerAllocation(t *testing.T, withAbort bool) *client.UDPConn {
 		_ = serverSock.Close()
 	})
 
-	return conn
+	return conn, closeOrder
 }
 
 func TestCloseInterruptsTransactionWaits(t *testing.T) {
 	peer := netip.MustParseAddrPort("127.0.0.1:1234")
 
-	t.Run("without abort Close waits out the retransmission budget", func(t *testing.T) {
-		conn := newSilentServerAllocation(t, false)
-
-		prepareResult := make(chan error, 1)
-		go func() { prepareResult <- conn.PreparePeer(context.Background(), peer) }()
-		time.Sleep(150 * time.Millisecond) // Let the CreatePermission transaction get in flight
-
-		start := time.Now()
-		assert.NoError(t, conn.Close())
-		elapsed := time.Since(start)
-		t.Logf("Close took %v without abort (RTO 25ms, budget ~3.2s)", elapsed)
-		assert.Greater(t, elapsed, time.Second,
-			"without abort, Close should block until the in-flight transaction exhausts its retransmissions")
-
-		select {
-		case err := <-prepareResult:
-			assert.Error(t, err)
-		case <-time.After(5 * time.Second):
-			assert.Fail(t, "PreparePeer waiter did not unblock")
-		}
-	})
-
 	t.Run("with abort Close returns promptly and cancellation stays waiter-local", func(t *testing.T) {
-		conn := newSilentServerAllocation(t, true)
+		conn, closeOrder := newSilentServerAllocation(t)
 
 		resultA := make(chan error, 1)
 		go func() { resultA <- conn.PreparePeer(context.Background(), peer) }()
@@ -127,6 +115,9 @@ func TestCloseInterruptsTransactionWaits(t *testing.T) {
 		t.Logf("Close took %v with abort", elapsed)
 		assert.Less(t, elapsed, time.Second,
 			"with abort, Close must not wait out the retransmission budget")
+		assert.Equal(t, []string{"abort", "deallocated", "release"},
+			[]string{<-closeOrder, <-closeOrder, <-closeOrder},
+			"the real transaction adapter must abort the old live set before the release transaction starts")
 
 		select {
 		case err := <-resultA:
