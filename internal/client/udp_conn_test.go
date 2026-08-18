@@ -33,6 +33,15 @@ func (e *timeoutError) Error() string {
 	return e.msg
 }
 
+func requireBinding(t *testing.T, mgr *bindingManager, peer netip.AddrPort) *binding {
+	t.Helper()
+
+	bound, ok := mgr.getOrCreate(peer)
+	require.True(t, ok)
+
+	return bound
+}
+
 func (e *timeoutError) Timeout() bool {
 	return true
 }
@@ -170,7 +179,7 @@ func TestPermissionAndBindingRequestShapes(t *testing.T) {
 	peerA := netip.MustParseAddrPort("192.0.2.1:5000")
 	peerB := netip.MustParseAddrPort("192.0.2.2:6000")
 	bindingMgr := newBindingManager()
-	bound := bindingMgr.create(peerA)
+	bound := requireBinding(t, bindingMgr, peerA)
 
 	mock := &mockClient{
 		performTransaction: func(msg *stun.Message, _ net.Addr, dontWait bool) (TransactionResult, error) {
@@ -295,7 +304,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 				unblock := make(chan struct{})
 
 				bm := newBindingManager()
-				bound := bm.create(netip.MustParseAddrPort("127.0.0.1:1234"))
+				bound := requireBinding(t, bm, netip.MustParseAddrPort("127.0.0.1:1234"))
 				conn := makeConn(&mockClient{
 					performTransaction: func(msg *stun.Message, addr net.Addr, dontWait bool) (TransactionResult, error) {
 						<-unblock
@@ -398,7 +407,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
 				bm := newBindingManager()
-				bound := bm.create(netip.MustParseAddrPort("127.0.0.1:1234"))
+				bound := requireBinding(t, bm, netip.MustParseAddrPort("127.0.0.1:1234"))
 				conn := makeConn(&mockClient{performTransaction: tt.transactionFn}, bm)
 
 				nonceT0 := conn.nonce()
@@ -447,7 +456,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 
 	t.Run("bindChannel exhausts stale nonce retries without a typed TURN error", func(t *testing.T) {
 		bm := newBindingManager()
-		bound := bm.create(netip.MustParseAddrPort("127.0.0.1:1234"))
+		bound := requireBinding(t, bm, netip.MustParseAddrPort("127.0.0.1:1234"))
 		var attempts atomic.Int32
 		conn := makeConn(&mockClient{
 			performTransaction: func(*stun.Message, net.Addr, bool) (TransactionResult, error) {
@@ -469,7 +478,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		var failed atomic.Bool
 
 		bm := newBindingManager()
-		bound := bm.create(netip.MustParseAddrPort("127.0.0.1:1234"))
+		bound := requireBinding(t, bm, netip.MustParseAddrPort("127.0.0.1:1234"))
 		originalCh := bound.number
 		conn := makeConn(&mockClient{
 			performTransaction: func(msg *stun.Message, addr net.Addr, dontWait bool) (TransactionResult, error) {
@@ -549,7 +558,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		}, func() {})
 		defer func() { _ = conn.Close() }()
 
-		bound := conn.bindingMgr.create(peerAddr)
+		bound := requireBinding(t, conn.bindingMgr, peerAddr)
 		conn.maybeBind(bound)
 
 		assert.Eventually(t, func() bool {
@@ -634,7 +643,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		}, func() {})
 		defer func() { _ = conn.Close() }()
 
-		bound := conn.bindingMgr.create(peerAddr)
+		bound := requireBinding(t, conn.bindingMgr, peerAddr)
 
 		conn.maybeBind(bound)
 		assert.Eventually(t, func() bool {
@@ -697,7 +706,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		}, func() {})
 		defer func() { _ = conn.Close() }()
 
-		bound := conn.bindingMgr.create(peerAddr)
+		bound := requireBinding(t, conn.bindingMgr, peerAddr)
 		staleRefreshedAt := time.Now().Add(-(defaultBindingRefreshInterval + time.Minute))
 		bound.setState(bindingStateReady)
 		bound.setRefreshedAt(staleRefreshedAt)
@@ -717,7 +726,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 
 	t.Run("ChannelBind 400 refresh keeps saved binding", func(t *testing.T) {
 		bm := newBindingManager()
-		bound := bm.create(netip.MustParseAddrPort("127.0.0.1:1234"))
+		bound := requireBinding(t, bm, netip.MustParseAddrPort("127.0.0.1:1234"))
 		staleRefreshedAt := time.Now().Add(-(defaultBindingRefreshInterval + time.Minute))
 		var channelBindAttempts atomic.Int32
 		bound.setState(bindingStateReady)
@@ -760,7 +769,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		}))
 
 		bm := newBindingManager()
-		binding := bm.create(addr)
+		binding := requireBinding(t, bm, addr)
 		binding.setState(bindingStateReady)
 		binding.setRefreshedAt(time.Now())
 		binding.prepared.Store(true)
@@ -785,7 +794,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		assert.True(t, pm.insert(addr, &permission{st: permStatePermitted}))
 
 		bm := newBindingManager()
-		bound := bm.create(addr)
+		bound := requireBinding(t, bm, addr)
 		originalCh := bound.number
 
 		client := &mockClient{
