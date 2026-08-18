@@ -1,12 +1,12 @@
 # Transaction Registry Deepening Implementation Plan
 
 **Date:** 2026-08-17
-**Status:** Accepted; not implemented
+**Status:** Implemented by PR #49
 **Track:** 1 of 3 in the 2026-08-17 architecture deepening program
 **Depends on:** Nothing — safe to start first
 **Related:** [Program index](2026-08-17-architecture-deepening-program.md), [Modernize the kept API plan](2026-08-15-modernize-kept-api-plan.md), [TURN molding program](2026-08-14-turn-molding-program.md)
 **Normative scope:** Current outcome, boundaries, invariants, acceptance evidence, blockers, and stop conditions
-**Audit history:** Independently audited against `e251b6b` on 2026-08-17; the slice passed after its initial-send, fire-and-forget, Client-close, socket-authority, and evidence contracts were closed; no implementation or overlapping open issue/PR exists
+**Audit history:** Independently audited against `e251b6b` on 2026-08-17; the slice passed after its initial-send, fire-and-forget, Client-close, socket-authority, and evidence contracts were closed; implementation completed by PR #49
 
 ## Goal
 
@@ -46,7 +46,7 @@ Root `Client` owns the caller's `net.PacketConn` and adapts only its write capab
 
 | Slice | Status/disposition | Delivers | Blocked by | Removes temporary seam |
 |---|---|---|---|---|
-| T1.S1 | New | One transaction registry owns begin, rollback, claims, retry, cancellation, abort, close, and retirement | None | Removes `TransactionMap`, `mutexTrMap`, and caller-composed result/timer operations in the same slice |
+| T1.S1 | Complete via PR #49 | One transaction registry owns begin, rollback, claims, retry, cancellation, abort, close, and retirement | None | Removed `TransactionMap`, `mutexTrMap`, and caller-composed result/timer operations in the same slice |
 
 ## Implementation Slices
 
@@ -54,7 +54,7 @@ Root `Client` owns the caller's `net.PacketConn` and adapts only its write capab
 
 **What it delivers:** One PR that first pins and fixes initial-send rollback as its tracer bullet, then moves registration, duplicate-ID rejection, inbound completion, retransmission/exhaustion, Allocate cancellation arbitration, fire-and-forget retirement, Allocation abort, and Client close into one private registry. Root `Client` delegates these behaviors and no longer owns `mutexTrMap` or calls raw transaction/map/timer/channel methods. Obsolete `TransactionResult.From`, `TransactionResult.Retries`, `Transaction.Retries`, raw `TransactionMap` methods, and the unreachable wait-on-fire-and-forget error are removed when no production or behavior-level test caller remains.
 
-**Existing-work disposition:** New slice. There is no open issue or PR for this work; the stale local architecture-review branches contain no commits beyond current default-branch history and are not an implementation baseline.
+**Implementation:** PR #49 is the slice's one intended product PR; stale local architecture-review branches were not used as an implementation baseline.
 
 **Blocked by:** None.
 
@@ -74,23 +74,23 @@ Root `Client` owns the caller's `net.PacketConn` and adapts only its write capab
 
 | Semantic class | Expected disposition | Enforcement owner | Terminating evidence | Status |
 |---|---|---|---|---|
-| Initial send succeeds while registry still owns entry | Transition to waiting and arm exactly one timer; waiter or fire-and-forget path returned | Registry begin | Focused begin test plus existing request tests | Planned |
-| Initial send succeeds after matching response claimed | Response wins; no timer is armed; waiter observes response | Registry begin/completion claim | Blocked-initial-write response race | Planned |
-| Initial send succeeds after abort or Client close claimed | Abort wins; no timer is armed; waiter observes closed semantics | Registry begin/abort claim | Blocked-initial-write abort/Close race | Planned |
-| Initial send fails without competing claim | Registration rolled back; original send error returned; no timer/live entry | Registry begin | New failing-send regression | Planned |
-| Initial send fails after abort or Client close claimed | Send error remains begin caller result; no timer/live entry; abort has already woken any registered waiter | Registry begin/abort claim | Blocked-initial-write error race | Planned |
-| Duplicate live transaction ID | Second registration rejected; original owner preserved | Registry begin | Focused duplicate-ID test | Planned |
-| Matching response claims first | Timer retired, entry removed, exactly one response published | Registry completion | Inbound response test through `Client.HandleInbound` | Planned |
-| Allocate cancellation claims first | Timer retired, entry removed/closed, cancellation cause returned | Registry cancel claim | Existing Allocate cancellation table adapted to registry seam | Planned |
-| Response/close claims before cancellation | Waiter consumes the already-owned result; response or close precedence preserved | Registry claim plus wait | Existing response-wins and close-vs-cancel tests | Planned |
-| Retry fires below exhaustion | Socket write occurs unlocked; re-arm only if ownership remains after write | Registry retry | Existing blocked-retransmit test plus ownership re-check assertion | Planned |
-| Response or close claims during retry write | Claim wins; returned write cannot publish or re-arm | Registry completion/abort plus retry guard | Blocked-retransmit response/close cases | Planned |
-| Waited retransmit write fails or budget exhausts | Entry claimed once; typed failure published; no re-arm; exhaustion occurs after seven total identical writes (initial plus six retries) | Registry retry | Focused waited failure/exhaustion cases with byte/count assertions | Planned |
-| Fire-and-forget matching response | Entry retires without publication or blocked sender | Registry completion | Focused release-response retirement case | Planned |
-| Fire-and-forget write failure or exhaustion | Entry retires without publication, re-arm, or leak | Registry retry | Focused release failure/exhaustion retirement case | Planned |
-| Allocation abort or Client close claims live work | All transactions registered before the atomic cut wake with closed semantics and their timers stop | Registry abort-current | Existing close/abort tests under race detector | Planned |
-| Root transaction begins after Client close cut | New request survives and completes through `Client.HandleInbound` because Client close is deliberately nonterminal | Root `Client` delegation plus registry begin | `Client.performTransaction` or `Client.Allocate` after `Client.Close` | Planned |
-| Late response after any retirement | Response is discarded without publication or blocked sender | Registry completion | Focused late-response case | Planned |
+| Initial send succeeds while registry still owns entry | Transition to waiting and arm exactly one timer; waiter or fire-and-forget path returned | Registry begin | Focused begin test plus existing request tests | Covered |
+| Initial send succeeds after matching response claimed | Response wins; no timer is armed; waiter observes response | Registry begin/completion claim | Blocked-initial-write response race | Covered |
+| Initial send succeeds after abort or Client close claimed | Abort wins; no timer is armed; waiter observes closed semantics | Registry begin/abort claim | Blocked-initial-write abort/Close race | Covered |
+| Initial send fails without competing claim | Registration rolled back; original send error returned; no timer/live entry | Registry begin | New failing-send regression | Covered |
+| Initial send fails after abort or Client close claimed | Send error remains begin caller result; no timer/live entry; abort has already woken any registered waiter | Registry begin/abort claim | Blocked-initial-write error race | Covered |
+| Duplicate live transaction ID | Second registration rejected; original owner preserved | Registry begin | Focused duplicate-ID test | Covered |
+| Matching response claims first | Timer retired, entry removed, exactly one response published | Registry completion | Inbound response test through `Client.HandleInbound` | Covered |
+| Allocate cancellation claims first | Timer retired, entry removed/closed, cancellation cause returned | Registry cancel claim | Existing Allocate cancellation table adapted to registry seam | Covered |
+| Response/close claims before cancellation | Waiter consumes the already-owned result; response or close precedence preserved | Registry claim plus wait | Existing response-wins and close-vs-cancel tests | Covered |
+| Retry fires below exhaustion | Socket write occurs unlocked; re-arm only if ownership remains after write | Registry retry | Existing blocked-retransmit test plus ownership re-check assertion | Covered |
+| Response or close claims during retry write | Claim wins; returned write cannot publish or re-arm | Registry completion/abort plus retry guard | Blocked-retransmit response/close cases | Covered |
+| Waited retransmit write fails or budget exhausts | Entry claimed once; typed failure published; no re-arm; exhaustion occurs after seven total identical writes (initial plus six retries) | Registry retry | Focused waited failure/exhaustion cases with byte/count assertions | Covered |
+| Fire-and-forget matching response | Entry retires without publication or blocked sender | Registry completion | Focused release-response retirement case | Covered |
+| Fire-and-forget write failure or exhaustion | Entry retires without publication, re-arm, or leak | Registry retry | Focused release failure/exhaustion retirement case | Covered |
+| Allocation abort or Client close claims live work | All transactions registered before the atomic cut wake with closed semantics and their timers stop | Registry abort-current | Existing close/abort tests under race detector | Covered |
+| Root transaction begins after Client close cut | New request survives and completes through `Client.HandleInbound` because Client close is deliberately nonterminal | Root `Client` delegation plus registry begin | `Client.performTransaction` or `Client.Allocate` after `Client.Close` | Covered |
+| Late response after any retirement | Response is discarded without publication or blocked sender | Registry completion | Focused late-response case | Covered |
 
 **Evidence budget:** One initial-write table covering ordinary success/failure and response/abort/Close races; one duplicate-ID case; one inbound success case through the real Client seam; the existing Allocate cancellation table covering pre-send, both waits, response-wins, and close precedence; one blocked retransmit response/close table; one waited retransmit failure/exhaustion table asserting seven total byte-identical writes; one fire-and-forget response-retirement case; one fire-and-forget failure/exhaustion-retirement case; one root `Client` request after `Client.Close`, completed through `HandleInbound`; one late-response discard case; existing Allocation abort/close coverage; full race suite. Preserve the existing interval constants, exponential progression, and cap mechanically; finite diff inspection of that arithmetic is the gate, with no wall-clock repetition or broad clock abstraction. At most one mutation is permitted if initial and retry completion share one ownership guard: remove that guard and observe both blocked-write classes fail. If the implementation has separate guards, omit mutation rather than expanding the budget. No fuzz, platform matrix beyond repository preflight, or repeated timing run is required. The task terminates after these cases, repository preflight, hosted same-head CI, one review, and at most one replacement review are green with no `stop-for-decision` finding.
 
@@ -104,13 +104,13 @@ Root `Client` owns the caller's `net.PacketConn` and adapts only its write capab
 
 ## Acceptance Criteria
 
-- [ ] Every supported transaction terminal event has exactly one registry claim owner, and no result is published or channel closed after another actor owns removal. Supported domain, owner, universal guarantee, and terminating evidence are the representation contract and matrix above.
-- [ ] An initial socket-write failure leaves no live transaction and no armed timer while returning the original error.
-- [ ] Socket writes occur outside the registry ownership lock, and a removed transaction never publishes or re-arms after an in-flight write returns.
-- [ ] Allocate cancellation, response-wins, close precedence, Allocation abort, Client close, and fire-and-forget release preserve their accepted observable outcomes.
-- [ ] The registry receives only a send capability, so it cannot close, deadline, read from, or interrupt the caller-owned socket.
-- [ ] `Client.mutexTrMap`, raw caller mutation of `TransactionMap`, destination-string abort matching, and dead retry/from result surface are absent.
-- [ ] The finite exported root API manifest is unchanged, and the registry forwards an equal copy of every supplied raw request on the initial write and all six retries; method-level turntest flows remain green.
+- [x] Every supported transaction terminal event has exactly one registry claim owner, and no result is published or channel closed after another actor owns removal. Supported domain, owner, universal guarantee, and terminating evidence are the representation contract and matrix above.
+- [x] An initial socket-write failure leaves no live transaction and no armed timer while returning the original error.
+- [x] Socket writes occur outside the registry ownership lock, and a removed transaction never publishes or re-arms after an in-flight write returns.
+- [x] Allocate cancellation, response-wins, close precedence, Allocation abort, Client close, and fire-and-forget release preserve their accepted observable outcomes.
+- [x] The registry receives only a send capability, so it cannot close, deadline, read from, or interrupt the caller-owned socket.
+- [x] `Client.mutexTrMap`, raw caller mutation of `TransactionMap`, destination-string abort matching, and dead retry/from result surface are absent.
+- [x] The finite exported root API manifest is unchanged, and the registry forwards an equal copy of every supplied raw request on the initial write and all six retries; method-level turntest flows remain green.
 
 ## Validation Gates
 

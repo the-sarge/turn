@@ -4,72 +4,432 @@
 package client
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/pion/stun/v3"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestTransactionClose(t *testing.T) {
-	serverA := &net.UDPAddr{IP: net.ParseIP("10.0.0.1"), Port: 3478}
-	serverB := &net.UDPAddr{IP: net.ParseIP("10.0.0.2"), Port: 3478}
-
-	t.Run("Close unblocks WaitForResult with a clean error", func(t *testing.T) {
-		tr := NewTransaction(&TransactionConfig{
-			Key:      "k",
-			To:       serverA,
-			Interval: time.Second,
-		})
-
-		resCh := make(chan TransactionResult, 1)
-		go func() { resCh <- tr.WaitForResult() }()
-
-		tr.Close()
-
-		select {
-		case res := <-resCh:
-			assert.True(t, errors.Is(res.Err, errTransactionClosed))
-		case <-time.After(5 * time.Second):
-			assert.Fail(t, "WaitForResult did not unblock on Close")
+func TestTransactionRegistryInitialSendFailureRollsBack(t *testing.T) {
+	server := &net.UDPAddr{IP: net.ParseIP("192.0.2.1"), Port: 3478}
+	request := stun.MustBuild(stun.TransactionID, stun.BindingRequest)
+	response := stun.MustBuild(
+		stun.NewTransactionIDSetter(request.TransactionID),
+		stun.NewType(stun.MethodBinding, stun.ClassSuccessResponse),
+	)
+	sendErr := errors.New("initial send failed") //nolint:err113 // test-local failure
+	var sends atomic.Int32
+	registry := NewTransactionRegistry(func([]byte, net.Addr) (int, error) {
+		if sends.Add(1) == 1 {
+			return 0, sendErr
 		}
+
+		return len(request.Raw), nil
+	}, time.Hour)
+
+	_, err := registry.Perform(request, server)
+	require.ErrorIs(t, err, sendErr)
+
+	resultCh := make(chan TransactionResult, 1)
+	go func() {
+		result, _ := registry.Perform(request, server)
+		resultCh <- result
+	}()
+	require.Eventually(t, func() bool { return sends.Load() == 2 }, time.Second, time.Millisecond)
+	registry.Complete(response)
+
+	select {
+	case result := <-resultCh:
+		assert.Same(t, response, result.Msg)
+	case <-time.After(time.Second):
+		assert.Fail(t, "replacement transaction did not complete")
+	}
+}
+
+func TestTransactionRegistryRejectsDuplicateLiveID(t *testing.T) {
+	server := &net.UDPAddr{IP: net.ParseIP("192.0.2.1"), Port: 3478}
+	request := stun.MustBuild(stun.TransactionID, stun.BindingRequest)
+	response := stun.MustBuild(
+		stun.NewTransactionIDSetter(request.TransactionID),
+		stun.NewType(stun.MethodBinding, stun.ClassSuccessResponse),
+	)
+	var sends atomic.Int32
+	registry := NewTransactionRegistry(func(raw []byte, _ net.Addr) (int, error) {
+		sends.Add(1)
+
+		return len(raw), nil
+	}, time.Hour)
+
+	firstResult := make(chan TransactionResult, 1)
+	go func() {
+		result, _ := registry.Perform(request, server)
+		firstResult <- result
+	}()
+	require.Eventually(t, func() bool { return sends.Load() == 1 }, time.Second, time.Millisecond)
+
+	_, err := registry.Perform(request, server)
+	require.ErrorIs(t, err, errTransactionAlreadyExists)
+	assert.Equal(t, int32(1), sends.Load(), "a duplicate must not reach the socket")
+
+	registry.Complete(response)
+	select {
+	case result := <-firstResult:
+		assert.Same(t, response, result.Msg, "the original owner must remain live")
+	case <-time.After(time.Second):
+		assert.Fail(t, "original transaction did not complete")
+	}
+}
+
+func TestTransactionRegistryAbortWinsBlockedInitialSend(t *testing.T) {
+	server := &net.UDPAddr{IP: net.ParseIP("192.0.2.1"), Port: 3478}
+	request := stun.MustBuild(stun.TransactionID, stun.BindingRequest)
+	sendStarted := make(chan struct{})
+	releaseSend := make(chan struct{})
+	registry := NewTransactionRegistry(func(raw []byte, _ net.Addr) (int, error) {
+		close(sendStarted)
+		<-releaseSend
+
+		return len(raw), nil
+	}, time.Millisecond)
+
+	resultCh := make(chan error, 1)
+	go func() {
+		_, err := registry.Perform(request, server)
+		resultCh <- err
+	}()
+	<-sendStarted
+	registry.AbortCurrent()
+	close(releaseSend)
+
+	select {
+	case err := <-resultCh:
+		assert.ErrorIs(t, err, net.ErrClosed)
+	case <-time.After(time.Second):
+		assert.Fail(t, "aborted transaction did not wake")
+	}
+}
+
+func TestTransactionRegistryCancellationClaimsLiveWait(t *testing.T) {
+	server := &net.UDPAddr{IP: net.ParseIP("192.0.2.1"), Port: 3478}
+	request := stun.MustBuild(stun.TransactionID, stun.BindingRequest)
+	response := stun.MustBuild(
+		stun.NewTransactionIDSetter(request.TransactionID),
+		stun.NewType(stun.MethodBinding, stun.ClassSuccessResponse),
+	)
+	sent := make(chan struct{})
+	registry := NewTransactionRegistry(func(raw []byte, _ net.Addr) (int, error) {
+		close(sent)
+
+		return len(raw), nil
+	}, time.Hour)
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cause := errors.New("caller canceled") //nolint:err113 // test-local cause
+
+	resultCh := make(chan error, 1)
+	go func() {
+		_, err := registry.PerformWithContext(ctx, request, server)
+		resultCh <- err
+	}()
+	<-sent
+	cancel(cause)
+
+	select {
+	case err := <-resultCh:
+		assert.ErrorIs(t, err, cause)
+	case <-time.After(time.Second):
+		assert.Fail(t, "canceled transaction did not wake")
+	}
+
+	registry.Complete(response)
+}
+
+func TestTransactionRegistryExhaustionSendsSevenByteIdenticalRequests(t *testing.T) {
+	server := &net.UDPAddr{IP: net.ParseIP("192.0.2.1"), Port: 3478}
+	request := stun.MustBuild(stun.TransactionID, stun.BindingRequest)
+	expected := append([]byte(nil), request.Raw...)
+	initialSent := make(chan struct{})
+	var writes atomic.Int32
+	registry := NewTransactionRegistry(func(raw []byte, _ net.Addr) (int, error) {
+		assert.True(t, bytes.Equal(expected, raw), "every retry must preserve the supplied bytes")
+		if writes.Add(1) == 1 {
+			close(initialSent)
+		}
+
+		return len(raw), nil
+	}, 5*time.Millisecond)
+
+	resultCh := make(chan error, 1)
+	go func() {
+		_, err := registry.Perform(request, server)
+		resultCh <- err
+	}()
+	<-initialSent
+	request.Raw[0] ^= 0xff
+
+	select {
+	case err := <-resultCh:
+		assert.ErrorIs(t, err, ErrTransactionTimeout)
+	case <-time.After(2 * time.Second):
+		assert.Fail(t, "transaction did not exhaust its retry budget")
+	}
+	assert.Equal(t, int32(7), writes.Load())
+}
+
+func TestTransactionRegistryResponseWinsBlockedInitialSend(t *testing.T) {
+	server := &net.UDPAddr{IP: net.ParseIP("192.0.2.1"), Port: 3478}
+	request := stun.MustBuild(stun.TransactionID, stun.BindingRequest)
+	response := stun.MustBuild(
+		stun.NewTransactionIDSetter(request.TransactionID),
+		stun.NewType(stun.MethodBinding, stun.ClassSuccessResponse),
+	)
+	sendStarted := make(chan struct{})
+	releaseSend := make(chan struct{})
+	var sends atomic.Int32
+	registry := NewTransactionRegistry(func(raw []byte, _ net.Addr) (int, error) {
+		sends.Add(1)
+		close(sendStarted)
+		<-releaseSend
+
+		return len(raw), nil
+	}, time.Millisecond)
+
+	resultCh := make(chan TransactionResult, 1)
+	go func() {
+		result, _ := registry.Perform(request, server)
+		resultCh <- result
+	}()
+	<-sendStarted
+	registry.Complete(response)
+	close(releaseSend)
+
+	select {
+	case result := <-resultCh:
+		assert.Same(t, response, result.Msg)
+	case <-time.After(time.Second):
+		assert.Fail(t, "response winner did not wake the blocked begin caller")
+	}
+	time.Sleep(10 * time.Millisecond)
+	assert.Equal(t, int32(1), sends.Load(), "a claimed initial send must not arm a timer")
+}
+
+func TestTransactionRegistryInitialSendErrorSurvivesAbort(t *testing.T) {
+	server := &net.UDPAddr{IP: net.ParseIP("192.0.2.1"), Port: 3478}
+	request := stun.MustBuild(stun.TransactionID, stun.BindingRequest)
+	sendStarted := make(chan struct{})
+	releaseSend := make(chan struct{})
+	sendErr := errors.New("blocked initial send failed") //nolint:err113 // test-local failure
+	registry := NewTransactionRegistry(func([]byte, net.Addr) (int, error) {
+		close(sendStarted)
+		<-releaseSend
+
+		return 0, sendErr
+	}, time.Millisecond)
+
+	resultCh := make(chan error, 1)
+	go func() {
+		_, err := registry.Perform(request, server)
+		resultCh <- err
+	}()
+	<-sendStarted
+	registry.AbortCurrent()
+	close(releaseSend)
+
+	select {
+	case err := <-resultCh:
+		assert.ErrorIs(t, err, sendErr)
+	case <-time.After(time.Second):
+		assert.Fail(t, "blocked send failure did not return")
+	}
+}
+
+func TestTransactionRegistryClaimDuringBlockedRetryPreventsRearm(t *testing.T) {
+	server := &net.UDPAddr{IP: net.ParseIP("192.0.2.1"), Port: 3478}
+
+	for _, tc := range []struct {
+		name   string
+		claim  func(*TransactionRegistry, *stun.Message)
+		assert func(*testing.T, TransactionResult, error, *stun.Message)
+	}{
+		{
+			name: "response",
+			claim: func(registry *TransactionRegistry, response *stun.Message) {
+				registry.Complete(response)
+			},
+			assert: func(t *testing.T, result TransactionResult, err error, response *stun.Message) {
+				t.Helper()
+				assert.NoError(t, err)
+				assert.Same(t, response, result.Msg)
+			},
+		},
+		{
+			name: "abort",
+			claim: func(registry *TransactionRegistry, _ *stun.Message) {
+				registry.AbortCurrent()
+			},
+			assert: func(t *testing.T, _ TransactionResult, err error, _ *stun.Message) {
+				t.Helper()
+				assert.ErrorIs(t, err, net.ErrClosed)
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			request := stun.MustBuild(stun.TransactionID, stun.BindingRequest)
+			response := stun.MustBuild(
+				stun.NewTransactionIDSetter(request.TransactionID),
+				stun.NewType(stun.MethodBinding, stun.ClassSuccessResponse),
+			)
+			retryStarted := make(chan struct{})
+			releaseRetry := make(chan struct{})
+			var sends atomic.Int32
+			registry := NewTransactionRegistry(func(raw []byte, _ net.Addr) (int, error) {
+				if sends.Add(1) == 2 {
+					close(retryStarted)
+					<-releaseRetry
+				}
+
+				return len(raw), nil
+			}, time.Millisecond)
+
+			type outcome struct {
+				result TransactionResult
+				err    error
+			}
+			outcomeCh := make(chan outcome, 1)
+			go func() {
+				result, err := registry.Perform(request, server)
+				outcomeCh <- outcome{result: result, err: err}
+			}()
+			<-retryStarted
+			tc.claim(registry, response)
+			close(releaseRetry)
+
+			select {
+			case got := <-outcomeCh:
+				tc.assert(t, got.result, got.err, response)
+			case <-time.After(time.Second):
+				assert.Fail(t, "claim did not wake the waiter")
+			}
+			time.Sleep(10 * time.Millisecond)
+			assert.Equal(t, int32(2), sends.Load(), "a lost retry must not re-arm")
+		})
+	}
+}
+
+func TestTransactionRegistryWaitedRetryFailureRetires(t *testing.T) {
+	server := &net.UDPAddr{IP: net.ParseIP("192.0.2.1"), Port: 3478}
+	request := stun.MustBuild(stun.TransactionID, stun.BindingRequest)
+	response := stun.MustBuild(
+		stun.NewTransactionIDSetter(request.TransactionID),
+		stun.NewType(stun.MethodBinding, stun.ClassSuccessResponse),
+	)
+	retryErr := errors.New("retry failed") //nolint:err113 // test-local failure
+	var sends atomic.Int32
+	replacementStarted := make(chan struct{})
+	releaseReplacement := make(chan struct{})
+	registry := NewTransactionRegistry(func(raw []byte, _ net.Addr) (int, error) {
+		sendNumber := sends.Add(1)
+		if sendNumber == 2 {
+			return 0, retryErr
+		}
+		if sendNumber == 3 {
+			close(replacementStarted)
+			<-releaseReplacement
+		}
+
+		return len(raw), nil
+	}, time.Millisecond)
+
+	_, err := registry.Perform(request, server)
+	require.ErrorIs(t, err, retryErr)
+	assert.Equal(t, int32(2), sends.Load())
+
+	resultCh := make(chan TransactionResult, 1)
+	go func() {
+		result, _ := registry.Perform(request, server)
+		resultCh <- result
+	}()
+	<-replacementStarted
+	registry.Complete(response)
+	close(releaseReplacement)
+	select {
+	case result := <-resultCh:
+		assert.Same(t, response, result.Msg)
+	case <-time.After(time.Second):
+		assert.Fail(t, "replacement after retry failure did not complete")
+	}
+}
+
+func TestTransactionRegistryFireAndForgetRetiresOnEveryTerminalPath(t *testing.T) {
+	server := &net.UDPAddr{IP: net.ParseIP("192.0.2.1"), Port: 3478}
+
+	t.Run("response", func(t *testing.T) {
+		request := stun.MustBuild(stun.TransactionID, stun.BindingRequest)
+		response := stun.MustBuild(
+			stun.NewTransactionIDSetter(request.TransactionID),
+			stun.NewType(stun.MethodBinding, stun.ClassSuccessResponse),
+		)
+		var sends atomic.Int32
+		registry := NewTransactionRegistry(func(raw []byte, _ net.Addr) (int, error) {
+			sends.Add(1)
+
+			return len(raw), nil
+		}, time.Hour)
+
+		err := registry.Start(request, server)
+		require.NoError(t, err)
+		registry.Complete(response)
+		err = registry.Start(request, server)
+		require.NoError(t, err, "the response must retire fire-and-forget ownership")
+		assert.Equal(t, int32(2), sends.Load())
+		registry.AbortCurrent()
 	})
 
-	t.Run("CloseAndDeleteAllTo scopes by destination", func(t *testing.T) {
-		trMap := NewTransactionMap()
-		trA := NewTransaction(&TransactionConfig{Key: "a", To: serverA, Interval: time.Second})
-		trB := NewTransaction(&TransactionConfig{Key: "b", To: serverB, Interval: time.Second})
-		trMap.Insert("a", trA)
-		trMap.Insert("b", trB)
+	t.Run("retransmit failure", func(t *testing.T) {
+		request := stun.MustBuild(stun.TransactionID, stun.BindingRequest)
+		retryErr := errors.New("retry failed") //nolint:err113 // test-local failure
+		var sends atomic.Int32
+		registry := NewTransactionRegistry(func(raw []byte, _ net.Addr) (int, error) {
+			if sends.Add(1) == 2 {
+				return 0, retryErr
+			}
 
-		resA := make(chan TransactionResult, 1)
-		resB := make(chan TransactionResult, 1)
-		go func() { resA <- trA.WaitForResult() }()
-		go func() { resB <- trB.WaitForResult() }()
+			return len(raw), nil
+		}, time.Millisecond)
 
-		trMap.CloseAndDeleteAllTo(serverA)
+		err := registry.Start(request, server)
+		require.NoError(t, err)
+		require.Eventually(t, func() bool {
+			performErr := registry.Start(request, server)
 
-		select {
-		case res := <-resA:
-			assert.True(t, errors.Is(res.Err, errTransactionClosed))
-		case <-time.After(5 * time.Second):
-			assert.Fail(t, "transaction to the aborted destination did not unblock")
-		}
+			return performErr == nil
+		}, time.Second, time.Millisecond, "a failed retry must retire fire-and-forget ownership")
+		registry.AbortCurrent()
+	})
 
-		select {
-		case res := <-resB:
-			assert.Failf(t, "transaction to another destination was aborted", "err: %v", res.Err)
-		case <-time.After(200 * time.Millisecond):
-		}
-		assert.Equal(t, 1, trMap.Size())
+	t.Run("exhaustion", func(t *testing.T) {
+		request := stun.MustBuild(stun.TransactionID, stun.BindingRequest)
+		var sends atomic.Int32
+		registry := NewTransactionRegistry(func(raw []byte, _ net.Addr) (int, error) {
+			sends.Add(1)
 
-		trMap.CloseAndDeleteAll()
-		select {
-		case res := <-resB:
-			assert.True(t, errors.Is(res.Err, errTransactionClosed))
-		case <-time.After(5 * time.Second):
-			assert.Fail(t, "remaining transaction did not unblock")
-		}
+			return len(raw), nil
+		}, time.Millisecond)
+
+		err := registry.Start(request, server)
+		require.NoError(t, err)
+		require.Eventually(t, func() bool {
+			performErr := registry.Start(request, server)
+
+			return performErr == nil
+		}, time.Second, time.Millisecond, "exhaustion must retire fire-and-forget ownership")
+		assert.Equal(t, int32(8), sends.Load())
+		registry.AbortCurrent()
 	})
 }

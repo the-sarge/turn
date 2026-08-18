@@ -7,7 +7,6 @@ package turn
 
 import (
 	"context"
-	b64 "encoding/base64"
 	"net"
 	"net/netip"
 	"sync/atomic"
@@ -61,38 +60,39 @@ func TestNewClientRejectsNonCanonicalServer(t *testing.T) {
 func TestHandleInboundAdmitsOnlyServer(t *testing.T) {
 	server := netip.MustParseAddrPort("192.0.2.1:3478")
 
-	newClient := func(t *testing.T) *Client {
+	newClient := func(t *testing.T) (*Client, *observerConn) {
 		t.Helper()
-		conn, err := net.ListenPacket("udp4", "127.0.0.1:0") // nolint: noctx
-		require.NoError(t, err)
-		t.Cleanup(func() { _ = conn.Close() })
+		conn := newObserverConn()
 
-		c, err := NewClient(&ClientConfig{Conn: conn, Server: server})
+		c, err := NewClient(&ClientConfig{Conn: conn, Server: server, RTO: time.Hour})
 		require.NoError(t, err)
 		t.Cleanup(c.Close)
 
-		return c
+		return c, conn
 	}
 
-	// pendingResponse inserts a pending transaction and returns the STUN
-	// success response that completes it plus a channel carrying whatever the
-	// waiter observes. Delivery is observable as the transaction leaving trMap
-	// and the waiter receiving the message.
-	pendingResponse := func(t *testing.T, c *Client) ([]byte, <-chan client.TransactionResult) {
+	// pendingResponse starts work through the Client's transaction seam and
+	// returns the matching success plus the observable waiter result.
+	pendingResponse := func(t *testing.T, c *Client, conn *observerConn) ([]byte, <-chan client.TransactionResult) {
 		t.Helper()
-		res, err := stun.Build(stun.TransactionID, stun.NewType(stun.MethodAllocate, stun.ClassSuccessResponse))
+		req := stun.MustBuild(stun.TransactionID, stun.BindingRequest)
+		res, err := stun.Build(
+			stun.NewTransactionIDSetter(req.TransactionID),
+			stun.NewType(stun.MethodAllocate, stun.ClassSuccessResponse),
+		)
 		require.NoError(t, err)
-		key := b64.StdEncoding.EncodeToString(res.TransactionID[:])
-		tr := client.NewTransaction(&client.TransactionConfig{Key: key, Raw: nil, To: c.serverAddr, Interval: time.Hour})
-		c.trMap.Insert(key, tr)
 
 		waited := make(chan client.TransactionResult, 1)
-		go func() { waited <- tr.WaitForResult() }()
+		go func() {
+			result, _ := c.performTransaction(req, c.serverAddr, false)
+			waited <- result
+		}()
+		awaitWrite(t, conn, 1)
 
 		return res.Raw, waited
 	}
 
-	expectDelivered := func(t *testing.T, c *Client, waited <-chan client.TransactionResult) {
+	expectDelivered := func(t *testing.T, waited <-chan client.TransactionResult) {
 		t.Helper()
 		select {
 		case res := <-waited:
@@ -101,57 +101,115 @@ func TestHandleInboundAdmitsOnlyServer(t *testing.T) {
 		case <-time.After(time.Second):
 			assert.Fail(t, "waiter was not woken by a delivered server response")
 		}
-		assert.Equal(t, 0, c.trMap.Size(), "delivered transaction leaves the map")
 	}
 
-	expectIgnored := func(t *testing.T, c *Client, waited <-chan client.TransactionResult) {
+	expectIgnored := func(t *testing.T, waited <-chan client.TransactionResult) {
 		t.Helper()
 		select {
 		case res := <-waited:
 			assert.Failf(t, "waiter was woken by an ignored datagram", "res: %+v", res)
 		case <-time.After(100 * time.Millisecond):
 		}
-		assert.Equal(t, 1, c.trMap.Size(), "ignored datagram leaves the transaction pending")
 	}
 
 	t.Run("server source is delivered", func(t *testing.T) {
-		c := newClient(t)
-		raw, waited := pendingResponse(t, c)
+		c, conn := newClient(t)
+		raw, waited := pendingResponse(t, c, conn)
 		assert.NoError(t, c.HandleInbound(raw, net.UDPAddrFromAddrPort(server)))
-		expectDelivered(t, c, waited)
+		expectDelivered(t, waited)
 	})
 
 	t.Run("IPv4-mapped 16-byte spelling of the server is delivered", func(t *testing.T) {
-		c := newClient(t)
-		raw, waited := pendingResponse(t, c)
+		c, conn := newClient(t)
+		raw, waited := pendingResponse(t, c, conn)
 		from := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 3478} // 16-byte mapped form, as a dual-stack socket reports it
 		require.Len(t, from.IP, net.IPv6len)
 		assert.NoError(t, c.HandleInbound(raw, from))
-		expectDelivered(t, c, waited)
+		expectDelivered(t, waited)
 	})
 
 	t.Run("other UDP source is ignored with zero delivery", func(t *testing.T) {
-		c := newClient(t)
-		raw, waited := pendingResponse(t, c)
+		c, conn := newClient(t)
+		raw, waited := pendingResponse(t, c, conn)
 		assert.NoError(t, c.HandleInbound(raw, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 3479}))
 		assert.NoError(t, c.HandleInbound(raw, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 3478}))
-		expectIgnored(t, c, waited)
+		expectIgnored(t, waited)
 	})
 
 	t.Run("non-UDP source is ignored with zero delivery", func(t *testing.T) {
-		c := newClient(t)
-		raw, waited := pendingResponse(t, c)
+		c, conn := newClient(t)
+		raw, waited := pendingResponse(t, c, conn)
 		assert.NoError(t, c.HandleInbound(raw, &net.TCPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 3478}))
 		assert.NoError(t, c.HandleInbound(raw, nil))
-		expectIgnored(t, c, waited)
+		expectIgnored(t, waited)
 	})
 
 	t.Run("non-protocol datagram: error from server, ignored from others", func(t *testing.T) {
-		c := newClient(t)
+		c, _ := newClient(t)
 		junk := []byte("not stun, not channeldata")
 		assert.ErrorIs(t, c.HandleInbound(junk, net.UDPAddrFromAddrPort(server)), errUnexpectedServerDatagram)
 		assert.NoError(t, c.HandleInbound(junk, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 3478}))
 	})
+}
+
+func TestClientCloseIsAnAbortCutNotATerminalState(t *testing.T) {
+	conn := newObserverConn()
+	cl := newObservedClient(t, conn)
+	cl.Close()
+
+	request := stun.MustBuild(stun.TransactionID, stun.BindingRequest)
+	response := stun.MustBuild(
+		stun.NewTransactionIDSetter(request.TransactionID),
+		stun.NewType(stun.MethodBinding, stun.ClassSuccessResponse),
+	)
+	type outcome struct {
+		result client.TransactionResult
+		err    error
+	}
+	resultCh := make(chan outcome, 1)
+	go func() {
+		result, err := cl.performTransaction(request, cl.serverAddr, false)
+		resultCh <- outcome{result: result, err: err}
+	}()
+	awaitWrite(t, conn, 1)
+	require.NoError(t, cl.HandleInbound(response.Raw, testServerNetAddr()))
+
+	select {
+	case got := <-resultCh:
+		assert.NoError(t, got.err)
+		assert.NotNil(t, got.result.Msg)
+	case <-time.After(time.Second):
+		assert.Fail(t, "transaction begun after Client.Close did not complete")
+	}
+}
+
+func TestClientCloseWinsBlockedInitialSendWithoutRearm(t *testing.T) {
+	conn := newObserverConn()
+	conn.blockFrom = 1
+	cl := newObservedClient(t, conn)
+	request := stun.MustBuild(stun.TransactionID, stun.BindingRequest)
+
+	resultCh := make(chan error, 1)
+	go func() {
+		_, err := cl.performTransaction(request, cl.serverAddr, false)
+		resultCh <- err
+	}()
+	select {
+	case <-conn.blocked:
+	case <-time.After(time.Second):
+		require.Fail(t, "initial write did not block")
+	}
+	cl.Close()
+	close(conn.gate)
+
+	select {
+	case err := <-resultCh:
+		assert.ErrorIs(t, err, net.ErrClosed)
+	case <-time.After(time.Second):
+		assert.Fail(t, "Client.Close did not wake the blocked begin caller")
+	}
+	time.Sleep(100 * time.Millisecond)
+	assert.Equal(t, int32(1), conn.writeCount.Load(), "a closed initial send must not arm a timer")
 }
 
 // Create an allocation, and then invalidate the server's nonce.

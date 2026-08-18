@@ -4,6 +4,9 @@
 package client
 
 import (
+	"context"
+	b64 "encoding/base64"
+	"fmt"
 	"net"
 	"sync"
 	"time"
@@ -13,207 +16,246 @@ import (
 
 const (
 	maxRtxInterval time.Duration = 1600 * time.Millisecond
+	maxRtxCount                  = 7 // Initial request plus six retries.
 )
 
 // TransactionResult is a bag of result values of a transaction.
 type TransactionResult struct {
-	Msg     *stun.Message
-	From    net.Addr
-	Retries int
-	Err     error
+	Msg *stun.Message
+	Err error
 }
 
-// TransactionConfig is a set of config params used by NewTransaction.
-type TransactionConfig struct {
-	Key          string
-	Raw          []byte
-	To           net.Addr
-	Interval     time.Duration
-	IgnoreResult bool // True to throw away the result of this transaction (it will not be readable using WaitForResult)
+type transactionRegistryEntry struct {
+	id       [stun.TransactionIDSize]byte
+	raw      []byte
+	to       net.Addr
+	interval time.Duration
+	nRtx     int
+	timer    *time.Timer
+	resultCh chan TransactionResult
 }
 
-// Transaction represents a transaction.
-type Transaction struct {
-	Key      string                 // Read-only
-	Raw      []byte                 // Read-only
-	To       net.Addr               // Read-only
-	nRtx     int                    // Modified only by the timer thread
-	interval time.Duration          // Modified only by the timer thread
-	timer    *time.Timer            // Thread-safe, set only by the creator, and stopper
-	resultCh chan TransactionResult // Thread-safe
-	mutex    sync.RWMutex
+// TransactionRegistry owns the live transaction set and its terminal claims.
+type TransactionRegistry struct {
+	send  func([]byte, net.Addr) (int, error)
+	rto   time.Duration
+	mutex sync.Mutex
+	live  map[[stun.TransactionIDSize]byte]*transactionRegistryEntry
 }
 
-// NewTransaction creates a new instance of Transaction.
-func NewTransaction(config *TransactionConfig) *Transaction {
-	var resultCh chan TransactionResult
-	if !config.IgnoreResult {
-		// Capacity 1 makes every producer non-blocking: the transaction map's
-		// delete-under-lock discipline guarantees at most one write per
-		// transaction, so a producer never blocks on a departed waiter.
-		resultCh = make(chan TransactionResult, 1)
-	}
-
-	return &Transaction{
-		Key:      config.Key,      // Read-only
-		Raw:      config.Raw,      // Read-only
-		To:       config.To,       // Read-only
-		interval: config.Interval, // Modified only by the timer thread
-		resultCh: resultCh,        // Thread-safe
+// NewTransactionRegistry creates a registry that can only send on the caller-owned socket.
+func NewTransactionRegistry(send func([]byte, net.Addr) (int, error), rto time.Duration) *TransactionRegistry {
+	return &TransactionRegistry{
+		send: send,
+		rto:  rto,
+		live: make(map[[stun.TransactionIDSize]byte]*transactionRegistryEntry),
 	}
 }
 
-// StartRtxTimer starts the transaction timer.
-func (t *Transaction) StartRtxTimer(onTimeout func(trKey string, nRtx int)) {
-	t.mutex.Lock()
-	defer t.mutex.Unlock()
+// Perform registers, initially sends, and waits for one transaction.
+func (r *TransactionRegistry) Perform(msg *stun.Message, to net.Addr) (TransactionResult, error) {
+	entry, err := r.begin(msg, to, false)
+	if err != nil {
+		return TransactionResult{}, err
+	}
 
-	t.timer = time.AfterFunc(t.interval, func() {
-		t.mutex.Lock()
-		t.nRtx++
-		nRtx := t.nRtx
-		t.interval *= 2
-		if t.interval > maxRtxInterval {
-			t.interval = maxRtxInterval
+	return waitForTransaction(entry)
+}
+
+// Start registers and initially sends one fire-and-forget transaction.
+func (r *TransactionRegistry) Start(msg *stun.Message, to net.Addr) error {
+	_, err := r.begin(msg, to, true)
+
+	return err
+}
+
+// PerformWithContext performs one transaction whose private wait may be canceled.
+func (r *TransactionRegistry) PerformWithContext(
+	ctx context.Context,
+	msg *stun.Message,
+	to net.Addr,
+) (TransactionResult, error) {
+	if err := ctx.Err(); err != nil {
+		return TransactionResult{}, context.Cause(ctx)
+	}
+
+	entry, err := r.begin(msg, to, false)
+	if err != nil {
+		return TransactionResult{}, err
+	}
+
+	select {
+	case result, ok := <-entry.resultCh:
+		return finishTransactionResult(result, ok)
+	case <-ctx.Done():
+	}
+
+	r.mutex.Lock()
+	if r.live[msg.TransactionID] == entry {
+		delete(r.live, msg.TransactionID)
+		if entry.timer != nil {
+			entry.timer.Stop()
 		}
-		t.mutex.Unlock()
-		onTimeout(t.Key, nRtx)
+		r.mutex.Unlock()
+		close(entry.resultCh)
+
+		return TransactionResult{}, context.Cause(ctx)
+	}
+	r.mutex.Unlock()
+
+	return waitForTransaction(entry)
+}
+
+func (r *TransactionRegistry) begin(
+	msg *stun.Message,
+	to net.Addr,
+	ignoreResult bool,
+) (*transactionRegistryEntry, error) {
+	entry := &transactionRegistryEntry{
+		id:       msg.TransactionID,
+		raw:      append([]byte(nil), msg.Raw...),
+		to:       to,
+		interval: r.rto,
+	}
+	if !ignoreResult {
+		entry.resultCh = make(chan TransactionResult, 1)
+	}
+
+	r.mutex.Lock()
+	if _, exists := r.live[msg.TransactionID]; exists {
+		r.mutex.Unlock()
+
+		return nil, fmt.Errorf("%w: %s", errTransactionAlreadyExists, transactionKey(msg.TransactionID))
+	}
+	r.live[msg.TransactionID] = entry
+	r.mutex.Unlock()
+
+	if _, err := r.send(entry.raw, entry.to); err != nil {
+		r.mutex.Lock()
+		if r.live[entry.id] == entry {
+			delete(r.live, entry.id)
+		}
+		r.mutex.Unlock()
+
+		return nil, err
+	}
+
+	r.mutex.Lock()
+	if r.live[entry.id] == entry {
+		r.armTimerLocked(entry)
+	}
+	r.mutex.Unlock()
+
+	return entry, nil
+}
+
+func (r *TransactionRegistry) armTimerLocked(entry *transactionRegistryEntry) {
+	entry.timer = time.AfterFunc(entry.interval, func() {
+		r.retry(entry)
 	})
 }
 
-// StopRtxTimer stop the transaction timer.
-func (t *Transaction) StopRtxTimer() {
-	t.mutex.Lock()
-	defer t.mutex.Unlock()
+func (r *TransactionRegistry) retry(entry *transactionRegistryEntry) {
+	r.mutex.Lock()
+	if r.live[entry.id] != entry {
+		r.mutex.Unlock()
 
-	if t.timer != nil {
-		t.timer.Stop()
+		return
+	}
+
+	entry.nRtx++
+	entry.interval *= 2
+	if entry.interval > maxRtxInterval {
+		entry.interval = maxRtxInterval
+	}
+	if entry.nRtx == maxRtxCount {
+		delete(r.live, entry.id)
+		r.mutex.Unlock()
+		publishTransactionResult(entry, TransactionResult{
+			Err: fmt.Errorf("%w: transaction %s", ErrTransactionTimeout, transactionKey(entry.id)),
+		})
+
+		return
+	}
+	r.mutex.Unlock()
+
+	_, err := r.send(entry.raw, entry.to)
+
+	r.mutex.Lock()
+	if r.live[entry.id] != entry {
+		r.mutex.Unlock()
+
+		return
+	}
+	if err != nil {
+		delete(r.live, entry.id)
+		r.mutex.Unlock()
+		publishTransactionResult(entry, TransactionResult{
+			Err: fmt.Errorf("%w: transaction %s: %w", errFailedToRetransmitTransaction, transactionKey(entry.id), err),
+		})
+
+		return
+	}
+	r.armTimerLocked(entry)
+	r.mutex.Unlock()
+}
+
+func transactionKey(id [stun.TransactionIDSize]byte) string {
+	return b64.StdEncoding.EncodeToString(id[:])
+}
+
+func publishTransactionResult(entry *transactionRegistryEntry, result TransactionResult) {
+	if entry.resultCh != nil {
+		entry.resultCh <- result
 	}
 }
 
-// WriteResult publishes the result to the buffered result channel. Only the
-// producer that removed the transaction from its map may call it, so the
-// write never blocks and never races a close.
-func (t *Transaction) WriteResult(res TransactionResult) bool {
-	if t.resultCh == nil {
-		return false
-	}
+func waitForTransaction(entry *transactionRegistryEntry) (TransactionResult, error) {
+	result, ok := <-entry.resultCh
 
-	t.resultCh <- res
-
-	return true
+	return finishTransactionResult(result, ok)
 }
 
-// ResultCh exposes the result channel for select-based waits. A received
-// value is a published result; a closed empty channel means a closer removed
-// the transaction.
-func (t *Transaction) ResultCh() <-chan TransactionResult {
-	return t.resultCh
-}
-
-// WaitForResult waits for the transaction result.
-func (t *Transaction) WaitForResult() TransactionResult {
-	if t.resultCh == nil {
-		return TransactionResult{
-			Err: errWaitForResultOnNonResultTransaction,
-		}
-	}
-
-	result, ok := <-t.resultCh
+func finishTransactionResult(result TransactionResult, ok bool) (TransactionResult, error) {
 	if !ok {
 		result.Err = errTransactionClosed
 	}
 
-	return result
+	return result, result.Err
 }
 
-// Close closes the transaction.
-func (t *Transaction) Close() {
-	if t.resultCh != nil {
-		close(t.resultCh)
-	}
-}
-
-// Retries returns the number of retransmission it has made.
-func (t *Transaction) Retries() int {
-	t.mutex.RLock()
-	defer t.mutex.RUnlock()
-
-	return t.nRtx
-}
-
-// TransactionMap is a thread-safe transaction map.
-type TransactionMap struct {
-	trMap map[string]*Transaction
-	mutex sync.RWMutex
-}
-
-// NewTransactionMap create a new instance of the transaction map.
-func NewTransactionMap() *TransactionMap {
-	return &TransactionMap{
-		trMap: map[string]*Transaction{},
-	}
-}
-
-// Insert inserts a transaction to the map.
-func (m *TransactionMap) Insert(key string, tr *Transaction) bool {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
-	m.trMap[key] = tr
-
-	return true
-}
-
-// Find looks up a transaction by its key.
-func (m *TransactionMap) Find(key string) (*Transaction, bool) {
-	m.mutex.RLock()
-	defer m.mutex.RUnlock()
-
-	tr, ok := m.trMap[key]
-
-	return tr, ok
-}
-
-// Delete deletes a transaction by its key.
-func (m *TransactionMap) Delete(key string) {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
-	delete(m.trMap, key)
-}
-
-// CloseAndDeleteAll closes and deletes all transactions.
-func (m *TransactionMap) CloseAndDeleteAll() {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
-	for trKey, tr := range m.trMap {
-		tr.Close()
-		delete(m.trMap, trKey)
-	}
-}
-
-// CloseAndDeleteAllTo closes and deletes all transactions addressed to the
-// given destination, waking their waiters with errTransactionClosed.
-func (m *TransactionMap) CloseAndDeleteAllTo(to net.Addr) {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
-	for trKey, tr := range m.trMap {
-		if tr.To.String() != to.String() {
-			continue
+// Complete claims a matching response and publishes it to a waiting caller.
+func (r *TransactionRegistry) Complete(msg *stun.Message) {
+	r.mutex.Lock()
+	entry, ok := r.live[msg.TransactionID]
+	if ok {
+		delete(r.live, msg.TransactionID)
+		if entry.timer != nil {
+			entry.timer.Stop()
 		}
-		tr.StopRtxTimer()
-		tr.Close()
-		delete(m.trMap, trKey)
+	}
+	r.mutex.Unlock()
+	if ok {
+		publishTransactionResult(entry, TransactionResult{Msg: msg})
 	}
 }
 
-// Size returns the length of the transaction map.
-func (m *TransactionMap) Size() int {
-	m.mutex.RLock()
-	defer m.mutex.RUnlock()
+// AbortCurrent atomically claims and closes every transaction currently live.
+func (r *TransactionRegistry) AbortCurrent() {
+	r.mutex.Lock()
+	claimed := make([]*transactionRegistryEntry, 0, len(r.live))
+	for id, entry := range r.live {
+		if entry.timer != nil {
+			entry.timer.Stop()
+		}
+		claimed = append(claimed, entry)
+		delete(r.live, id)
+	}
+	r.mutex.Unlock()
 
-	return len(m.trMap)
+	for _, entry := range claimed {
+		if entry.resultCh != nil {
+			close(entry.resultCh)
+		}
+	}
 }

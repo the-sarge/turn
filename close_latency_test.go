@@ -54,9 +54,7 @@ func newSilentServerAllocation(t *testing.T, withAbort bool) *client.UDPConn {
 		Lifetime:           time.Hour,
 	}
 	if withAbort {
-		config.AbortTransactions = func() {
-			cl.abortPendingTransactionsTo(cl.serverAddr)
-		}
+		config.AbortTransactions = cl.transactions.AbortCurrent
 	}
 
 	conn := client.NewUDPConn(config)
