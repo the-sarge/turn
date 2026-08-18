@@ -341,6 +341,33 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 		assert.False(t, harness.conn.isClosed())
 	})
 
+	t.Run("server bind rejection surfaces typed TURN error", func(t *testing.T) {
+		harness := newPrepareHarness(t, false)
+
+		mock := harness.mock
+		inner := mock.performTransaction
+		mock.performTransaction = func(msg *stun.Message, to net.Addr, dontWait bool) (TransactionResult, error) {
+			if msg.Type.Method == stun.MethodChannelBind {
+				harness.bindCount.Add(1)
+
+				return TransactionResult{Msg: stun.MustBuild(
+					stun.NewType(stun.MethodChannelBind, stun.ClassErrorResponse),
+					stun.ErrorCodeAttribute{Code: stun.CodeForbidden, Reason: []byte("Forbidden")},
+				)}, nil
+			}
+
+			return inner(msg, to, dontWait)
+		}
+
+		err := harness.conn.PreparePeer(context.Background(), harness.peer)
+		var turnErr *stun.TurnError
+		if assert.ErrorAs(t, err, &turnErr) {
+			assert.Equal(t, stun.CodeForbidden, turnErr.ErrorCodeAttr.Code)
+		}
+		assert.ErrorIs(t, err, errCannotBindChannel)
+		assert.False(t, harness.conn.isClosed())
+	})
+
 	t.Run("close joins in-flight bind workers", func(t *testing.T) {
 		harness := newPrepareHarness(t, true)
 

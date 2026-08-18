@@ -332,6 +332,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 			expectErr            error
 			expectErrContains    string
 			expectBadRequest     bool
+			expectTurnErrorCode  stun.ErrorCode
 			expectBindingDeleted bool
 			expectNonceChanged   bool
 		}{
@@ -361,8 +362,9 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 
 					return TransactionResult{Msg: res}, nil
 				},
-				expectErr:         errCannotBindChannel,
-				expectErrContains: "received error",
+				expectErr:           errCannotBindChannel,
+				expectErrContains:   "received error",
+				expectTurnErrorCode: stun.CodeForbidden,
 			},
 			{
 				name: "ErrorResponse with CodeBadRequest is detectable",
@@ -374,9 +376,10 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 
 					return TransactionResult{Msg: res}, nil
 				},
-				expectErr:         errCannotBindChannel,
-				expectErrContains: "received error",
-				expectBadRequest:  true,
+				expectErr:           errCannotBindChannel,
+				expectErrContains:   "received error",
+				expectBadRequest:    true,
+				expectTurnErrorCode: stun.CodeBadRequest,
 			},
 			{
 				name: "ErrorResponse without error code returns unexpected response type error",
@@ -410,6 +413,11 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 					assert.ErrorContains(t, err, tt.expectErrContains)
 				}
 				assert.Equal(t, tt.expectBadRequest, errors.Is(err, errChannelBindBadRequest))
+				if tt.expectTurnErrorCode != 0 {
+					var turnErr *stun.TurnError
+					require.ErrorAs(t, err, &turnErr)
+					assert.Equal(t, tt.expectTurnErrorCode, turnErr.ErrorCodeAttr.Code)
+				}
 
 				if tt.expectBindingDeleted {
 					assert.Empty(t, bm.chanMap)
@@ -433,6 +441,26 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 				}
 			})
 		}
+	})
+
+	t.Run("bindChannel exhausts stale nonce retries without a typed TURN error", func(t *testing.T) {
+		bm := newBindingManager()
+		bound := bm.create(netip.MustParseAddrPort("127.0.0.1:1234"))
+		var attempts atomic.Int32
+		conn := makeConn(&mockClient{
+			performTransaction: func(*stun.Message, net.Addr, bool) (TransactionResult, error) {
+				attempts.Add(1)
+
+				return TransactionResult{Msg: staleNonceMsg()}, nil
+			},
+		}, bm)
+
+		err := conn.bindChannel(bound, bindingStateIdle)
+		assert.ErrorIs(t, err, errTryAgain)
+		assert.Equal(t, int32(maxRetryAttempts), attempts.Load())
+		assert.Equal(t, bindingStateFailed, bound.state())
+		var turnErr *stun.TurnError
+		assert.False(t, errors.As(err, &turnErr), "438 retry exhaustion must not become a typed TURN error")
 	})
 
 	t.Run("maybeBind() retries unknown binding after transaction failure", func(t *testing.T) {
@@ -554,6 +582,13 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 
 		_, err := conn.WriteTo([]byte("still closed"), peerAddr)
 		assert.ErrorIs(t, err, net.ErrClosed)
+		var turnErr *stun.TurnError
+		require.ErrorAs(t, err, &turnErr)
+		assert.Equal(t, stun.CodeBadRequest, turnErr.ErrorCodeAttr.Code)
+
+		closeErr := conn.Close()
+		require.ErrorAs(t, closeErr, &turnErr)
+		assert.Equal(t, stun.CodeBadRequest, turnErr.ErrorCodeAttr.Code)
 	})
 
 	t.Run("ChannelBind 400 after unknown binding closes allocation", func(t *testing.T) {
@@ -616,6 +651,11 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		case <-time.After(5 * time.Second):
 			assert.Fail(t, "timed out waiting for deallocation callback")
 		}
+
+		_, err := conn.WriteTo([]byte("still closed"), peerAddr)
+		var turnErr *stun.TurnError
+		require.ErrorAs(t, err, &turnErr)
+		assert.Equal(t, stun.CodeBadRequest, turnErr.ErrorCodeAttr.Code)
 	})
 
 	t.Run("ChannelBind 400 after lost ready refresh keeps saved binding", func(t *testing.T) {
