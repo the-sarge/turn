@@ -6,7 +6,6 @@ package turn
 
 import (
 	"context"
-	b64 "encoding/base64"
 	"fmt"
 	"math"
 	"net"
@@ -21,7 +20,6 @@ import (
 
 const (
 	defaultRTO        = 200 * time.Millisecond
-	maxRtxCount       = 7              // Total 7 requests (Rc)
 	maxDataBufferSize = math.MaxUint16 // Message size limit for Chromium
 )
 
@@ -60,16 +58,14 @@ type Client struct {
 	server     netip.AddrPort // Read-only; canonical, the inbound admission comparand
 	serverAddr net.Addr       // Read-only; server as the transaction destination on conn
 
-	username     stun.Username          // Read-only
-	password     string                 // Read-only
-	realm        stun.Realm             // Read-only
-	integrity    stun.MessageIntegrity  // Read-only
-	trMap        *client.TransactionMap // Thread-safe
-	rto          time.Duration          // Read-only
-	relayedConn  *client.UDPConn        // Protected by mutex ***
-	allocTryLock client.TryLock         // Thread-safe
-	mutex        sync.RWMutex           // Thread-safe
-	mutexTrMap   sync.Mutex             // Thread-safe
+	username     stun.Username               // Read-only
+	password     string                      // Read-only
+	realm        stun.Realm                  // Read-only
+	integrity    stun.MessageIntegrity       // Read-only
+	transactions *client.TransactionRegistry // Thread-safe
+	relayedConn  *client.UDPConn             // Protected by mutex ***
+	allocTryLock client.TryLock              // Thread-safe
+	mutex        sync.RWMutex                // Thread-safe
 
 	// REQUESTED-ADDRESS-FAMILY attribute for allocations (RFC 6156)
 	requestedAddressFamily proto.RequestedAddressFamily
@@ -148,21 +144,20 @@ func NewClient(config *ClientConfig) (*Client, error) {
 		rto = config.RTO
 	}
 
-	client := &Client{
+	turnClient := &Client{
 		conn:                      config.Conn,
 		server:                    server,
 		serverAddr:                net.UDPAddrFromAddrPort(server),
 		username:                  stun.NewUsername(config.Username),
 		password:                  config.Password,
-		trMap:                     client.NewTransactionMap(),
-		rto:                       rto,
 		requestedAddressFamily:    getRequestedAddressFamily(config.Conn),
 		permissionRefreshInterval: config.PermissionRefreshInterval,
 		bindingRefreshInterval:    config.bindingRefreshInterval,
 		bindingCheckInterval:      config.bindingCheckInterval,
 	}
+	turnClient.transactions = client.NewTransactionRegistry(turnClient.writeTo, rto)
 
-	return client, nil
+	return turnClient, nil
 }
 
 // writeTo sends data to the specified destination using the base socket.
@@ -174,19 +169,7 @@ func (c *Client) writeTo(data []byte, to net.Addr) (int, error) {
 // waiter woken with an error wrapping net.ErrClosed. Close is idempotent and
 // never touches the caller-owned socket.
 func (c *Client) Close() {
-	c.mutexTrMap.Lock()
-	defer c.mutexTrMap.Unlock()
-
-	c.trMap.CloseAndDeleteAll()
-}
-
-// abortPendingTransactionsTo closes every pending transaction addressed to
-// the given destination, waking their waiters with an error.
-func (c *Client) abortPendingTransactionsTo(to net.Addr) {
-	c.mutexTrMap.Lock()
-	defer c.mutexTrMap.Unlock()
-
-	c.trMap.CloseAndDeleteAllTo(to)
+	c.transactions.AbortCurrent()
 }
 
 func (c *Client) sendAllocateRequest(ctx context.Context, protocol proto.Protocol) ( //nolint:cyclop
@@ -337,9 +320,7 @@ func (c *Client) Allocate(ctx context.Context) (*Allocation, error) {
 		PermissionRefreshInterval: c.permissionRefreshInterval,
 		BindingRefreshInterval:    c.bindingRefreshInterval,
 		BindingCheckInterval:      c.bindingCheckInterval,
-		AbortTransactions: func() {
-			c.abortPendingTransactionsTo(c.serverAddr)
-		},
+		AbortTransactions:         c.transactions.AbortCurrent,
 	})
 	c.setRelayedUDPConn(relayedConn)
 
@@ -355,112 +336,23 @@ func (c *Client) Allocate(ctx context.Context) (*Allocation, error) {
 	return newAllocation(relayedConn, canonicalRelayed), nil
 }
 
-// startTransaction registers a new transaction, sends its request once on
-// the caller-owned socket, and arms the retransmission timer.
-func (c *Client) startTransaction(msg *stun.Message, to net.Addr, ignoreResult bool) (
-	string, *client.Transaction, error,
-) {
-	trKey := b64.StdEncoding.EncodeToString(msg.TransactionID[:])
-
-	raw := make([]byte, len(msg.Raw))
-	copy(raw, msg.Raw)
-
-	tr := client.NewTransaction(&client.TransactionConfig{
-		Key:          trKey,
-		Raw:          raw,
-		To:           to,
-		Interval:     c.rto,
-		IgnoreResult: ignoreResult,
-	})
-
-	c.trMap.Insert(trKey, tr)
-
-	_, err := c.conn.WriteTo(tr.Raw, to)
-	if err != nil {
-		return "", nil, err
-	}
-
-	tr.StartRtxTimer(c.onRtxTimeout)
-
-	return trKey, tr, nil
-}
-
 // performTransaction performs STUN transaction.
 func (c *Client) performTransaction(msg *stun.Message, to net.Addr, ignoreResult bool) (client.TransactionResult,
 	error,
 ) {
-	_, tr, err := c.startTransaction(msg, to, ignoreResult)
-	if err != nil {
-		return client.TransactionResult{}, err
-	}
-
-	// If ignoreResult is true, get the transaction going and return immediately
 	if ignoreResult {
-		return client.TransactionResult{}, nil
+		return client.TransactionResult{}, c.transactions.Start(msg, to)
 	}
 
-	res := tr.WaitForResult()
-	if res.Err != nil {
-		return res, res.Err
-	}
-
-	return res, nil
+	return c.transactions.Perform(msg, to)
 }
 
-// performAllocateTransaction runs one Allocate transaction with a cancelable
-// wait. Map membership under mutexTrMap is the single linearization point:
-// whichever of the waiter, a producer, or a closer removes the transaction
-// from the map owns its result channel's fate.
+// performAllocateTransaction delegates Allocate's private cancelable wait to
+// the transaction registry; cancellation does not cancel shared peer work.
 func (c *Client) performAllocateTransaction(ctx context.Context, msg *stun.Message) (
 	client.TransactionResult, error,
 ) {
-	if err := ctx.Err(); err != nil {
-		return client.TransactionResult{}, context.Cause(ctx)
-	}
-
-	trKey, tr, err := c.startTransaction(msg, c.serverAddr, false)
-	if err != nil {
-		return client.TransactionResult{}, err
-	}
-
-	select {
-	case res, ok := <-tr.ResultCh():
-		return finishTransactionWait(res, ok)
-	case <-ctx.Done():
-	}
-
-	// Canceled: if the transaction is still in the map, this waiter owns it,
-	// removes it, and returns the cancellation cause. If it is absent, some
-	// producer or closer already owns it, so consume the channel: a published
-	// result means the response wins; a closed empty channel means the client
-	// closed, and closure takes precedence over cancellation.
-	c.mutexTrMap.Lock()
-	if _, owned := c.trMap.Find(trKey); owned {
-		tr.StopRtxTimer()
-		c.trMap.Delete(trKey)
-		tr.Close()
-		c.mutexTrMap.Unlock()
-
-		return client.TransactionResult{}, context.Cause(ctx)
-	}
-	c.mutexTrMap.Unlock()
-
-	res, ok := <-tr.ResultCh()
-
-	return finishTransactionWait(res, ok)
-}
-
-// finishTransactionWait translates a consumed result-channel outcome: a
-// closed empty channel means the client closed the transaction.
-func finishTransactionWait(res client.TransactionResult, ok bool) (client.TransactionResult, error) {
-	if !ok {
-		return res, fmt.Errorf("turn: client closed: %w", net.ErrClosed)
-	}
-	if res.Err != nil {
-		return res, res.Err
-	}
-
-	return res, nil
+	return c.transactions.PerformWithContext(ctx, msg, c.serverAddr)
 }
 
 // onDeallocated is called when de-allocation of relay address has been complete.
@@ -491,7 +383,7 @@ func (c *Client) HandleInbound(data []byte, from net.Addr) error {
 
 	switch {
 	case stun.IsMessage(data):
-		return c.handleSTUNMessage(data, from)
+		return c.handleSTUNMessage(data)
 	case proto.IsChannelData(data):
 		return c.handleChannelData(data)
 	default:
@@ -499,7 +391,7 @@ func (c *Client) HandleInbound(data []byte, from net.Addr) error {
 	}
 }
 
-func (c *Client) handleSTUNMessage(data []byte, from net.Addr) error { //nolint:cyclop
+func (c *Client) handleSTUNMessage(data []byte) error { //nolint:cyclop
 	raw := make([]byte, len(data))
 	copy(raw, data)
 
@@ -548,27 +440,7 @@ func (c *Client) handleSTUNMessage(data []byte, from net.Addr) error { //nolint:
 	// - stun.ClassSuccessResponse
 	// - stun.ClassErrorResponse
 
-	trKey := b64.StdEncoding.EncodeToString(msg.TransactionID[:])
-
-	c.mutexTrMap.Lock()
-	tr, ok := c.trMap.Find(trKey)
-	if !ok {
-		c.mutexTrMap.Unlock()
-
-		return nil // Silently discard: the transaction's waiter has departed.
-	}
-
-	// End the transaction: removal under the lock takes ownership, and the
-	// publish to the buffered result channel never blocks.
-	tr.StopRtxTimer()
-	c.trMap.Delete(trKey)
-	c.mutexTrMap.Unlock()
-
-	tr.WriteResult(client.TransactionResult{
-		Msg:     msg,
-		From:    from,
-		Retries: tr.Retries(),
-	})
+	c.transactions.Complete(msg)
 
 	return nil
 }
@@ -595,56 +467,6 @@ func (c *Client) handleChannelData(data []byte) error {
 	relayedConn.HandleInbound(chData.Data, addr)
 
 	return nil
-}
-
-// onRtxTimeout runs on the transaction's timer goroutine. Exhaustion and
-// re-arm decisions happen under mutexTrMap, but the retransmit socket write
-// does not, so cancellation promptness never waits behind caller-socket I/O.
-// A write already in flight when the transaction changes owner completes
-// harmlessly: ownership is re-checked before publishing or re-arming.
-func (c *Client) onRtxTimeout(trKey string, nRtx int) {
-	c.mutexTrMap.Lock()
-	tr, ok := c.trMap.Find(trKey)
-	if !ok {
-		c.mutexTrMap.Unlock()
-
-		return // Already gone
-	}
-
-	if nRtx == maxRtxCount {
-		// All retransmissions failed: this producer takes ownership and
-		// publishes to the buffered result channel without blocking.
-		c.trMap.Delete(trKey)
-		c.mutexTrMap.Unlock()
-		tr.WriteResult(client.TransactionResult{
-			Err: fmt.Errorf("%w: transaction %s", ErrTransactionTimeout, trKey),
-		})
-
-		return
-	}
-	c.mutexTrMap.Unlock()
-
-	_, err := c.conn.WriteTo(tr.Raw, tr.To)
-
-	c.mutexTrMap.Lock()
-	if _, owned := c.trMap.Find(trKey); !owned {
-		// A waiter, closer, or response producer took the transaction while
-		// the write was in flight: neither publish nor re-arm.
-		c.mutexTrMap.Unlock()
-
-		return
-	}
-	if err != nil {
-		c.trMap.Delete(trKey)
-		c.mutexTrMap.Unlock()
-		tr.WriteResult(client.TransactionResult{
-			Err: fmt.Errorf("%w: transaction %s: %w", errFailedToRetransmitTransaction, trKey, err),
-		})
-
-		return
-	}
-	tr.StartRtxTimer(c.onRtxTimeout)
-	c.mutexTrMap.Unlock()
 }
 
 func (c *Client) setRelayedUDPConn(conn *client.UDPConn) {

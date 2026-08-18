@@ -422,7 +422,7 @@ func TestAllocateCancelProducerRace(t *testing.T) {
 	}
 
 	// With the producer's socket write still blocked, Close and HandleInbound
-	// must remain callable: no producer blocks holding mutexTrMap.
+	// must remain callable: no producer blocks while owning the registry.
 	closeDone := make(chan struct{})
 	go func() {
 		cl.Close()
