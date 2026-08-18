@@ -207,6 +207,13 @@ func (c *UDPConn) PreparePeer(ctx context.Context, peer netip.AddrPort) error {
 
 	bound, ok := c.bindingMgr.getOrCreate(peer)
 	if !ok {
+		if err := ctx.Err(); err != nil {
+			return context.Cause(ctx)
+		}
+		if c.isClosed() {
+			return c.closedErr()
+		}
+
 		return ErrChannelBindFailed
 	}
 
