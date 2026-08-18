@@ -1,6 +1,6 @@
 # TURN Architecture Deepening Program — 2026-08-17
 
-**Status:** Accepted; tracks not yet implemented; all four slices independently audited
+**Status:** Accepted; Track 1 implemented by PR #49; three independently audited slices remain on the frontier
 
 ## What this is
 
@@ -20,13 +20,13 @@ This program packages the post-M1 architecture review and delegated grilling of 
 
 | # | Track | Plan | Parent issue | Blocked by | Slices | Status |
 |---|---|---|---|---|---|---|
-| 1 | Transaction registry deepening | [plan](2026-08-17-transaction-registry-plan.md) | pending | None | 1 | FRONTIER after publication; recommended starter; M-L |
+| 1 | Transaction registry deepening | [plan](2026-08-17-transaction-registry-plan.md) | #41 | None | 1 | COMPLETE via PR #49 |
 | 2 | Allocation lifecycle deepening | [plan](2026-08-17-allocation-lifecycle-plan.md) | pending | None | 1 | FRONTIER after publication; T2.S1 M-L |
 | 3 | TURN consistency and bounded state | [plan](2026-08-17-turn-consistency-plan.md) | pending | None | 2 | FRONTIER after publication; T3.S1 S and T3.S2 S-M |
 
 There are no genuine slice-level blocking edges. The current abort-current adapter is already sufficient for T2.S1, and Track 1 later changes its implementation owner without changing the Allocation-side capability. Likely text conflicts between independently implemented tracks require rebasing, not artificial blockers.
 
-Parallel-safe frontier after plan publication: T1.S1, T2.S1, T3.S1, and T3.S2. T1.S1 and T2.S1 both touch root/internal construction but are behaviorally independent; T3.S1 and T3.S2 touch nearby `udp_conn.go` regions but have separate owners. Ordinary rebase handles text conflicts. Recommended dispatch is T1.S1 first because it fixes a confirmed stranded-registration path and leaves the deepest common dependency in its final shape; the other frontier slices may run in parallel in separate fresh contexts.
+Current parallel-safe frontier after PR #49: T2.S1, T3.S1, and T3.S2. T1.S1 is complete; T3.S1 and T3.S2 touch nearby `udp_conn.go` regions but have separate owners. Ordinary rebase handles text conflicts, and the remaining frontier slices may run in parallel in separate fresh contexts.
 
 ## Rules that bind every track
 
