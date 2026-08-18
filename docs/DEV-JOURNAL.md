@@ -321,3 +321,33 @@ PR [#49](https://github.com/the-sarge/turn/pull/49) landed Track 1 Slice 1 of th
 
 - Tracks 2 and 3 remain independently dispatchable: Allocation lifecycle ownership ([#45](https://github.com/the-sarge/turn/issues/45)), typed ChannelBind errors ([#46](https://github.com/the-sarge/turn/issues/46)), and bounded channel-number allocation ([#47](https://github.com/the-sarge/turn/issues/47)). Live program view: [tracking issue #48](https://github.com/the-sarge/turn/issues/48).
 - No review follow-up issue was required and no untraced contract effect remains from this slice.
+
+---
+
+## Track 2 Slice 1: Allocation lifecycle ownership - 2026-08-17 22:04 EDT
+
+**Main:** `2868aa537fb0`
+**Actor:** Codex
+
+**Summary**
+
+PR [#51](https://github.com/the-sarge/turn/pull/51) landed Track 2 Slice 1 of the allocation-lifecycle architecture plan as `2868aa5`: `internal/client.UDPConn` is now the sole owner of Allocation lifecycle state and terminalization. The retired `allocation` and `clientHooks` wrappers are gone, the transaction-abort capability is mandatory at construction, and close preserves the required `abort -> deallocated -> release` order. Child issue [#45](https://github.com/the-sarge/turn/issues/45) is closed; the remaining independently ready frontier is [#46](https://github.com/the-sarge/turn/issues/46) and [#47](https://github.com/the-sarge/turn/issues/47).
+
+**Completed**
+
+- Moved allocation lifecycle state and maintenance behavior directly onto `UDPConn`, including Refresh, permission refresh, ChannelBind refresh, allocation expiry, failure publication, and one-shot close ownership.
+- Made transaction abort an explicit required constructor capability and removed the no-abort close path; terminalization now aborts active transactions before publishing deallocation and releasing the socket.
+- Preserved fixed refresh cadence and exact request bytes while adding coverage for ordinary and stale-nonce Refresh, CreatePermission and ChannelBind request shape/order, normalized bytes, permission preservation, terminal races, and close ordering.
+- Updated the allocation plan and architecture program index in the product PR so Track 2 is complete and the live frontier points only to the two Track 3 slices.
+
+**Validation**
+
+- Red-first constructor coverage demonstrated that missing transaction abort was previously accepted; the new positional constructor capability makes omission a compile-time error and rejects a nil adapter before timers or workers start.
+- Focused lifecycle tests, `go test ./...`, `go test -race ./...`, and `task verify` passed. Exact-head `task preflight` certified `bed672eeb7150f6a8a3b67c5b8da974fef983500` against base `ff01dd66d6dbb2703602e05d8eebc1a1283ebef2`.
+- RAS review `20260818T014024-72e999465c65bac02bd2ce1e` produced zero Fix First and zero follow-up findings. Five low observations were independently rejected as policy outside the slice contract, dispatch-era wording, adjacent comment polish, unreachable narrow test-fixture state, and optional timeout strengthening; dispositions are recorded on PR #51.
+- Hosted pull-request certification [32090055179](https://github.com/the-sarge/turn/actions/runs/32090055179) passed on the reviewed head, including core, race, docs, Go floor, secret scan, CodeQL, proto fuzz smoke, and `ci-required`; PR #51 was squash-merged while pinned to that head.
+
+**Next**
+
+- Track 3 remains independently dispatchable: typed ChannelBind errors ([#46](https://github.com/the-sarge/turn/issues/46)) and bounded channel-number allocation ([#47](https://github.com/the-sarge/turn/issues/47)). Live program view: [tracking issue #48](https://github.com/the-sarge/turn/issues/48).
+- No review follow-up issue was required and no untraced contract effect remains from this slice.
