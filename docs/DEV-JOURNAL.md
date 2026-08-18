@@ -409,3 +409,28 @@ PR [#55](https://github.com/the-sarge/turn/pull/55) landed Track 3 Slice 2 of th
 **Next**
 
 - The architecture-deepening implementation frontier is empty. The live program view is [tracking issue #48](https://github.com/the-sarge/turn/issues/48); post-merge closure will reconcile its parent/mirror state and revalidate the one deferred verification-aid performance observation against `0c55b10`.
+
+---
+
+## Release v5.2.1-gs.1 - 2026-08-18 01:07 EDT
+
+**Main:** `bf06a1147eee`
+**Actor:** Claude (planit)
+
+**Summary**
+
+Annotated tag `v5.2.1-gs.1` published at `bf06a11` and resolving via `go get`. It packages everything merged since `v5.2.0-gs.1` with no exported API change: the M1 review-follow-ups batch (PR #38 — #30 seal precedence, #33/#36 test coverage) and the 2026-08-17 architecture deepening program (PRs #49/#51/#53/#55: transaction-registry terminal ownership, Allocation lifecycle consolidation on `UDPConn`, typed TURN errors through ChannelBind policy, bounded channel-number allocation). Cut so the pending wiremux adoption lands once instead of twice.
+
+**Decisions**
+
+- Consumer adoption retargeted from `v5.2.0-gs.1` to `v5.2.1-gs.1`: GridSwarm/wiremux#1180 (title, target line, and adoption note updated 2026-08-18; the migration map was verified unchanged against the new tag). Tracker #6 carries the release state.
+
+**Validation**
+
+- Local `task release-check` (check, docs-check, race, dependency-gate, platform-check, fuzz) green at `bf06a11` in a detached worktree before tagging; main push CI was already green at the same head.
+- Tag-ref hosted CI run [32101085058](https://github.com/the-sarge/turn/actions/runs/32101085058) completed successfully, including the tag-only Release check lane.
+- Module resolution confirmed: `go list -m github.com/the-sarge/turn/v5@v5.2.1-gs.1` resolves through the public proxy.
+
+**Next**
+
+- Wiremux adoption (GridSwarm/wiremux#1180) is the only remaining consumer step, on wiremux's schedule. Nothing is left to dispatch in this repository; Track 3 (M2 packet path) stays gated. Live view: [tracking issue #6](https://github.com/the-sarge/turn/issues/6).
