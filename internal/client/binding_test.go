@@ -31,7 +31,8 @@ func TestBindingManagerCapacity(t *testing.T) {
 		require.NotNil(t, bound)
 		assert.GreaterOrEqual(t, bound.number, minChannelNumber)
 		assert.LessOrEqual(t, bound.number, maxChannelNumber)
-		require.NotContains(t, bindingsByNumber, bound.number, "channel number reused for %v", peer)
+		_, reused := bindingsByNumber[bound.number]
+		require.False(t, reused, "channel number %#x reused for %v", bound.number, peer)
 		bindingsByNumber[bound.number] = bound
 
 		byAddr, found := bm.findByAddr(peer)
@@ -112,7 +113,8 @@ func TestBindingManagerConcurrentFinalSlot(t *testing.T) {
 	require.Len(t, bindings, maxChannelBindings)
 	seen := make(map[uint16]netip.AddrPort, maxChannelBindings)
 	for _, bound := range bindings {
-		require.NotContains(t, seen, bound.number, "channel number reused for %v", bound.addr)
+		_, reused := seen[bound.number]
+		require.False(t, reused, "channel number %#x reused for %v", bound.number, bound.addr)
 		seen[bound.number] = bound.addr
 
 		byAddr, found := bm.findByAddr(bound.addr)
