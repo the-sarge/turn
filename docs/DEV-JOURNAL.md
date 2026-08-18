@@ -351,3 +351,32 @@ PR [#51](https://github.com/the-sarge/turn/pull/51) landed Track 2 Slice 1 of th
 
 - Track 3 remains independently dispatchable: typed ChannelBind errors ([#46](https://github.com/the-sarge/turn/issues/46)) and bounded channel-number allocation ([#47](https://github.com/the-sarge/turn/issues/47)). Live program view: [tracking issue #48](https://github.com/the-sarge/turn/issues/48).
 - No review follow-up issue was required and no untraced contract effect remains from this slice.
+
+---
+
+## Track 3 Slice 1: typed ChannelBind errors - 2026-08-17 23:01 EDT
+
+**Main:** `2a55017c466f`
+**Actor:** Codex
+
+**Summary**
+
+PR [#53](https://github.com/the-sarge/turn/pull/53) landed Track 3 Slice 1 of the TURN-consistency plan as `2a55017`: every well-formed non-438 ChannelBind error response now preserves a typed `*stun.TurnError` through the existing error chain. Code 400 retains both ChannelBind sentinels and its established fresh-binding seal / previously-ready recovery policy; code 438 retains nonce update and retry behavior. Child issue [#46](https://github.com/the-sarge/turn/issues/46) is closed, and [#47](https://github.com/the-sarge/turn/issues/47) is the sole remaining program frontier.
+
+**Completed**
+
+- `handleChannelBindErrorResponse` remains the single classification owner: 438 exits through `errTryAgain`; every other well-formed error constructs one `*stun.TurnError`; 400 wraps it with `errCannotBindChannel` and `errChannelBindBadRequest`; malformed ERROR-CODE responses retain the unexpected-response class.
+- `handleBindChannelError` remains the lifecycle-disposition owner. Fresh and unknown 400 failures still seal the Allocation and expose the typed cause through terminal operations; previously-ready 400 still restores the saved channel binding and returns nil; representative non-400 rejection reaches `PreparePeer` as a typed error.
+- The finite response table now has two-sided typed/untyped assertions, the three-attempt 438 exhaustion case remains untyped, and existing request-shape checks continue to compare normalized ChannelBind bytes and setter order. The product PR also marked T3.S1 complete and advanced the committed program frontier to T3.S2.
+
+**Validation**
+
+- Red-first assertions demonstrated that 400, representative 403, and fresh/unknown terminal chains lacked `errors.As(*stun.TurnError)` before the production change; the narrow classifier update made them green while existing ready-400, malformed, 438, state, and request-byte cases remained green.
+- Focused ChannelBind/PreparePeer tests, `go test ./...`, `task verify`, and `task race` passed. Exact-head `task preflight` certified `cfcb430d86ba5c7065596d7d8f1e16adb5fe966b` against base `a5396dc460ae39c090eddef314ee00b39179aa4a`, including race, dependency/vulnerability, Darwin/Windows build, workflow-routing, docs, and secret gates.
+- Initial RAS review `20260818T022722-c68049f80055f298a810698f` produced one low `fix-now` verification-aid finding: the malformed response row lacked a negative typed-error assertion. Commit `cfcb430` added the two-sided table guard; verification `20260818T022722-c68049f80055f298a810698f-verification-1787020876700771000` resolved it at the exact head with focused/full tests and a disposable discriminating guard mutation. Replacement review `20260818T024150-9804b59991e2e4f2db9423b6` produced no fixes or follow-ups; its cosmetic duplicate-code-text observation was rejected as outside the accepted identity/lifecycle contract.
+- Hosted pull-request certification [32093454305](https://github.com/the-sarge/turn/actions/runs/32093454305) passed on the certified head, including core, race, docs, Go floor, secret scan, CodeQL, proto fuzz smoke, and `ci-required`; PR #53 was squash-merged while pinned to that head.
+
+**Next**
+
+- T3.S2 ([#47](https://github.com/the-sarge/turn/issues/47)) remains independently dispatchable with no blockers: bound channel-number allocation and contract the binding manager. Live program view: [tracking issue #48](https://github.com/the-sarge/turn/issues/48).
+- No review follow-up issue was required, and no untraced contract effect remains from T3.S1.
