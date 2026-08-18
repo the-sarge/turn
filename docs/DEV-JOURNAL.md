@@ -292,3 +292,32 @@ The three open Track 2 (M1) review follow-ups closed in one batch: PR #38 (squas
 
 - Program-external only: wiremux adoption of `v5.2.0-gs.1` (GridSwarm/wiremux#1180). Track 3 (M2) remains gated. Live program view: [tracking issue #6](https://github.com/the-sarge/turn/issues/6).
 - Dispositioned without a follow-up (revalidated at merged `ad9e83a`; hygiene of verification aids, not behavior): `harness.permGate` is written after the connection's timer goroutines start (`internal/client/prepare_test.go:365`, same pattern as the pre-existing `:249`) — a formal data race kept latent by the 120s default permission-refresh interval; and the Data-indication test's reader goroutine swallows the `ReadFrom` error (`turntest/turntest_test.go:247`), so an allocation-side read failure would misreport as the generic timeout.
+
+---
+
+## Track 1 Slice 1: transaction registry terminal ownership - 2026-08-17 21:10 EDT
+
+**Main:** `209bcb6e7a5a`
+**Actor:** Codex
+
+**Summary**
+
+PR [#49](https://github.com/the-sarge/turn/pull/49) landed Track 1 Slice 1 of the transaction-registry architecture plan as `209bcb6`: `internal/client.TransactionRegistry` is now the sole owner of live transaction membership, retry scheduling, terminal claims, result publication, abort, and retirement. Client and allocation code retain socket and policy ownership and interact with the registry only through behavior-shaped methods. Child issue [#44](https://github.com/the-sarge/turn/issues/44) is closed; the remaining independently ready frontier is [#45](https://github.com/the-sarge/turn/issues/45), [#46](https://github.com/the-sarge/turn/issues/46), and [#47](https://github.com/the-sarge/turn/issues/47).
+
+**Completed**
+
+- Replaced the exposed transaction map, raw insert/find/delete operations, caller-managed timers, and caller-owned result channels with a private registry injected with only a send capability.
+- Preserved the wire contract of one initial write plus six byte-identical retries, including ordering, backoff constants, retry cap, and caller address ownership; copied transaction bytes at registration so later caller mutation cannot alter retransmissions.
+- Centralized every terminal claimant under remove-first ownership: response, initial-send failure, retry failure, retry exhaustion, context cancellation, and nonterminal abort-current snapshots. Initial and retry writes remain outside the registry lock, with ownership rechecked before timer arming or result publication.
+- Added race-focused coverage for initial-send and retry interleavings, duplicate IDs, cancellation, abort snapshots, exact retry bytes and count, waited and fire-and-forget retirement, late responses, and root `Client.Close` behavior. The plan and program index record the completed slice and unchanged frontier.
+
+**Validation**
+
+- Red-first tests established each new registry behavior before implementation; focused tests, `go test ./...`, `go test -race ./...`, `task verify`, and the exact-head `task preflight` all passed. The preflight certified head `918abca228612d679651c6fcbd5da52dacc8031b` against base `0042dbe7adc42ac92b451073d2b41f68fa4c75f0`.
+- RAS review `20260818T004756-8e2f217ed321464e033611e7` produced zero Fix First and zero follow-up findings. Three observations were independently rejected as unsupported caller mutation, non-contractual error text, and a pre-existing retry comment; dispositions are recorded on PR #49.
+- Hosted pull-request certification [32086750083](https://github.com/the-sarge/turn/actions/runs/32086750083) passed on the reviewed head, including core, race, docs, Go floor, secret scan, CodeQL, proto fuzz smoke, and `ci-required`; PR #49 was squash-merged while pinned to that head.
+
+**Next**
+
+- Tracks 2 and 3 remain independently dispatchable: Allocation lifecycle ownership ([#45](https://github.com/the-sarge/turn/issues/45)), typed ChannelBind errors ([#46](https://github.com/the-sarge/turn/issues/46)), and bounded channel-number allocation ([#47](https://github.com/the-sarge/turn/issues/47)). Live program view: [tracking issue #48](https://github.com/the-sarge/turn/issues/48).
+- No review follow-up issue was required and no untraced contract effect remains from this slice.
