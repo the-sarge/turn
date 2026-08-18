@@ -1,6 +1,6 @@
 # TURN Architecture Deepening Program — 2026-08-17
 
-**Status:** Accepted; Tracks 1, 2, and T3.S1 implemented by PRs #49, #51, and #53; T3.S2 remains on the frontier
+**Status:** Accepted; all tracks implemented by PRs #49, #51, #53, and #55
 
 ## What this is
 
@@ -22,11 +22,11 @@ This program packages the post-M1 architecture review and delegated grilling of 
 |---|---|---|---|---|---|---|
 | 1 | Transaction registry deepening | [plan](2026-08-17-transaction-registry-plan.md) | #41 | None | 1 | COMPLETE via PR #49 |
 | 2 | Allocation lifecycle deepening | [plan](2026-08-17-allocation-lifecycle-plan.md) | #42 | None | 1 | COMPLETE via PR #51 |
-| 3 | TURN consistency and bounded state | [plan](2026-08-17-turn-consistency-plan.md) | #43 | None | 2 | T3.S1 COMPLETE via PR #53; T3.S2 FRONTIER |
+| 3 | TURN consistency and bounded state | [plan](2026-08-17-turn-consistency-plan.md) | #43 | None | 2 | COMPLETE via PRs #53 and #55 |
 
 There are no genuine slice-level blocking edges. Track 1's registry supplies the abort-current capability consumed by the completed T2.S1 without changing its Allocation-side contract. Likely text conflicts between independently implemented tracks require rebasing, not artificial blockers.
 
-Current frontier after PR #53: T3.S2. T1.S1, T2.S1, and T3.S1 are complete; T3.S2 remains independently dispatchable with no blockers.
+Current frontier after PR #55: none. T1.S1, T2.S1, T3.S1, and T3.S2 are complete.
 
 ## Rules that bind every track
 

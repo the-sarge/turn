@@ -1,12 +1,12 @@
 # TURN Consistency and Bounded-State Implementation Plan
 
 **Date:** 2026-08-17
-**Status:** Accepted; T3.S1 implemented by PR #53; T3.S2 remains on the frontier
+**Status:** Accepted; both slices implemented by PRs #53 and #55
 **Track:** 3 of 3 in the 2026-08-17 architecture deepening program
 **Depends on:** Nothing; both slices are independent of Tracks 1 and 2 and of each other
 **Related:** [Program index](2026-08-17-architecture-deepening-program.md), [Modernize the kept API plan](2026-08-15-modernize-kept-api-plan.md), [Prepared-only writes ADR](2026-08-15-prepared-only-writes.md)
 **Normative scope:** Current outcome, boundaries, invariants, acceptance evidence, blockers, and stop conditions
-**Audit history:** Independently audited against `e251b6b` on 2026-08-17; both slices passed after typed-error recovery/exhaustion and concurrent final-channel capacity contracts were closed; T3.S1 implemented by PR #53
+**Audit history:** Independently audited against `e251b6b` on 2026-08-17; both slices passed after typed-error recovery/exhaustion and concurrent final-channel capacity contracts were closed; implemented by PRs #53 and #55
 
 ## Goal
 
@@ -41,7 +41,7 @@ Delete `binding.mgr` and the dead test-only `create`, delete, and size methods i
 | Slice | Status/disposition | Delivers | Blocked by | Removes temporary seam |
 |---|---|---|---|---|
 | T3.S1 | Complete via PR #53 | ChannelBind preserves typed TURN errors while existing 438/400 policy stays local | None | n/a |
-| T3.S2 | New | Channel-number allocation is bounded and binding manager mutation surface contracts | None | Removes dead binding manager test-only mutation methods in this slice |
+| T3.S2 | Complete via PR #55 | Channel-number allocation is bounded and binding manager mutation surface contracts | None | Removes dead binding manager test-only mutation methods in this slice |
 
 T3.S1 and T3.S2 are parallel-safe in behavior and have no genuine blocking edge. They touch nearby `udp_conn.go` regions, so the second branch may need an ordinary rebase after the first merges; a likely text conflict is not an architectural dependency.
 
@@ -85,6 +85,8 @@ T3.S1 and T3.S2 are parallel-safe in behavior and have no genuine blocking edge.
 
 **What it delivers:** One PR correcting the range count to 16,384; changing new-binding allocation to return explicit exhaustion instead of wrapping/overwriting; propagating exhaustion after a successful permission phase from `PreparePeer` as `ErrChannelBindFailed` without starting ChannelBind; preserving existing-peer lookup even at capacity; deleting unread `binding.mgr` and test-only `create`, `deleteByAddr`, `deleteByNumber`, and `size`; and re-anchoring their useful assertions on live get-or-create, bidirectional lookup, `all`, PreparePeer, and prepared-only WriteTo behavior.
 
+**Implementation:** PR #55 is the slice's one intended product PR.
+
 **Existing-work disposition:** New slice.
 
 **Blocked by:** None.
@@ -118,10 +120,10 @@ T3.S1 and T3.S2 are parallel-safe in behavior and have no genuine blocking edge.
 - [x] The classifier-created error for every well-formed non-438 ChannelBind response carries a typed `*stun.TurnError`; fresh/unknown failures expose it, while previously-ready 400 recovery intentionally consumes it and returns nil. The finite supported response/code/state domain, owners, universal guarantee, and evidence are declared in T3.S1.
 - [x] ChannelBind 400 retains existing ready-binding recovery and fresh-binding Allocation seal behavior, and 438 retains nonce retry behavior.
 - [x] ChannelBind request setters, bytes, and retry counts remain unchanged.
-- [ ] Every live binding in one Allocation has a unique channel number in `[0x4000,0x7fff]`, and both maps remain a bijection; the finite supported peer/range domain, owner, universal/canonical-subset guarantee, and evidence are declared in T3.S2.
-- [ ] An existing peer remains resolvable at capacity; after successful permission, the next distinct peer fails with `ErrChannelBindFailed`, does not overwrite state, and starts no ChannelBind request; permission rejection/cancellation/closure retain their earlier outcomes.
-- [ ] `binding.mgr` and test-only create/delete/size mutation paths are absent; tests retain live behavior coverage through production-shaped seams.
-- [ ] Prepared-only ChannelData, permission-per-IP identity, binding-per-transport-address identity, public API, and caller-owned socket rules remain unchanged.
+- [x] Every live binding in one Allocation has a unique channel number in `[0x4000,0x7fff]`, and both maps remain a bijection; the finite supported peer/range domain, owner, universal/canonical-subset guarantee, and evidence are declared in T3.S2.
+- [x] An existing peer remains resolvable at capacity; after successful permission, the next distinct peer fails with `ErrChannelBindFailed`, does not overwrite state, and starts no ChannelBind request; permission rejection/cancellation/closure retain their earlier outcomes.
+- [x] `binding.mgr` and test-only create/delete/size mutation paths are absent; tests retain live behavior coverage through production-shaped seams.
+- [x] Prepared-only ChannelData, permission-per-IP identity, binding-per-transport-address identity, public API, and caller-owned socket rules remain unchanged.
 
 ## Validation Gates
 

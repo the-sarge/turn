@@ -13,10 +13,11 @@ import (
 // Channel number:
 //
 //	0x4000 through 0x7FFF: These values are the allowed channel
-//	numbers (16,383 possible values).
+//	numbers (16,384 possible values).
 const (
-	minChannelNumber uint16 = 0x4000
-	maxChannelNumber uint16 = 0x7fff
+	minChannelNumber   uint16 = 0x4000
+	maxChannelNumber   uint16 = 0x7fff
+	maxChannelBindings        = int(maxChannelNumber-minChannelNumber) + 1
 )
 
 type bindingState int32
@@ -32,17 +33,16 @@ const (
 )
 
 type binding struct {
-	number       uint16          // Read-only
-	st           bindingState    // Thread-safe (atomic op)
-	addr         netip.AddrPort  // Read-only
-	mgr          *bindingManager // Read-only
-	muBind       sync.Mutex      // Thread-safe, for ChannelBind ops
-	attemptDone  chan struct{}   // Protected by muBind; non-nil while a bind attempt is in flight
-	prepared     atomic.Bool     // Thread-safe; peer promised ChannelData-only writes
-	_refreshedAt time.Time       // Protected by mutex
-	_bindErr     error           // Protected by mutex; last failed bind attempt or terminal cause
-	_terminal    bool            // Protected by mutex; binding failed permanently
-	mutex        sync.RWMutex    // Thread-safe
+	number       uint16         // Read-only
+	st           bindingState   // Thread-safe (atomic op)
+	addr         netip.AddrPort // Read-only
+	muBind       sync.Mutex     // Thread-safe, for ChannelBind ops
+	attemptDone  chan struct{}  // Protected by muBind; non-nil while a bind attempt is in flight
+	prepared     atomic.Bool    // Thread-safe; peer promised ChannelData-only writes
+	_refreshedAt time.Time      // Protected by mutex
+	_bindErr     error          // Protected by mutex; last failed bind attempt or terminal cause
+	_terminal    bool           // Protected by mutex; binding failed permanently
+	mutex        sync.RWMutex   // Thread-safe
 }
 
 func (b *binding) setState(state bindingState) {
@@ -136,31 +136,30 @@ func (mgr *bindingManager) assignChannelNumber() uint16 {
 	return n
 }
 
-func (mgr *bindingManager) create(addr netip.AddrPort) *binding {
-	return mgr.getOrCreate(addr)
-}
-
-// getOrCreate returns the existing binding for addr, or creates one, so that
-// concurrent callers for the same peer share a single channel number.
-func (mgr *bindingManager) getOrCreate(addr netip.AddrPort) *binding {
+// getOrCreate returns the existing binding for addr, or creates one while a
+// channel number remains available. Concurrent callers for the same peer share
+// a single channel number. A false result leaves both maps unchanged.
+func (mgr *bindingManager) getOrCreate(addr netip.AddrPort) (*binding, bool) {
 	mgr.mutex.Lock()
 	defer mgr.mutex.Unlock()
 
 	if b, ok := mgr.addrMap[addr]; ok {
-		return b
+		return b, true
+	}
+	if len(mgr.addrMap) >= maxChannelBindings {
+		return nil, false
 	}
 
 	b := &binding{
 		number:       mgr.assignChannelNumber(),
 		addr:         addr,
-		mgr:          mgr,
 		_refreshedAt: time.Now(),
 	}
 
 	mgr.chanMap[b.number] = b
 	mgr.addrMap[b.addr] = b
 
-	return b
+	return b, true
 }
 
 func (mgr *bindingManager) findByAddr(addr netip.AddrPort) (*binding, bool) {
@@ -179,43 +178,6 @@ func (mgr *bindingManager) findByNumber(number uint16) (*binding, bool) {
 	b, ok := mgr.chanMap[number]
 
 	return b, ok
-}
-
-func (mgr *bindingManager) deleteByAddr(addr netip.AddrPort) bool {
-	mgr.mutex.Lock()
-	defer mgr.mutex.Unlock()
-
-	b, ok := mgr.addrMap[addr]
-	if !ok {
-		return false
-	}
-
-	delete(mgr.addrMap, addr)
-	delete(mgr.chanMap, b.number)
-
-	return true
-}
-
-func (mgr *bindingManager) deleteByNumber(number uint16) bool {
-	mgr.mutex.Lock()
-	defer mgr.mutex.Unlock()
-
-	b, ok := mgr.chanMap[number]
-	if !ok {
-		return false
-	}
-
-	delete(mgr.addrMap, b.addr)
-	delete(mgr.chanMap, number)
-
-	return true
-}
-
-func (mgr *bindingManager) size() int {
-	mgr.mutex.RLock()
-	defer mgr.mutex.RUnlock()
-
-	return len(mgr.chanMap)
 }
 
 func (mgr *bindingManager) all() []*binding {

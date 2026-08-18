@@ -205,7 +205,19 @@ func (c *UDPConn) PreparePeer(ctx context.Context, peer netip.AddrPort) error {
 		return err
 	}
 
-	return c.awaitBinding(ctx, c.bindingMgr.getOrCreate(peer))
+	bound, ok := c.bindingMgr.getOrCreate(peer)
+	if !ok {
+		if err := ctx.Err(); err != nil {
+			return context.Cause(ctx)
+		}
+		if c.isClosed() {
+			return c.closedErr()
+		}
+
+		return ErrChannelBindFailed
+	}
+
+	return c.awaitBinding(ctx, bound)
 }
 
 // awaitPermission blocks until a permission for peer is installed, the shared
