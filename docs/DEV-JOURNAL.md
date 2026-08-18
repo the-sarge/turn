@@ -380,3 +380,32 @@ PR [#53](https://github.com/the-sarge/turn/pull/53) landed Track 3 Slice 1 of th
 
 - T3.S2 ([#47](https://github.com/the-sarge/turn/issues/47)) remains independently dispatchable with no blockers: bound channel-number allocation and contract the binding manager. Live program view: [tracking issue #48](https://github.com/the-sarge/turn/issues/48).
 - No review follow-up issue was required, and no untraced contract effect remains from T3.S1.
+
+---
+
+## Bounded channel allocation landed - 2026-08-18 00:07 EDT
+
+**Main:** `0c55b10d85f2`
+**Actor:** Codex
+
+**Summary**
+
+PR [#55](https://github.com/the-sarge/turn/pull/55) landed Track 3 Slice 2 of the TURN-consistency plan as `0c55b10`: one Allocation now assigns every channel number in the complete 16,384-value TURN range at most once, preserves existing peers at capacity, and fails a later distinct peer with `ErrChannelBindFailed` after permission succeeds without overwriting either map or starting ChannelBind. Child issue [#47](https://github.com/the-sarge/turn/issues/47) is closed, and the committed architecture-deepening program frontier is empty.
+
+**Completed**
+
+- `bindingManager` is the single capacity and address↔number bijection owner. Its locked get-or-create path returns existing peers first, rejects new peers at 16,384 entries, and leaves both maps unchanged on exhaustion.
+- `PreparePeer` preserves permission-before-binding order, maps manager exhaustion to the existing public `ErrChannelBindFailed`, and rechecks caller cancellation and Allocation closure that become terminal while capacity ownership is contended.
+- Removed the unread `binding.mgr` back-pointer and dead test-only `create`, `deleteByAddr`, `deleteByNumber`, and `size` paths; tests now use live get-or-create, bidirectional lookup, iteration, PreparePeer, prepared-only WriteTo, and inbound behavior.
+- Added arithmetic/full-range uniqueness and bijection coverage, existing-peer-at-capacity and 16,385th-peer integrity cases, a two-caller final-slot race, production-path no-ChannelBind evidence, and deterministic post-permission cancellation/closure regressions. The product PR also marked T3.S2 and the full architecture-deepening program complete.
+
+**Validation**
+
+- Red-first capacity coverage exposed the old overwrite behavior; deleting the central capacity guard later made the 16,385th-peer regression fail, and restoring it returned the suite to green. Focused tests, full ordinary and race suites, and `task check` passed.
+- Initial RAS review `20260818T031953-99a16cf38c93fe5931d3da07` found one `fix-now` cancellation/closure-precedence defect. Commit `8bc0020` fixed it; verification `20260818T031953-99a16cf38c93fe5931d3da07-verification-1787024444480741000` resolved it on the exact head with a clear blocking projection. Replacement review `20260818T034116-16f6c874c18233ac72fc074e` found no contract-relevant behavioral failure or review follow-up.
+- Exact-head `task preflight` certified `8bc002027de7edf26e821c9ec168ee916cacfa64` against base `050dad8080a827a17b43d5cbd5355ae370cd5dbc`, including core/docs/race, dependency and vulnerability checks, Darwin/Windows builds, workflow/routing contracts, and secret scan.
+- Hosted pull-request certification [32097298052](https://github.com/the-sarge/turn/actions/runs/32097298052) passed on the certified head, including core/race, docs, Go floor, secret scan, CodeQL, proto fuzz smoke, and `ci-required`; PR #55 was squash-merged while pinned to that head.
+
+**Next**
+
+- The architecture-deepening implementation frontier is empty. The live program view is [tracking issue #48](https://github.com/the-sarge/turn/issues/48); post-merge closure will reconcile its parent/mirror state and revalidate the one deferred verification-aid performance observation against `0c55b10`.
