@@ -413,10 +413,12 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 					assert.ErrorContains(t, err, tt.expectErrContains)
 				}
 				assert.Equal(t, tt.expectBadRequest, errors.Is(err, errChannelBindBadRequest))
+				var turnErr *stun.TurnError
 				if tt.expectTurnErrorCode != 0 {
-					var turnErr *stun.TurnError
 					require.ErrorAs(t, err, &turnErr)
 					assert.Equal(t, tt.expectTurnErrorCode, turnErr.ErrorCodeAttr.Code)
+				} else {
+					assert.False(t, errors.As(err, &turnErr), "response class must remain untyped")
 				}
 
 				if tt.expectBindingDeleted {
