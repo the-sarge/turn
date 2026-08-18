@@ -434,3 +434,30 @@ Annotated tag `v5.2.1-gs.1` published at `bf06a11` and resolving via `go get`. I
 **Next**
 
 - Wiremux adoption (GridSwarm/wiremux#1180) is the only remaining consumer step, on wiremux's schedule. Nothing is left to dispatch in this repository; Track 3 (M2 packet path) stays gated. Live view: [tracking issue #6](https://github.com/the-sarge/turn/issues/6).
+
+---
+
+## Linear channel-capacity checks landed - 2026-08-18 16:58 EDT
+
+**Main:** `ce688e41b38c`
+**Actor:** Claude (planit)
+
+**Summary**
+
+PR [#59](https://github.com/the-sarge/turn/pull/59) landed as `ce688e4` and closed [#57](https://github.com/the-sarge/turn/issues/57), the deferred verification-aid observation from the PR #55 review. The two full-range channel-capacity tests in `internal/client/binding_test.go` now detect channel-number reuse with a direct map lookup instead of testify's reflective `require.NotContains` map scan, which was quadratic across the 16,384-entry channel range. No product code, allocation policy, public API, or evidence domain changed.
+
+**Completed**
+
+- Replaced the per-insert `require.NotContains(t, <map>, <uint16>)` checks in `TestBindingManagerCapacity` and `TestBindingManagerConcurrentFinalSlot` with `_, reused := m[n]; require.False(t, reused, …)`, keeping the same failure locality and adding the reused channel number to the message. Every other assertion (range bounds, forward/reverse lookups, one-success/one-exhaustion counts, final `Len` bijection, 16,385th-peer exhaustion branch) is unchanged.
+- Local timing for the two tests: ordinary 14.3 s → 0.26 s; `-race` 92.0 s → 1.5 s. The `internal/client` race package dropped from about 91 s to 3.8 s in preflight, and the hosted core job from 5m25s (PR #55) to 2m18s.
+
+**Validation**
+
+- Guard mutations, both reverted before commit: deleting the central `len(mgr.addrMap) >= maxChannelBindings` guard in `getOrCreate` failed the `TestBindingManagerCapacity` exhaustion branch and all three `TestPreparePeer/capacity exhaustion…` subtests; wrapping `assignChannelNumber` one slot early failed `binding_test.go:35` with `channel number 0x4000 reused for 192.0.2.1:16384` and the concurrent test at its `require.Len` bijection check.
+- RAS review `20260818T204425-88bee19a74bb6dcb3f953764` at `e836827`: no Fix First, no Follow Up; one Do Not Act On cluster (C-001, the concurrent test's reuse check is redundant under `chanMap`'s number keying) independently dispositioned `reject` as pre-existing and equivalent to the replaced assertion. No replacement review was needed.
+- Exact-head `task preflight` certified `e8368274c7c34db188cc9a2056674d3a65b09282` against base `002369092731a2888dea625970323e33c568c967` (core, docs, race, dependency gate, Darwin/Windows builds, workflow/routing contracts, secret scan).
+- Hosted pull-request certification [32184654364](https://github.com/the-sarge/turn/actions/runs/32184654364) passed on the certified head, including core, docs, Go floor, secret scan, CodeQL, proto fuzz smoke, and `ci-required`; PR #59 was squash-merged while pinned to that head.
+
+**Next**
+
+- No follow-up issue was required. The architecture-deepening program frontier stays empty; wiremux adoption of `v5.2.1-gs.1` (GridSwarm/wiremux#1180) remains the only consumer step. Live view: [tracking issue #6](https://github.com/the-sarge/turn/issues/6).
