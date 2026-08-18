@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"sync"
 	"time"
 
 	"github.com/pion/stun/v3"
@@ -33,69 +32,34 @@ type AllocationConfig struct {
 	PermissionRefreshInterval time.Duration
 	BindingRefreshInterval    time.Duration
 	BindingCheckInterval      time.Duration
-
-	// AbortTransactions, when set, interrupts the allocation's pending
-	// transaction waits. Called once by UDPConn when it starts closing, so
-	// Close does not wait out the retransmission budget of in-flight
-	// transactions against an unresponsive server.
-	AbortTransactions func()
-}
-
-type allocation struct {
-	clientHooks                             // Read-only
-	relayedAddr       net.Addr              // Read-only
-	serverAddr        net.Addr              // Read-only
-	permMap           *permissionMap        // Thread-safe
-	integrity         stun.MessageIntegrity // Read-only
-	username          stun.Username         // Read-only
-	realm             stun.Realm            // Read-only
-	_nonce            stun.Nonce            // Needs mutex x
-	_lifetime         time.Duration         // Needs mutex x
-	refreshAllocTimer *PeriodicTimer        // Thread-safe
-	refreshPermsTimer *PeriodicTimer        // Thread-safe
-	mutex             sync.RWMutex          // Thread-safe
-
-	// onPermRefreshFailure, when set, observes a permission refresh that kept
-	// failing after retries. Read-only after construction.
-	onPermRefreshFailure func(error)
-
-	// onAllocRefreshFailure, when set, observes a permanent allocation-refresh
-	// failure: one exhausted refresh transaction, one well-formed non-438
-	// error response, or stale-nonce retry exhaustion. Read-only after
-	// construction.
-	onAllocRefreshFailure func(error)
-
-	// abortTransactions, when set, interrupts the allocation's pending
-	// transaction waits. Read-only after construction.
-	abortTransactions func()
 }
 
 // setNonceFromMsg updates the nonce from a 438 response carrying one. A 438
 // without a NONCE leaves the stale nonce standing, so the retry loop exhausts
 // and the failure reaches the caller's disposition as a value.
-func (a *allocation) setNonceFromMsg(msg *stun.Message) {
+func (c *UDPConn) setNonceFromMsg(msg *stun.Message) {
 	var nonce stun.Nonce
 	if err := nonce.GetFrom(msg); err == nil {
-		a.setNonce(nonce)
+		c.setNonce(nonce)
 	}
 }
 
-func (a *allocation) refreshAllocation(lifetime time.Duration, dontWait bool) error {
+func (c *UDPConn) refreshAllocation(lifetime time.Duration, dontWait bool) error {
 	msg, err := stun.Build(
 		stun.TransactionID,
 		stun.NewType(stun.MethodRefresh, stun.ClassRequest),
 		proto.Lifetime{Duration: lifetime},
-		a.username,
-		a.realm,
-		a.nonce(),
-		a.integrity,
+		c.username,
+		c.realm,
+		c.nonce(),
+		c.integrity,
 		stun.Fingerprint,
 	)
 	if err != nil {
 		return fmt.Errorf("%w: %w", errFailedToBuildRefreshRequest, err)
 	}
 
-	trRes, err := a.performTransaction(msg, a.serverAddr, dontWait)
+	trRes, err := c.performTransaction(msg, c.serverAddr, dontWait)
 	if err != nil {
 		return fmt.Errorf("%w: %w", errFailedToRefreshAllocation, err)
 	}
@@ -109,7 +73,7 @@ func (a *allocation) refreshAllocation(lifetime time.Duration, dontWait bool) er
 		var code stun.ErrorCodeAttribute
 		if err = code.GetFrom(res); err == nil {
 			if code.Code == stun.CodeStaleNonce {
-				a.setNonceFromMsg(res)
+				c.setNonceFromMsg(res)
 
 				return errTryAgain
 			}
@@ -131,87 +95,90 @@ func (a *allocation) refreshAllocation(lifetime time.Duration, dontWait bool) er
 		return fmt.Errorf("%w: %w", errFailedToGetLifetime, err)
 	}
 
-	a.setLifetime(updatedLifetime.Duration)
+	c.setLifetime(updatedLifetime.Duration)
 
 	return nil
 }
 
-func (a *allocation) refreshPermissions() error {
-	addrs := a.permMap.addrs()
+func (c *UDPConn) refreshPermissions() error {
+	addrs := c.permMap.addrs()
 	if len(addrs) == 0 {
 		return nil
 	}
-	if err := a.CreatePermissions(addrs...); err != nil {
+	if err := c.CreatePermissions(addrs...); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func (a *allocation) onRefreshTimers(id int) {
+func (c *UDPConn) onRefreshTimers(id int) {
 	switch id {
 	case timerIDRefreshAlloc:
-		a.refreshAllocationWithRetries()
+		c.refreshAllocationWithRetries()
 	case timerIDRefreshPerms:
-		a.refreshPermissionsWithRetries()
+		c.refreshPermissionsWithRetries()
 	}
 }
 
-func (a *allocation) refreshAllocationWithRetries() {
+func (c *UDPConn) refreshAllocationWithRetries() {
 	var err error
-	lifetime := a.lifetime()
+	lifetime := c.lifetime()
 	// Limit the max retries on errTryAgain to 3
 	// when stale nonce returns, sencond retry should succeed
 	for range maxRetryAttempts {
-		err = a.refreshAllocation(lifetime, false)
+		err = c.refreshAllocation(lifetime, false)
 		if !errors.Is(err, errTryAgain) {
 			break
 		}
 	}
-	if err != nil && a.onAllocRefreshFailure != nil {
+	if err != nil {
 		// The periodic schedule at lifetime/2 offers no effective retry
-		// before server expiry: a standing failure is permanent.
-		a.onAllocRefreshFailure(err)
+		// before server expiry: a standing failure is permanent. This worker
+		// seals directly but never joins itself; caller Close remains the join.
+		c.startClose(fmt.Errorf("%w: %w", ErrAllocationRefreshFailed, err))
 	}
 }
 
-func (a *allocation) refreshPermissionsWithRetries() {
+func (c *UDPConn) refreshPermissionsWithRetries() {
 	var err error
 	for range maxRetryAttempts {
-		err = a.refreshPermissions()
+		err = c.refreshPermissions()
 		if !errors.Is(err, errTryAgain) {
 			break
 		}
 	}
-	if err != nil && a.onPermRefreshFailure != nil {
-		a.onPermRefreshFailure(err)
+	if err != nil {
+		// Permission failure terminalizes prepared bindings without sealing the
+		// Allocation; there is no upward lifecycle callback or fallback emitter.
+		c.failPreparedBindings(err)
 	}
 }
 
-func (a *allocation) nonce() stun.Nonce {
-	a.mutex.RLock()
-	defer a.mutex.RUnlock()
+func (c *UDPConn) nonce() stun.Nonce {
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
 
-	return a._nonce
+	return c._nonce
 }
 
-func (a *allocation) setNonce(nonce stun.Nonce) {
-	a.mutex.Lock()
-	defer a.mutex.Unlock()
+func (c *UDPConn) setNonce(nonce stun.Nonce) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
 
-	a._nonce = nonce
+	c._nonce = nonce
 }
 
-func (a *allocation) lifetime() time.Duration {
-	a.mutex.RLock()
-	defer a.mutex.RUnlock()
+func (c *UDPConn) lifetime() time.Duration {
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
 
-	return a._lifetime
+	return c._lifetime
 }
 
-func (a *allocation) setLifetime(lifetime time.Duration) {
-	a.mutex.Lock()
-	defer a.mutex.Unlock()
+func (c *UDPConn) setLifetime(lifetime time.Duration) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
 
-	a._lifetime = lifetime
+	c._lifetime = lifetime
 }

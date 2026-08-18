@@ -37,13 +37,11 @@ func (c *mockClient) OnDeallocated(relayedAddr net.Addr) {
 	}
 }
 
-// hooks returns the mock's operations as the allocation's client hooks. The
+// configure installs the mock's package-crossing operations on conn. The
 // method values dispatch through the mock's fields at call time, so a test
 // may rescript the mock after the allocation is built.
-func (c *mockClient) hooks() clientHooks {
-	return clientHooks{
-		writeTo:            c.WriteTo,
-		performTransaction: c.PerformTransaction,
-		onDeallocated:      c.OnDeallocated,
-	}
+func (c *mockClient) configure(conn *UDPConn) {
+	conn.writeTo = c.WriteTo
+	conn.performTransaction = c.PerformTransaction
+	conn.onDeallocated = c.OnDeallocated
 }

@@ -1,12 +1,12 @@
 # Allocation Lifecycle Ownership Implementation Plan
 
 **Date:** 2026-08-17
-**Status:** Accepted; not implemented
+**Status:** Implemented by PR #51
 **Track:** 2 of 3 in the 2026-08-17 architecture deepening program
 **Depends on:** Nothing — safe to start independently
 **Related:** [Program index](2026-08-17-architecture-deepening-program.md), [Transaction registry plan](2026-08-17-transaction-registry-plan.md), [Modernize the kept API plan](2026-08-15-modernize-kept-api-plan.md), [Prepared-only writes ADR](2026-08-15-prepared-only-writes.md), [RFC 8656](https://www.rfc-editor.org/rfc/rfc8656.html)
 **Normative scope:** Current outcome, boundaries, invariants, acceptance evidence, blockers, and stop conditions
-**Audit history:** Independently audited against `e251b6b` on 2026-08-17; T2.S1 passed after its abort-capability and finite lifecycle contracts were closed; the proposed adaptive-refresh successor was closed without code because it is unreachable in the conforming exact-wire domain; no implementation or overlapping open issue/PR exists
+**Audit history:** Independently audited against `e251b6b` on 2026-08-17; T2.S1 passed after its abort-capability and finite lifecycle contracts were closed; the proposed adaptive-refresh successor was closed without code because it is unreachable in the conforming exact-wire domain; implementation completed by PR #51
 
 ## Goal
 
@@ -44,13 +44,15 @@ Keep Allocation, permission, and binding timer cadence unchanged. Ordinary Refre
 
 | Slice | Status/disposition | Delivers | Blocked by | Removes temporary seam |
 |---|---|---|---|---|
-| T2.S1 | New | `UDPConn` becomes the sole Allocation lifecycle implementation; callbacks and embedded half delete | None | Removes the embedded `allocation`/`clientHooks` seam in this slice |
+| T2.S1 | Complete via PR #51 | `UDPConn` becomes the sole Allocation lifecycle implementation; callbacks and embedded half delete | None | Removed the embedded `allocation`/`clientHooks` seam in this slice |
 
 ## Implementation Slices
 
 ### Slice T2.S1 — Consolidate Allocation lifecycle ownership in `UDPConn`
 
 **What it delivers:** One behavior-preserving PR moving nonce, lifetime, permission-refresh, Allocation-refresh, and root adapter fields/methods from embedded `allocation` onto `UDPConn`; deleting `allocation` and `clientHooks`; replacing upward failure callbacks with direct `UDPConn` calls; making the abort-current capability mandatory in production assembly without substituting a no-op; retiring the internal no-abort construction path; and preserving fixed timer cadence, `startClose`/`Close`, public root `Allocation`, and all supported outcomes.
+
+**Implementation:** PR #51 is the slice's one intended product PR; unmentioned stale branches were not used as an implementation baseline.
 
 **Existing-work disposition:** New slice. There is no open issue or PR for this work.
 
@@ -72,19 +74,19 @@ Keep Allocation, permission, and binding timer cadence unchanged. Ordinary Refre
 
 | Semantic class | Expected disposition | Enforcement owner | Terminating evidence | Status |
 |---|---|---|---|---|
-| Missing abort-current adapter in internal/test construction | Programmer-invalid construction is rejected before timer/worker start; constructor supplies no default/no-op; production assembly cannot omit it after Allocate | Root assembly representation + `NewUDPConn` defensive guard | Focused invalid-construction test and production assembly audit; replace no-abort harness case | Planned |
-| Ordinary Refresh success or one/more 438 then success | Nonce/lifetime update and current fixed cadence preserved | `UDPConn` Refresh methods | Existing Refresh/nonce tests adapted | Planned |
-| Caller closes healthy Allocation | Seal once, abort, emit lifetime zero, join, return emission result | `startCloseLocked` + `Close` | Existing close tests | Planned |
-| Allocation Refresh permanently fails | Worker-safe self-seal; operations wake; caller later joins and observes cause | `startClose` | Existing refresh-failure table | Planned |
-| Permission Refresh permanently fails | Prepared bindings terminalize; Allocation remains live; no fallback write | `failPreparedBindings` | `prepare_test.go` permission-refresh case | Planned |
-| Permission Refresh succeeds | Permission refreshed time advances; prepared bindings and Allocation remain usable | `UDPConn` permission-refresh path | Existing success case adapted through consolidated receiver | Planned |
-| Fresh ChannelBind receives 400 | Worker-safe self-seal with ChannelBind cause | `startClose` | Existing fresh-binding 400 test | Planned |
-| Previously-ready ChannelBind refresh receives 400 | Saved binding remains usable; Allocation does not seal | `recoverChannelBindBadRequest` | `udp_conn_test.go` ready-binding cases | Planned |
-| Self-seal races caller close | Exactly one seal/release; caller result follows winning state | `closeMutex` + seal guard | Existing seal-vs-close race | Planned |
-| Concurrent caller closes | One observes release result; duplicates return `net.ErrClosed` | `closeMutex` + `callerClosed` | Existing concurrent-close test | Planned |
-| Release emission fails during self-seal | Failure joins terminal cause; caller join observes both | `startCloseLocked` | Existing emission-failure test | Planned |
-| In-flight shared transaction during seal | Abort wakes worker before join; release starts after abort | `startCloseLocked` ordering + adapter | Prompt-close/abort-order tests | Planned |
-| Invalid relayed address after server success | Construct and close, emit release, clear Client pointer, then reject | root `Client.Allocate` + `UDPConn.Close` | Existing invalid-relayed test | Planned |
+| Missing abort-current adapter in internal/test construction | Programmer-invalid construction is rejected before timer/worker start; constructor supplies no default/no-op; production assembly cannot omit it after Allocate | Root assembly representation + `NewUDPConn` defensive guard | Focused invalid-construction test and production assembly audit; replace no-abort harness case | Covered |
+| Ordinary Refresh success or one/more 438 then success | Nonce/lifetime update and current fixed cadence preserved | `UDPConn` Refresh methods | Existing Refresh/nonce tests adapted | Covered |
+| Caller closes healthy Allocation | Seal once, abort, emit lifetime zero, join, return emission result | `startCloseLocked` + `Close` | Existing close tests | Covered |
+| Allocation Refresh permanently fails | Worker-safe self-seal; operations wake; caller later joins and observes cause | `startClose` | Existing refresh-failure table | Covered |
+| Permission Refresh permanently fails | Prepared bindings terminalize; Allocation remains live; no fallback write | `failPreparedBindings` | `prepare_test.go` permission-refresh case | Covered |
+| Permission Refresh succeeds | Permission refreshed time advances; prepared bindings and Allocation remain usable | `UDPConn` permission-refresh path | Existing success case adapted through consolidated receiver | Covered |
+| Fresh ChannelBind receives 400 | Worker-safe self-seal with ChannelBind cause | `startClose` | Existing fresh-binding 400 test | Covered |
+| Previously-ready ChannelBind refresh receives 400 | Saved binding remains usable; Allocation does not seal | `recoverChannelBindBadRequest` | `udp_conn_test.go` ready-binding cases | Covered |
+| Self-seal races caller close | Exactly one seal/release; caller result follows winning state | `closeMutex` + seal guard | Existing seal-vs-close race | Covered |
+| Concurrent caller closes | One observes release result; duplicates return `net.ErrClosed` | `closeMutex` + `callerClosed` | Existing concurrent-close test | Covered |
+| Release emission fails during self-seal | Failure joins terminal cause; caller join observes both | `startCloseLocked` | Existing emission-failure test | Covered |
+| In-flight shared transaction during seal | Abort wakes worker before join; release starts after abort | `startCloseLocked` ordering + adapter | Prompt-close/abort-order tests | Covered |
+| Invalid relayed address after server success | Construct and close, emit release, clear Client pointer, then reject | root `Client.Allocate` + `UDPConn.Close` | Existing invalid-relayed test | Covered |
 
 **Evidence budget:** One missing-adapter programmer-error case plus static production assembly audit proving the adapter exists before Allocate; replacement of the internal no-abort close-latency case with a real-adapter abort-order case; existing prompt-close and waiter-local-cancellation cases; ordinary Refresh/438 success; refresh-failure table; permission-refresh success and failure; fresh and ready-binding 400; concurrent caller close; seal-vs-close race; self-seal emission failure; invalid-relayed release; full race suite. At most one mutation: bypass the one-seal guard and observe the exact-one release race fail. No timing repetitions, fuzz, or platform matrix beyond repository preflight. Termination = table cases, preflight, same-head hosted CI, one review, at most one replacement, and no `stop-for-decision` finding.
 
@@ -98,12 +100,12 @@ Keep Allocation, permission, and binding timer cadence unchanged. Ordinary Refre
 
 ## Acceptance Criteria
 
-- [ ] `UDPConn` is the sole mutation owner for Allocation nonce, granted lifetime, maintenance disposition, terminal cause, seal, release, and join; the supported lifecycle domain, owner, universal guarantee, and finite evidence are declared above.
-- [ ] Embedded `allocation`, `clientHooks`, and upward allocation/permission failure callbacks are absent.
-- [ ] Production assembly structurally supplies abort-current before Allocate, the constructor never substitutes a no-op, programmer-invalid omission is rejected before timer/worker start, real-adapter tests prove effective abort, and seal invokes abort before deallocation notification and lifetime-zero release.
-- [ ] Exactly one seal emits exactly one lifetime-zero Refresh, workers never self-join, caller `Close` remains the join point, and terminal result precedence is unchanged.
-- [ ] Permission-refresh success/failure, fresh/ready ChannelBind-400 disposition, ordinary Refresh/438 behavior, invalid-relayed cleanup, and fixed timer cadence match the finite preservation table.
-- [ ] Public API, caller-owned socket behavior, prepared-only writes, and normalized TURN request attributes/order remain unchanged.
+- [x] `UDPConn` is the sole mutation owner for Allocation nonce, granted lifetime, maintenance disposition, terminal cause, seal, release, and join; the supported lifecycle domain, owner, universal guarantee, and finite evidence are declared above.
+- [x] Embedded `allocation`, `clientHooks`, and upward allocation/permission failure callbacks are absent.
+- [x] Production assembly structurally supplies abort-current before Allocate, the constructor never substitutes a no-op, programmer-invalid omission is rejected before timer/worker start, real-adapter tests prove effective abort, and seal invokes abort before deallocation notification and lifetime-zero release.
+- [x] Exactly one seal emits exactly one lifetime-zero Refresh, workers never self-join, caller `Close` remains the join point, and terminal result precedence is unchanged.
+- [x] Permission-refresh success/failure, fresh/ready ChannelBind-400 disposition, ordinary Refresh/438 behavior, invalid-relayed cleanup, and fixed timer cadence match the finite preservation table.
+- [x] Public API, caller-owned socket behavior, prepared-only writes, and normalized TURN request attributes/order remain unchanged.
 
 ## Validation Gates
 

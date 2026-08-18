@@ -106,7 +106,7 @@ func newPrepareHarness(t *testing.T, gateBinds bool) *prepareHarness {
 		Integrity:          stun.NewShortTermIntegrity("pass"),
 		Nonce:              stun.NewNonce("nonce"),
 		Lifetime:           time.Hour,
-	})
+	}, func() {})
 	t.Cleanup(func() { _ = harness.conn.Close() })
 
 	return harness
@@ -302,6 +302,22 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 
 		assert.ErrorIs(t, harness.conn.PreparePeer(context.Background(), harness.peer), ErrPermissionRefreshFailed,
 			"readiness must be terminal after permission refresh failure")
+	})
+
+	t.Run("permission refresh success keeps prepared binding usable", func(t *testing.T) {
+		harness := newPrepareHarness(t, false)
+
+		assert.NoError(t, harness.conn.PreparePeer(context.Background(), harness.peer))
+		assert.Equal(t, int32(1), harness.permCount.Load())
+
+		harness.conn.onRefreshTimers(timerIDRefreshPerms)
+		assert.Equal(t, int32(2), harness.permCount.Load(),
+			"the consolidated receiver must refresh the existing permission")
+
+		n, err := harness.conn.WriteTo([]byte("still ready"), harness.peer)
+		assert.NoError(t, err)
+		assert.Equal(t, len("still ready"), n)
+		assert.True(t, proto.IsChannelData(harness.lastWrite()))
 	})
 
 	t.Run("bind failure surfaces to preparing caller", func(t *testing.T) {

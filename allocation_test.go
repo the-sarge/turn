@@ -72,7 +72,7 @@ func newAllocHarness(t *testing.T) *allocHarness {
 		Integrity:     stun.NewShortTermIntegrity("pass"),
 		Nonce:         stun.NewNonce("nonce"),
 		Lifetime:      time.Hour,
-	})
+	}, func() {})
 	t.Cleanup(func() { _ = conn.Close() })
 
 	harness.alloc = newAllocation(conn, netip.MustParseAddrPort("127.0.0.1:54321"))

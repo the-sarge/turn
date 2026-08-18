@@ -320,8 +320,7 @@ func (c *Client) Allocate(ctx context.Context) (*Allocation, error) {
 		PermissionRefreshInterval: c.permissionRefreshInterval,
 		BindingRefreshInterval:    c.bindingRefreshInterval,
 		BindingCheckInterval:      c.bindingCheckInterval,
-		AbortTransactions:         c.transactions.AbortCurrent,
-	})
+	}, c.transactions.AbortCurrent)
 	c.setRelayedUDPConn(relayedConn)
 
 	canonicalRelayed, ok := canonicalWireAddr(relayed.IP, relayed.Port)
