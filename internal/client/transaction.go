@@ -18,10 +18,9 @@ const (
 	maxRtxCount                  = 7 // Initial request plus six retries.
 )
 
-// TransactionResult is a bag of result values of a transaction.
-type TransactionResult struct {
-	Msg *stun.Message
-	Err error
+type transactionResult struct {
+	msg *stun.Message
+	err error
 }
 
 type transactionRegistryEntry struct {
@@ -30,7 +29,7 @@ type transactionRegistryEntry struct {
 	interval time.Duration
 	nRtx     int
 	timer    *time.Timer
-	resultCh chan TransactionResult
+	resultCh chan transactionResult
 }
 
 // TransactionRegistry owns the live transaction set and its terminal claims.
@@ -51,10 +50,10 @@ func NewTransactionRegistry(send func([]byte) (int, error), rto time.Duration) *
 }
 
 // Perform registers, initially sends, and waits for one transaction.
-func (r *TransactionRegistry) Perform(msg *stun.Message) (TransactionResult, error) {
-	entry, err := r.begin(msg, false)
+func (r *TransactionRegistry) Perform(msg *stun.Message) (*stun.Message, error) {
+	entry, err := r.begin(msg, make(chan transactionResult, 1))
 	if err != nil {
-		return TransactionResult{}, err
+		return nil, err
 	}
 
 	return waitForTransaction(entry)
@@ -62,7 +61,7 @@ func (r *TransactionRegistry) Perform(msg *stun.Message) (TransactionResult, err
 
 // Start registers and initially sends one fire-and-forget transaction.
 func (r *TransactionRegistry) Start(msg *stun.Message) error {
-	_, err := r.begin(msg, true)
+	_, err := r.begin(msg, nil)
 
 	return err
 }
@@ -71,19 +70,19 @@ func (r *TransactionRegistry) Start(msg *stun.Message) error {
 func (r *TransactionRegistry) PerformWithContext(
 	ctx context.Context,
 	msg *stun.Message,
-) (TransactionResult, error) {
+) (*stun.Message, error) {
 	if err := ctx.Err(); err != nil {
-		return TransactionResult{}, context.Cause(ctx)
+		return nil, context.Cause(ctx)
 	}
 
-	entry, err := r.begin(msg, false)
+	entry, err := r.begin(msg, make(chan transactionResult, 1))
 	if err != nil {
-		return TransactionResult{}, err
+		return nil, err
 	}
 
 	select {
 	case result, ok := <-entry.resultCh:
-		return finishTransactionResult(result, ok)
+		return finishResult(result, ok)
 	case <-ctx.Done():
 	}
 
@@ -96,7 +95,7 @@ func (r *TransactionRegistry) PerformWithContext(
 		r.mutex.Unlock()
 		close(entry.resultCh)
 
-		return TransactionResult{}, context.Cause(ctx)
+		return nil, context.Cause(ctx)
 	}
 	r.mutex.Unlock()
 
@@ -105,15 +104,13 @@ func (r *TransactionRegistry) PerformWithContext(
 
 func (r *TransactionRegistry) begin(
 	msg *stun.Message,
-	ignoreResult bool,
+	resultCh chan transactionResult,
 ) (*transactionRegistryEntry, error) {
 	entry := &transactionRegistryEntry{
 		id:       msg.TransactionID,
 		raw:      append([]byte(nil), msg.Raw...),
 		interval: r.rto,
-	}
-	if !ignoreResult {
-		entry.resultCh = make(chan TransactionResult, 1)
+		resultCh: resultCh,
 	}
 
 	r.mutex.Lock()
@@ -166,8 +163,8 @@ func (r *TransactionRegistry) retry(entry *transactionRegistryEntry) {
 	if entry.nRtx == maxRtxCount {
 		delete(r.live, entry.id)
 		r.mutex.Unlock()
-		publishTransactionResult(entry, TransactionResult{
-			Err: fmt.Errorf("%w: transaction %s", ErrTransactionTimeout, transactionKey(entry.id)),
+		publishResult(entry, transactionResult{
+			err: fmt.Errorf("%w: transaction %s", ErrTransactionTimeout, transactionKey(entry.id)),
 		})
 
 		return
@@ -185,8 +182,8 @@ func (r *TransactionRegistry) retry(entry *transactionRegistryEntry) {
 	if err != nil {
 		delete(r.live, entry.id)
 		r.mutex.Unlock()
-		publishTransactionResult(entry, TransactionResult{
-			Err: fmt.Errorf("%w: transaction %s: %w", errFailedToRetransmitTransaction, transactionKey(entry.id), err),
+		publishResult(entry, transactionResult{
+			err: fmt.Errorf("%w: transaction %s: %w", errFailedToRetransmitTransaction, transactionKey(entry.id), err),
 		})
 
 		return
@@ -199,24 +196,24 @@ func transactionKey(id [stun.TransactionIDSize]byte) string {
 	return b64.StdEncoding.EncodeToString(id[:])
 }
 
-func publishTransactionResult(entry *transactionRegistryEntry, result TransactionResult) {
+func publishResult(entry *transactionRegistryEntry, result transactionResult) {
 	if entry.resultCh != nil {
 		entry.resultCh <- result
 	}
 }
 
-func waitForTransaction(entry *transactionRegistryEntry) (TransactionResult, error) {
+func waitForTransaction(entry *transactionRegistryEntry) (*stun.Message, error) {
 	result, ok := <-entry.resultCh
 
-	return finishTransactionResult(result, ok)
+	return finishResult(result, ok)
 }
 
-func finishTransactionResult(result TransactionResult, ok bool) (TransactionResult, error) {
+func finishResult(result transactionResult, ok bool) (*stun.Message, error) {
 	if !ok {
-		result.Err = errTransactionClosed
+		result.err = errTransactionClosed
 	}
 
-	return result, result.Err
+	return result.msg, result.err
 }
 
 // Complete claims a matching response and publishes it to a waiting caller.
@@ -231,7 +228,7 @@ func (r *TransactionRegistry) Complete(msg *stun.Message) {
 	}
 	r.mutex.Unlock()
 	if ok {
-		publishTransactionResult(entry, TransactionResult{Msg: msg})
+		publishResult(entry, transactionResult{msg: msg})
 	}
 }
 

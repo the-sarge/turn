@@ -36,7 +36,7 @@ func TestTransactionRegistryInitialSendFailureRollsBack(t *testing.T) {
 	_, err := registry.Perform(request)
 	require.ErrorIs(t, err, sendErr)
 
-	resultCh := make(chan TransactionResult, 1)
+	resultCh := make(chan *stun.Message, 1)
 	go func() {
 		result, _ := registry.Perform(request)
 		resultCh <- result
@@ -46,7 +46,7 @@ func TestTransactionRegistryInitialSendFailureRollsBack(t *testing.T) {
 
 	select {
 	case result := <-resultCh:
-		assert.Same(t, response, result.Msg)
+		assert.Same(t, response, result)
 	case <-time.After(time.Second):
 		assert.Fail(t, "replacement transaction did not complete")
 	}
@@ -65,7 +65,7 @@ func TestTransactionRegistryRejectsDuplicateLiveID(t *testing.T) {
 		return len(raw), nil
 	}, time.Hour)
 
-	firstResult := make(chan TransactionResult, 1)
+	firstResult := make(chan *stun.Message, 1)
 	go func() {
 		result, _ := registry.Perform(request)
 		firstResult <- result
@@ -79,7 +79,7 @@ func TestTransactionRegistryRejectsDuplicateLiveID(t *testing.T) {
 	registry.Complete(response)
 	select {
 	case result := <-firstResult:
-		assert.Same(t, response, result.Msg, "the original owner must remain live")
+		assert.Same(t, response, result, "the original owner must remain live")
 	case <-time.After(time.Second):
 		assert.Fail(t, "original transaction did not complete")
 	}
@@ -194,7 +194,7 @@ func TestTransactionRegistryResponseWinsBlockedInitialSend(t *testing.T) {
 		return len(raw), nil
 	}, time.Millisecond)
 
-	resultCh := make(chan TransactionResult, 1)
+	resultCh := make(chan *stun.Message, 1)
 	go func() {
 		result, _ := registry.Perform(request)
 		resultCh <- result
@@ -205,7 +205,7 @@ func TestTransactionRegistryResponseWinsBlockedInitialSend(t *testing.T) {
 
 	select {
 	case result := <-resultCh:
-		assert.Same(t, response, result.Msg)
+		assert.Same(t, response, result)
 	case <-time.After(time.Second):
 		assert.Fail(t, "response winner did not wake the blocked begin caller")
 	}
@@ -246,17 +246,17 @@ func TestTransactionRegistryClaimDuringBlockedRetryPreventsRearm(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		claim  func(*TransactionRegistry, *stun.Message)
-		assert func(*testing.T, TransactionResult, error, *stun.Message)
+		assert func(*testing.T, *stun.Message, error, *stun.Message)
 	}{
 		{
 			name: "response",
 			claim: func(registry *TransactionRegistry, response *stun.Message) {
 				registry.Complete(response)
 			},
-			assert: func(t *testing.T, result TransactionResult, err error, response *stun.Message) {
+			assert: func(t *testing.T, result *stun.Message, err error, response *stun.Message) {
 				t.Helper()
 				assert.NoError(t, err)
-				assert.Same(t, response, result.Msg)
+				assert.Same(t, response, result)
 			},
 		},
 		{
@@ -264,7 +264,7 @@ func TestTransactionRegistryClaimDuringBlockedRetryPreventsRearm(t *testing.T) {
 			claim: func(registry *TransactionRegistry, _ *stun.Message) {
 				registry.AbortCurrent()
 			},
-			assert: func(t *testing.T, _ TransactionResult, err error, _ *stun.Message) {
+			assert: func(t *testing.T, _ *stun.Message, err error, _ *stun.Message) {
 				t.Helper()
 				assert.ErrorIs(t, err, net.ErrClosed)
 			},
@@ -289,7 +289,7 @@ func TestTransactionRegistryClaimDuringBlockedRetryPreventsRearm(t *testing.T) {
 			}, time.Millisecond)
 
 			type outcome struct {
-				result TransactionResult
+				result *stun.Message
 				err    error
 			}
 			outcomeCh := make(chan outcome, 1)
@@ -340,7 +340,7 @@ func TestTransactionRegistryWaitedRetryFailureRetires(t *testing.T) {
 	require.ErrorIs(t, err, retryErr)
 	assert.Equal(t, int32(2), sends.Load())
 
-	resultCh := make(chan TransactionResult, 1)
+	resultCh := make(chan *stun.Message, 1)
 	go func() {
 		result, _ := registry.Perform(request)
 		resultCh <- result
@@ -350,7 +350,7 @@ func TestTransactionRegistryWaitedRetryFailureRetires(t *testing.T) {
 	close(releaseReplacement)
 	select {
 	case result := <-resultCh:
-		assert.Same(t, response, result.Msg)
+		assert.Same(t, response, result)
 	case <-time.After(time.Second):
 		assert.Fail(t, "replacement after retry failure did not complete")
 	}

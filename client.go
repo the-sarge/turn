@@ -200,12 +200,10 @@ func (c *Client) sendAllocateRequest(ctx context.Context, protocol proto.Protoco
 		return relayed, lifetime, nonce, err
 	}
 
-	trRes, err := c.performAllocateTransaction(ctx, msg)
+	res, err := c.performAllocateTransaction(ctx, msg)
 	if err != nil {
 		return relayed, lifetime, nonce, err
 	}
-
-	res := trRes.Msg
 
 	// Anonymous allocate failed, trying to authenticate.
 	if err = nonce.GetFrom(res); err != nil {
@@ -239,11 +237,10 @@ func (c *Client) sendAllocateRequest(ctx context.Context, protocol proto.Protoco
 		return relayed, lifetime, nonce, err
 	}
 
-	trRes, err = c.performAllocateTransaction(ctx, msg)
+	res, err = c.performAllocateTransaction(ctx, msg)
 	if err != nil {
 		return relayed, lifetime, nonce, err
 	}
-	res = trRes.Msg
 
 	if res.Type.Class == stun.ClassErrorResponse {
 		var code stun.ErrorCodeAttribute
@@ -314,7 +311,8 @@ func (c *Client) Allocate(ctx context.Context) (*Allocation, error) {
 
 	relayedConn = client.NewUDPConn(&client.AllocationConfig{
 		WriteTo:                   c.sendToServer,
-		PerformTransaction:        c.performTransaction,
+		PerformTransaction:        c.transactions.Perform,
+		StartTransaction:          c.transactions.Start,
 		OnDeallocated:             c.onDeallocated,
 		RelayedAddr:               relayedAddr,
 		Realm:                     c.realm,
@@ -340,21 +338,10 @@ func (c *Client) Allocate(ctx context.Context) (*Allocation, error) {
 	return newAllocation(relayedConn, canonicalRelayed), nil
 }
 
-// performTransaction performs STUN transaction.
-func (c *Client) performTransaction(msg *stun.Message, ignoreResult bool) (client.TransactionResult,
-	error,
-) {
-	if ignoreResult {
-		return client.TransactionResult{}, c.transactions.Start(msg)
-	}
-
-	return c.transactions.Perform(msg)
-}
-
 // performAllocateTransaction delegates Allocate's private cancelable wait to
 // the transaction registry; cancellation does not cancel shared peer work.
 func (c *Client) performAllocateTransaction(ctx context.Context, msg *stun.Message) (
-	client.TransactionResult, error,
+	*stun.Message, error,
 ) {
 	return c.transactions.PerformWithContext(ctx, msg)
 }

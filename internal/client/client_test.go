@@ -17,7 +17,8 @@ import (
 // rescript an already-built connection without writing its private fields.
 type testConnScript struct {
 	writeTo            func(data []byte) (int, error)
-	performTransaction func(msg *stun.Message, dontWait bool) (TransactionResult, error)
+	performTransaction func(msg *stun.Message) (*stun.Message, error)
+	startTransaction   func(msg *stun.Message) error
 	onDeallocated      func(relayedAddr net.Addr)
 
 	writes struct {
@@ -38,12 +39,20 @@ func (s *testConnScript) WriteTo(data []byte) (int, error) {
 	return len(data), nil
 }
 
-func (s *testConnScript) PerformTransaction(msg *stun.Message, dontWait bool) (TransactionResult, error) {
+func (s *testConnScript) PerformTransaction(msg *stun.Message) (*stun.Message, error) {
 	if s.performTransaction != nil {
-		return s.performTransaction(msg, dontWait)
+		return s.performTransaction(msg)
 	}
 
-	return TransactionResult{}, errFake
+	return nil, errFake
+}
+
+func (s *testConnScript) StartTransaction(msg *stun.Message) error {
+	if s.startTransaction != nil {
+		return s.startTransaction(msg)
+	}
+
+	return nil
 }
 
 func (s *testConnScript) OnDeallocated(relayedAddr net.Addr) {
@@ -74,6 +83,7 @@ func testAllocationConfig(script *testConnScript) *AllocationConfig {
 	return &AllocationConfig{
 		WriteTo:            script.WriteTo,
 		PerformTransaction: script.PerformTransaction,
+		StartTransaction:   script.StartTransaction,
 		OnDeallocated:      script.OnDeallocated,
 		RelayedAddr:        &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 54321},
 		Username:           stun.NewUsername("user"),

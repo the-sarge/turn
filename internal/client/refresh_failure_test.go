@@ -25,10 +25,10 @@ import (
 type refreshFailureHarness struct {
 	conn *UDPConn
 
-	// waitedRefresh scripts the outcome of a waited (dontWait=false) Refresh
+	// waitedRefresh scripts the outcome of a waited Refresh
 	// transaction. Read on every waited refresh.
-	waitedRefresh func() (TransactionResult, error)
-	// emitErr, when non-nil, fails the lifetime-0 (dontWait=true) emission.
+	waitedRefresh func() (*stun.Message, error)
+	// emitErr, when non-nil, fails the lifetime-zero Release emission.
 	emitErr error
 
 	waitedCount atomic.Int32
@@ -36,37 +36,34 @@ type refreshFailureHarness struct {
 }
 
 func newRefreshFailureHarness(
-	t *testing.T, waited func() (TransactionResult, error), emitErr error,
+	t *testing.T, waited func() (*stun.Message, error), emitErr error,
 ) *refreshFailureHarness {
 	t.Helper()
 
 	harness := &refreshFailureHarness{waitedRefresh: waited, emitErr: emitErr}
 	script := &testConnScript{
-		performTransaction: func(msg *stun.Message, dontWait bool) (TransactionResult, error) {
+		performTransaction: func(msg *stun.Message) (*stun.Message, error) {
 			switch msg.Type.Method {
 			case stun.MethodRefresh:
-				if dontWait {
-					harness.emitCount.Add(1)
-					if harness.emitErr != nil {
-						return TransactionResult{}, harness.emitErr
-					}
-
-					return TransactionResult{}, nil
-				}
 				harness.waitedCount.Add(1)
 
 				return harness.waitedRefresh()
 			case stun.MethodCreatePermission:
-				return TransactionResult{Msg: stun.MustBuild(
+				return stun.MustBuild(
 					stun.NewType(stun.MethodCreatePermission, stun.ClassSuccessResponse),
-				)}, nil
+				), nil
 			case stun.MethodChannelBind:
-				return TransactionResult{Msg: stun.MustBuild(
+				return stun.MustBuild(
 					stun.NewType(stun.MethodChannelBind, stun.ClassSuccessResponse),
-				)}, nil
+				), nil
 			default:
-				return TransactionResult{}, errFake
+				return nil, errFake
 			}
+		},
+		startTransaction: func(*stun.Message) error {
+			harness.emitCount.Add(1)
+
+			return harness.emitErr
 		},
 		writeTo: func(data []byte) (int, error) {
 			return len(data), nil
@@ -99,7 +96,7 @@ func TestRefreshFailureTerminalizes(t *testing.T) {
 	tests := []struct {
 		name string
 		// waited scripts every waited refresh outcome.
-		waited func() (TransactionResult, error)
+		waited func() (*stun.Message, error)
 		// wantWaited is the number of waited refresh transactions the retry
 		// loop is expected to run before the failure is permanent.
 		wantWaited int32
@@ -110,24 +107,24 @@ func TestRefreshFailureTerminalizes(t *testing.T) {
 	}{
 		{
 			name: "exhausted refresh transaction",
-			waited: func() (TransactionResult, error) {
-				return TransactionResult{}, fmt.Errorf("%w: transaction test", ErrTransactionTimeout)
+			waited: func() (*stun.Message, error) {
+				return nil, fmt.Errorf("%w: transaction test", ErrTransactionTimeout)
 			},
 			wantWaited: 1,
 			underlying: ErrTransactionTimeout,
 		},
 		{
 			name: "well-formed non-438 error response",
-			waited: func() (TransactionResult, error) {
-				return TransactionResult{Msg: turnErrorResponse(stun.CodeServerError)}, nil
+			waited: func() (*stun.Message, error) {
+				return turnErrorResponse(stun.CodeServerError), nil
 			},
 			wantWaited:    1,
 			wantTurnError: true,
 		},
 		{
 			name: "stale-nonce retry exhaustion",
-			waited: func() (TransactionResult, error) {
-				return TransactionResult{Msg: staleNonceResponse()}, nil
+			waited: func() (*stun.Message, error) {
+				return staleNonceResponse(), nil
 			},
 			wantWaited: maxRetryAttempts,
 		},
@@ -197,8 +194,8 @@ func TestRefreshFailureTerminalizes(t *testing.T) {
 }
 
 func TestConcurrentCallerCloses(t *testing.T) {
-	harness := newRefreshFailureHarness(t, func() (TransactionResult, error) {
-		return TransactionResult{}, errFake
+	harness := newRefreshFailureHarness(t, func() (*stun.Message, error) {
+		return nil, errFake
 	}, nil)
 	conn := harness.conn
 
@@ -237,8 +234,8 @@ func TestConcurrentCallerCloses(t *testing.T) {
 }
 
 func TestRefreshFailureSealVsCloseRace(t *testing.T) {
-	harness := newRefreshFailureHarness(t, func() (TransactionResult, error) {
-		return TransactionResult{}, errFake
+	harness := newRefreshFailureHarness(t, func() (*stun.Message, error) {
+		return nil, errFake
 	}, nil)
 	conn := harness.conn
 
@@ -272,8 +269,8 @@ func TestRefreshFailureSealVsCloseRace(t *testing.T) {
 
 func TestSelfSealEmissionFailureJoinsCause(t *testing.T) {
 	emitErr := errors.New("lifetime-0 write failed") //nolint:err113 // test-local cause
-	harness := newRefreshFailureHarness(t, func() (TransactionResult, error) {
-		return TransactionResult{}, errFake
+	harness := newRefreshFailureHarness(t, func() (*stun.Message, error) {
+		return nil, errFake
 	}, emitErr)
 	conn := harness.conn
 

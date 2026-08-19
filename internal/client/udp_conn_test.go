@@ -63,12 +63,12 @@ func TestNewUDPConnRejectsMissingAbortBeforeStartingWork(t *testing.T) {
 func TestNewUDPConnBuildsUnstartedAndClosesOnce(t *testing.T) {
 	var releases atomic.Int32
 	mock := &testConnScript{
-		performTransaction: func(msg *stun.Message, dontWait bool) (TransactionResult, error) {
-			if msg.Type.Method == stun.MethodRefresh && dontWait {
+		startTransaction: func(msg *stun.Message) error {
+			if msg.Type.Method == stun.MethodRefresh {
 				releases.Add(1)
 			}
 
-			return TransactionResult{}, nil
+			return nil
 		},
 	}
 	conn := newTestConn(t, mock)
@@ -85,8 +85,8 @@ func TestNewUDPConnBuildsUnstartedAndClosesOnce(t *testing.T) {
 
 func TestNewUDPConnStartsTimers(t *testing.T) {
 	mock := &testConnScript{
-		performTransaction: func(*stun.Message, bool) (TransactionResult, error) {
-			return TransactionResult{}, nil
+		performTransaction: func(*stun.Message) (*stun.Message, error) {
+			return new(stun.Message), nil
 		},
 	}
 	conn := NewUDPConn(testAllocationConfig(mock), func() {})
@@ -157,8 +157,8 @@ func newInboundDeliveryConn(t *testing.T) *UDPConn {
 	t.Helper()
 
 	return newTestConn(t, &testConnScript{
-		performTransaction: func(*stun.Message, bool) (TransactionResult, error) {
-			return TransactionResult{}, nil
+		performTransaction: func(*stun.Message) (*stun.Message, error) {
+			return nil, nil
 		},
 	})
 }
@@ -226,6 +226,42 @@ func assertRequestShape(
 	assert.Equal(t, expected.Raw, actual.Raw, "TURN request normalized to the generated transaction ID")
 }
 
+func TestUDPConnReleaseUsesStartTransactionAndPreservesRequest(t *testing.T) {
+	startCalls := 0
+	config := testAllocationConfig(&testConnScript{
+		performTransaction: func(*stun.Message) (*stun.Message, error) {
+			require.Fail(t, "release used the waited transaction crossing")
+
+			return nil, errFake
+		},
+	})
+	config.StartTransaction = func(msg *stun.Message) error {
+		startCalls++
+		assertRequestShape(t, msg, []stun.AttrType{
+			stun.AttrLifetime,
+			stun.AttrUsername,
+			stun.AttrRealm,
+			stun.AttrNonce,
+			stun.AttrMessageIntegrity,
+			stun.AttrFingerprint,
+		},
+			stun.NewType(stun.MethodRefresh, stun.ClassRequest),
+			proto.Lifetime{Duration: 0},
+			config.Username,
+			config.Realm,
+			config.Nonce,
+			config.Integrity,
+			stun.Fingerprint,
+		)
+
+		return nil
+	}
+	conn := newUDPConn(config, func() {})
+
+	require.NoError(t, conn.Close())
+	assert.Equal(t, 1, startCalls)
+}
+
 func TestRefreshAllocationPreservesRequestAndRetriesStaleNonce(t *testing.T) {
 	const lifetime = time.Hour
 	username := stun.NewUsername("user")
@@ -245,9 +281,8 @@ func TestRefreshAllocationPreservesRequestAndRetriesStaleNonce(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			calls := 0
 			script := &testConnScript{
-				performTransaction: func(msg *stun.Message, dontWait bool) (TransactionResult, error) {
+				performTransaction: func(msg *stun.Message) (*stun.Message, error) {
 					calls++
-					assert.False(t, dontWait)
 					nonce := oldNonce
 					if calls > 1 {
 						nonce = freshNonce
@@ -269,17 +304,17 @@ func TestRefreshAllocationPreservesRequestAndRetriesStaleNonce(t *testing.T) {
 						stun.Fingerprint,
 					)
 					if tt.staleFirst && calls == 1 {
-						return TransactionResult{Msg: stun.MustBuild(
+						return stun.MustBuild(
 							stun.NewType(stun.MethodRefresh, stun.ClassErrorResponse),
 							stun.ErrorCodeAttribute{Code: stun.CodeStaleNonce, Reason: []byte("Stale Nonce")},
 							freshNonce,
-						)}, nil
+						), nil
 					}
 
-					return TransactionResult{Msg: stun.MustBuild(
+					return stun.MustBuild(
 						stun.NewType(stun.MethodRefresh, stun.ClassSuccessResponse),
 						proto.Lifetime{Duration: lifetime},
-					)}, nil
+					), nil
 				},
 			}
 			conn := newTestConn(t, script)
@@ -306,8 +341,7 @@ func TestPermissionAndBindingRequestShapes(t *testing.T) {
 	peerB := netip.MustParseAddrPort("192.0.2.2:6000")
 	var bound *binding
 	script := &testConnScript{
-		performTransaction: func(msg *stun.Message, dontWait bool) (TransactionResult, error) {
-			assert.False(t, dontWait)
+		performTransaction: func(msg *stun.Message) (*stun.Message, error) {
 			switch msg.Type.Method {
 			case stun.MethodCreatePermission:
 				assertRequestShape(t, msg, []stun.AttrType{
@@ -329,9 +363,9 @@ func TestPermissionAndBindingRequestShapes(t *testing.T) {
 					stun.Fingerprint,
 				)
 
-				return TransactionResult{Msg: stun.MustBuild(
+				return stun.MustBuild(
 					stun.NewType(stun.MethodCreatePermission, stun.ClassSuccessResponse),
-				)}, nil
+				), nil
 			case stun.MethodChannelBind:
 				assertRequestShape(t, msg, []stun.AttrType{
 					stun.AttrXORPeerAddress,
@@ -352,11 +386,11 @@ func TestPermissionAndBindingRequestShapes(t *testing.T) {
 					stun.Fingerprint,
 				)
 
-				return TransactionResult{Msg: stun.MustBuild(
+				return stun.MustBuild(
 					stun.NewType(stun.MethodChannelBind, stun.ClassSuccessResponse),
-				)}, nil
+				), nil
 			default:
-				return TransactionResult{}, errFake
+				return nil, errFake
 			}
 		},
 	}
@@ -390,8 +424,8 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 	t.Run("maybeBind()", func(t *testing.T) {
 		t.Run("fresh success becomes preparable", func(t *testing.T) {
 			conn := makeConn(&testConnScript{
-				performTransaction: func(*stun.Message, bool) (TransactionResult, error) {
-					return TransactionResult{Msg: new(stun.Message)}, nil
+				performTransaction: func(*stun.Message) (*stun.Message, error) {
+					return new(stun.Message), nil
 				},
 			})
 			bound := requireBinding(t, conn.bindingMgr, netip.MustParseAddrPort("127.0.0.1:1234"))
@@ -411,10 +445,10 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		t.Run("recent confirmation does not refresh", func(t *testing.T) {
 			var attempts atomic.Int32
 			conn := makeConn(&testConnScript{
-				performTransaction: func(*stun.Message, bool) (TransactionResult, error) {
+				performTransaction: func(*stun.Message) (*stun.Message, error) {
 					attempts.Add(1)
 
-					return TransactionResult{Msg: new(stun.Message)}, nil
+					return new(stun.Message), nil
 				},
 			})
 			bound := requireBinding(t, conn.bindingMgr, netip.MustParseAddrPort("127.0.0.1:1234"))
@@ -427,10 +461,10 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		t.Run("stale confirmation refreshes", func(t *testing.T) {
 			var attempts atomic.Int32
 			conn := makeConn(&testConnScript{
-				performTransaction: func(*stun.Message, bool) (TransactionResult, error) {
+				performTransaction: func(*stun.Message) (*stun.Message, error) {
 					attempts.Add(1)
 
-					return TransactionResult{Msg: new(stun.Message)}, nil
+					return new(stun.Message), nil
 				},
 			})
 			bound := requireBinding(t, conn.bindingMgr, netip.MustParseAddrPort("127.0.0.1:1234"))
@@ -444,7 +478,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 	t.Run("bind()", func(t *testing.T) {
 		tests := []struct {
 			name                 string
-			transactionFn        func(*stun.Message, bool) (TransactionResult, error)
+			transactionFn        func(*stun.Message) (*stun.Message, error)
 			expectErr            error
 			expectErrContains    string
 			expectBadRequest     bool
@@ -454,29 +488,29 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		}{
 			{
 				name: "PerformTransaction returns error",
-				transactionFn: func(*stun.Message, bool) (TransactionResult, error) {
-					return TransactionResult{}, errFake
+				transactionFn: func(*stun.Message) (*stun.Message, error) {
+					return nil, errFake
 				},
 				expectErr:            errFake,
 				expectBindingDeleted: false,
 			},
 			{
 				name: "ErrorResponse with CodeStaleNonce triggers nonce update",
-				transactionFn: func(*stun.Message, bool) (TransactionResult, error) {
-					return TransactionResult{Msg: staleNonceMsg()}, nil
+				transactionFn: func(*stun.Message) (*stun.Message, error) {
+					return staleNonceMsg(), nil
 				},
 				expectErr:          errTryAgain,
 				expectNonceChanged: true,
 			},
 			{
 				name: "ErrorResponse with error code returns cannot bind channel error",
-				transactionFn: func(*stun.Message, bool) (TransactionResult, error) {
+				transactionFn: func(*stun.Message) (*stun.Message, error) {
 					res := stun.MustBuild(
 						stun.NewType(stun.MethodChannelBind, stun.ClassErrorResponse),
 						stun.ErrorCodeAttribute{Code: stun.CodeForbidden, Reason: []byte("Forbidden")},
 					)
 
-					return TransactionResult{Msg: res}, nil
+					return res, nil
 				},
 				expectErr:           errCannotBindChannel,
 				expectErrContains:   "received error",
@@ -484,13 +518,13 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 			},
 			{
 				name: "ErrorResponse with CodeBadRequest is detectable",
-				transactionFn: func(*stun.Message, bool) (TransactionResult, error) {
+				transactionFn: func(*stun.Message) (*stun.Message, error) {
 					res := stun.MustBuild(
 						stun.NewType(stun.MethodChannelBind, stun.ClassErrorResponse),
 						stun.ErrorCodeAttribute{Code: stun.CodeBadRequest, Reason: []byte("Bad Request")},
 					)
 
-					return TransactionResult{Msg: res}, nil
+					return res, nil
 				},
 				expectErr:           errCannotBindChannel,
 				expectErrContains:   "received error",
@@ -499,12 +533,12 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 			},
 			{
 				name: "ErrorResponse without error code returns unexpected response type error",
-				transactionFn: func(*stun.Message, bool) (TransactionResult, error) {
+				transactionFn: func(*stun.Message) (*stun.Message, error) {
 					res := stun.MustBuild(
 						stun.NewType(stun.MethodChannelBind, stun.ClassErrorResponse),
 					)
 
-					return TransactionResult{Msg: res}, nil
+					return res, nil
 				},
 				expectErr:         errCannotBindChannel,
 				expectErrContains: "unexpected response type",
@@ -563,10 +597,10 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 	t.Run("bindChannel exhausts stale nonce retries without a typed TURN error", func(t *testing.T) {
 		var attempts atomic.Int32
 		conn := makeConn(&testConnScript{
-			performTransaction: func(*stun.Message, bool) (TransactionResult, error) {
+			performTransaction: func(*stun.Message) (*stun.Message, error) {
 				attempts.Add(1)
 
-				return TransactionResult{Msg: staleNonceMsg()}, nil
+				return staleNonceMsg(), nil
 			},
 		})
 		bound := requireBinding(t, conn.bindingMgr, netip.MustParseAddrPort("127.0.0.1:1234"))
@@ -587,12 +621,12 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		var failed atomic.Bool
 
 		conn := makeConn(&testConnScript{
-			performTransaction: func(msg *stun.Message, dontWait bool) (TransactionResult, error) {
+			performTransaction: func(msg *stun.Message) (*stun.Message, error) {
 				if failed.CompareAndSwap(false, true) {
-					return TransactionResult{}, errFake
+					return nil, errFake
 				}
 
-				return TransactionResult{Msg: new(stun.Message)}, nil
+				return new(stun.Message), nil
 			},
 		})
 		bound := requireBinding(t, conn.bindingMgr, netip.MustParseAddrPort("127.0.0.1:1234"))
@@ -626,32 +660,34 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		peerAddr := netip.MustParseAddrPort("127.0.0.1:50000")
 		deallocatedCh := make(chan net.Addr, 1)
 		refreshLifetimeCh := make(chan time.Duration, 1)
-		refreshDontWaitCh := make(chan bool, 1)
 		refreshErrCh := make(chan error, 1)
 
 		script := &testConnScript{
-			performTransaction: func(msg *stun.Message, dontWait bool) (TransactionResult, error) {
+			performTransaction: func(msg *stun.Message) (*stun.Message, error) {
 				switch msg.Type.Method {
 				case stun.MethodChannelBind:
-					return TransactionResult{
-						Msg: stun.MustBuild(
+					return stun.MustBuild(
 							stun.NewType(stun.MethodChannelBind, stun.ClassErrorResponse),
 							stun.ErrorCodeAttribute{Code: stun.CodeBadRequest, Reason: []byte("Bad Request")},
 						),
-					}, nil
+						nil
 				case stun.MethodRefresh:
+					return nil, errFake
+				default:
+					return nil, errFake
+				}
+			},
+			startTransaction: func(msg *stun.Message) error {
+				if msg.Type.Method == stun.MethodRefresh {
 					var lifetime proto.Lifetime
 					if err := lifetime.GetFrom(msg); err != nil {
 						refreshErrCh <- err
 					} else {
 						refreshLifetimeCh <- lifetime.Duration
-						refreshDontWaitCh <- dontWait
 					}
-
-					return TransactionResult{}, nil
-				default:
-					return TransactionResult{}, errFake
 				}
+
+				return nil
 			},
 			onDeallocated: func(addr net.Addr) {
 				deallocatedCh <- addr
@@ -686,13 +722,6 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 			assert.Fail(t, "timed out waiting for refresh deallocation")
 		}
 
-		select {
-		case dontWait := <-refreshDontWaitCh:
-			assert.True(t, dontWait)
-		case <-time.After(5 * time.Second):
-			assert.Fail(t, "timed out waiting for refresh dontWait flag")
-		}
-
 		_, err := conn.WriteTo([]byte("still closed"), peerAddr)
 		assert.ErrorIs(t, err, net.ErrClosed)
 		var turnErr *stun.TurnError
@@ -711,18 +740,16 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		deallocatedCh := make(chan net.Addr, 1)
 
 		script := &testConnScript{
-			performTransaction: func(msg *stun.Message, dontWait bool) (TransactionResult, error) {
+			performTransaction: func(msg *stun.Message) (*stun.Message, error) {
 				switch msg.Type.Method {
 				case stun.MethodChannelBind:
 					if channelBindAttempts.Add(1) == 1 {
-						return TransactionResult{}, errFake
+						return nil, errFake
 					}
 
-					return TransactionResult{Msg: badRequestMsg()}, nil
-				case stun.MethodRefresh:
-					return TransactionResult{}, nil
+					return badRequestMsg(), nil
 				default:
-					return TransactionResult{}, errFake
+					return nil, errFake
 				}
 			},
 			onDeallocated: func(addr net.Addr) {
@@ -765,18 +792,16 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		var channelBindAttempts atomic.Int32
 
 		script := &testConnScript{
-			performTransaction: func(msg *stun.Message, dontWait bool) (TransactionResult, error) {
+			performTransaction: func(msg *stun.Message) (*stun.Message, error) {
 				switch msg.Type.Method {
 				case stun.MethodChannelBind:
 					if channelBindAttempts.Add(1) == 1 {
-						return TransactionResult{}, newTimeoutError("channel bind timeout")
+						return nil, newTimeoutError("channel bind timeout")
 					}
 
-					return TransactionResult{Msg: badRequestMsg()}, nil
-				case stun.MethodRefresh:
-					return TransactionResult{}, nil
+					return badRequestMsg(), nil
 				default:
-					return TransactionResult{}, errFake
+					return nil, errFake
 				}
 			},
 		}
@@ -814,10 +839,10 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		staleRefreshedAt := time.Now().Add(-(defaultBindingRefreshInterval + time.Minute))
 		var channelBindAttempts atomic.Int32
 		conn := makeConn(&testConnScript{
-			performTransaction: func(msg *stun.Message, dontWait bool) (TransactionResult, error) {
+			performTransaction: func(msg *stun.Message) (*stun.Message, error) {
 				channelBindAttempts.Add(1)
 
-				return TransactionResult{Msg: badRequestMsg()}, nil
+				return badRequestMsg(), nil
 			},
 		})
 		bound := requireBinding(t, conn.bindingMgr, netip.MustParseAddrPort("127.0.0.1:1234"))
@@ -837,8 +862,8 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 
 	t.Run("WriteTo()", func(t *testing.T) {
 		script := &testConnScript{
-			performTransaction: func(*stun.Message, bool) (TransactionResult, error) {
-				return TransactionResult{}, errFake
+			performTransaction: func(*stun.Message) (*stun.Message, error) {
+				return nil, errFake
 			},
 			writeTo: func(data []byte) (int, error) {
 				return len(data), nil
@@ -867,8 +892,8 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 	t.Run("ChannelBind transaction failure retains channel number", func(t *testing.T) {
 		addr := netip.MustParseAddrPort("127.0.0.1:9999")
 		script := &testConnScript{
-			performTransaction: func(*stun.Message, bool) (TransactionResult, error) {
-				return TransactionResult{}, errFake
+			performTransaction: func(*stun.Message) (*stun.Message, error) {
+				return nil, errFake
 			},
 			writeTo: func(data []byte) (int, error) {
 				return len(data), nil
@@ -963,13 +988,13 @@ func TestCreatePermissions(t *testing.T) {
 	t.Run("CreatePermissions success", func(t *testing.T) {
 		called := false
 		script := &testConnScript{
-			performTransaction: func(msg *stun.Message, _ bool) (TransactionResult, error) {
+			performTransaction: func(msg *stun.Message) (*stun.Message, error) {
 				called = true
 				// Simulate a successful response
 				res := stun.New()
 				res.Type = stun.NewType(stun.MethodCreatePermission, stun.ClassSuccessResponse)
 
-				return TransactionResult{Msg: res}, nil
+				return res, nil
 			},
 		}
 		conn := newTestConn(t, script)
@@ -981,7 +1006,7 @@ func TestCreatePermissions(t *testing.T) {
 
 	t.Run("CreatePermissions error", func(t *testing.T) {
 		script := &testConnScript{
-			performTransaction: func(msg *stun.Message, _ bool) (TransactionResult, error) {
+			performTransaction: func(msg *stun.Message) (*stun.Message, error) {
 				res := stun.New()
 				res.Type = stun.NewType(stun.MethodCreatePermission, stun.ClassErrorResponse)
 				code := stun.ErrorCodeAttribute{
@@ -990,7 +1015,7 @@ func TestCreatePermissions(t *testing.T) {
 				}
 				_ = code.AddTo(res)
 
-				return TransactionResult{Msg: res}, nil
+				return res, nil
 			},
 		}
 		conn := newTestConn(t, script)

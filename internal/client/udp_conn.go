@@ -56,7 +56,8 @@ type UDPConn struct {
 	// Package-crossing operations are immutable production/mock adapters. They
 	// do not own or mutate Allocation lifecycle state.
 	writeTo            func(data []byte) (int, error)
-	performTransaction func(msg *stun.Message, dontWait bool) (TransactionResult, error)
+	performTransaction func(msg *stun.Message) (*stun.Message, error)
+	startTransaction   func(msg *stun.Message) error
 	onDeallocated      func(relayedAddr net.Addr)
 	abortTransactions  func()
 
@@ -109,6 +110,7 @@ func newUDPConn(config *AllocationConfig, abortTransactions func()) *UDPConn {
 	conn := &UDPConn{
 		writeTo:                config.WriteTo,
 		performTransaction:     config.PerformTransaction,
+		startTransaction:       config.StartTransaction,
 		onDeallocated:          config.OnDeallocated,
 		abortTransactions:      abortTransactions,
 		relayedAddr:            config.RelayedAddr,
@@ -525,7 +527,7 @@ func (c *UDPConn) startCloseLocked(cause error) (bool, error) {
 
 	c.onDeallocated(c.relayedAddr)
 
-	emitErr := c.refreshAllocation(0, true /* dontWait=true */)
+	emitErr := c.emitRelease()
 	if cause != nil {
 		// Self-seal: record the terminal cause; a failed lifetime-0 emission
 		// is joined into it so the caller's Close can still observe it.
@@ -602,12 +604,10 @@ func (c *UDPConn) CreatePermissions(addrs ...netip.AddrPort) error {
 		return err
 	}
 
-	trRes, err := c.performTransaction(msg, false)
+	res, err := c.performTransaction(msg)
 	if err != nil {
 		return err
 	}
-
-	res := trRes.Msg
 
 	if res.Type.Class == stun.ClassErrorResponse {
 		var code stun.ErrorCodeAttribute
@@ -816,12 +816,10 @@ func (c *UDPConn) bind(bound *binding) error {
 		return err
 	}
 
-	trRes, err := c.performTransaction(msg, false)
+	res, err := c.performTransaction(msg)
 	if err != nil {
 		return fmt.Errorf("%w: %w", errChannelBindTransactionFailed, err)
 	}
-
-	res := trRes.Msg
 	if res.Type.Class == stun.ClassErrorResponse {
 		return c.handleChannelBindErrorResponse(res)
 	}
