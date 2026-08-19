@@ -523,3 +523,36 @@ PR [#72](https://github.com/the-sarge/turn/pull/72) landed Track 1 Slice T1.S1 a
 
 - T2.S1 ([#69](https://github.com/the-sarge/turn/issues/69)) and T3.S1 ([#70](https://github.com/the-sarge/turn/issues/70)) remain independent ready frontier slices. Allocation construction is a post-Track-1 evidence-gated re-audit, not a dispatchable implementation slice; the live program view is [tracking issue #71](https://github.com/the-sarge/turn/issues/71).
 - No review follow-up issue was required, and the bounded production census found no untraced outbound destination effect.
+
+---
+
+## Inbound Allocation delivery landed - 2026-08-19 13:13 EDT
+
+**Main:** `2fcdc3453f02`
+**Actor:** Codex
+
+**Summary**
+
+PR [#74](https://github.com/the-sarge/turn/pull/74) landed Track 2 Slice T2.S1 as `2fcdc34` and closed [#69](https://github.com/the-sarge/turn/issues/69). Root `Client` retains server-source admission, TURN decoding, canonicalization, transaction completion, no-live discard, and the existing live unknown-channel error, while `UDPConn` now owns decoded peer-data delivery through queue admission and seal disposition.
+
+**Completed**
+
+- Added Allocation-owned Data-indication and ChannelData delivery operations, moved channel lookup behind `UDPConn`, and removed the old outward lookup plus caller-composed generic queue path.
+- Added one delivery read/write guard that holds its read side across live validation, channel lookup, payload copy, and nonblocking admission; seal holds its write side only around the `closeCh` transition before transaction abort, deallocation notification, or lifetime-zero release.
+- Preserved assigned-but-unprepared inbound ChannelData, canonical peer labels, copied payload ownership, full-queue UDP drop semantics, `io.ErrShortBuffer`, pre-seal queued data, existing error text, and the unchanged `ReadFrom` selection contract.
+- Added public root-to-`Allocation.ReadFrom` regressions for both decoded forms and focused internal coverage for no-live/live/sealed state, known/unknown channels, queue saturation, copy ownership, short buffers, and both delivery/seal orders. The product PR also marked T2.S1 and the Track 2 program row complete.
+
+**Decisions**
+
+- Root remains the wire and canonical peer representation owner; `UDPConn` is the decoded-delivery and lifecycle owner; `bindingManager` remains the channel identity owner. The accepted finite domain, non-goals, and evidence ceiling remain in the [inbound Allocation delivery plan](adr/2026-08-19-inbound-allocation-delivery-plan.md) and [program index](adr/2026-08-19-architecture-deepening-program.md).
+
+**Validation**
+
+- Red-first tests exposed the missing Allocation delivery seam and the old post-seal enqueue behavior. Focused root/internal suites, `go test ./...`, `go test -race ./...`, and `task verify` passed before review.
+- Initial RAS review `20260819T170459-f35179532ca8d7c279957e75` synthesized no `Fix First`, follow-up, or rejected clusters, so no verification or replacement review was required. Two configured reviewers completed; one Claude reviewer failed structural validation after RAS rejected an ungrounded record, and the run retained that warning.
+- Exact-head `task preflight` certified `641a747b75d677fa757af7455971ffce7d29c471` against base `ab4e9c3d92df6af0f2049451e21e1a9e33ff908c`, including formatting, vet, tests, lint, docs, race, dependency/vulnerability, Darwin/Windows build, workflow, and secret gates.
+- Post-ready hosted run [32280093792](https://github.com/the-sarge/turn/actions/runs/32280093792) passed `ci-required` on that exact head before the guarded squash merge.
+
+**Next**
+
+- T3.S1 ([#70](https://github.com/the-sarge/turn/issues/70)) remains an independently ready frontier slice. Post-merge closure will reconcile parent #66, tracking issue [#71](https://github.com/the-sarge/turn/issues/71), and the OmniFocus mirror; no review follow-up issue or remaining untraced delivery effect was identified.
