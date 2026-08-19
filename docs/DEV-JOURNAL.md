@@ -484,7 +484,7 @@ PR [#61](https://github.com/the-sarge/turn/pull/61) standardized repository CI a
 - The repository and live-ruleset conformance audits reported no deviations. YAML parsing, actionlint, committed docs-only and source routing, Go 1.24 `task check`, bounded fuzz targets, and exact-head `task preflight` passed; preflight included race, vulnerability, cross-build, and secret checks.
 - The bounded review resolved all accepted findings, exact-head verification covered all six initial clusters, and the replacement review produced no fix-first or follow-up findings.
 - Draft run [32215127070](https://github.com/the-sarge/turn/actions/runs/32215127070) published `ci-required=skipped` with zero steps. After ready transition, run [32217828455](https://github.com/the-sarge/turn/actions/runs/32217828455) ran the source `check` path and passed `ci-required` on the exact merge head; GitHub reported the PR blocked while that check was pending and clean after success.
-- Docs-only routing was proven locally with committed clean and malformed ranges. A separate hosted docs-only PR and a manufactured default-branch advance were intentionally not created, so hosted docs-only and live-behind observations remain unforced.
+- Docs-only routing was proven locally with committed clean and malformed ranges. Journal PR [#62](https://github.com/the-sarge/turn/pull/62) then supplied hosted evidence: run [32218914235](https://github.com/the-sarge/turn/actions/runs/32218914235) selected `docs-check`, did not run the source `check` path, and passed. A manufactured default-branch advance was not created, so the live-behind observation remains unforced.
 
 **Next**
 
