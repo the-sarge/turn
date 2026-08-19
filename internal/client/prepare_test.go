@@ -6,6 +6,7 @@ package client
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"sync"
@@ -277,28 +278,31 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 
 		bound, ok := harness.conn.bindingMgr.getOrCreate(harness.peer)
 		require.True(t, ok)
+		confirmedAt := time.Now().Add(-defaultBindingRefreshInterval - time.Minute)
+		confirmBindingAt(t, bound, confirmedAt)
+		final, err := bound.preparationAccess(confirmedAt)
+		require.True(t, final)
+		require.NoError(t, err)
 		harness.conn.maybeBind(bound)
 		assert.Eventually(t, func() bool {
 			return harness.bindCount.Load() == 1
 		}, 5*time.Second, 10*time.Millisecond)
 
-		// Terminalize while the bind transaction is still in flight, then let
-		// it succeed: the binding must stay failed.
-		bound.prepared.Store(true)
-		bound.terminalize(errFake)
+		// Permission loss terminalizes while refresh is in flight, then the late
+		// success must not resurrect the binding.
+		permissionCause := fmt.Errorf("%w: %w", ErrPermissionRefreshFailed, errFake)
+		require.True(t, bound.failPrepared(permissionCause))
 		close(harness.bindGate)
 
 		assert.Eventually(t, func() bool {
 			bound.muBind.Lock()
 			defer bound.muBind.Unlock()
 
-			return bound.attemptDone == nil
+			return bound.attempt == nil
 		}, 5*time.Second, 10*time.Millisecond)
-		assert.Equal(t, bindingStateFailed, bound.state(),
-			"completed bind attempt must not resurrect a terminalized binding")
 
-		_, err := harness.conn.WriteTo([]byte("data"), harness.peer)
-		assert.ErrorIs(t, err, errFake)
+		_, err = harness.conn.WriteTo([]byte("data"), harness.peer)
+		assert.ErrorIs(t, err, permissionCause)
 	})
 
 	t.Run("same-peer callers coalesce onto one bind", func(t *testing.T) {
@@ -370,6 +374,35 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 			assert.Fail(t, "timed out waiting for surviving waiter")
 		}
 		assert.Equal(t, int32(1), harness.bindCount.Load(), "cancellation must not restart or cancel the shared bind")
+	})
+
+	t.Run("cancellation selected before preparation leaves confirmed peer unprepared", func(t *testing.T) {
+		harness := newPrepareHarness(t, true)
+		ctx, cancel := context.WithCancelCause(context.Background())
+		cause := errors.New("caller selected cancellation") //nolint:err113 // Test-local cause.
+		result := make(chan error, 1)
+		go func() { result <- harness.conn.PreparePeer(ctx, harness.peer) }()
+
+		require.Eventually(t, func() bool {
+			return harness.bindCount.Load() == 1
+		}, 5*time.Second, 10*time.Millisecond)
+		cancel(cause)
+		assert.ErrorIs(t, <-result, cause)
+
+		close(harness.bindGate)
+		bound, ok := harness.conn.bindingMgr.findByAddr(harness.peer)
+		require.True(t, ok)
+		require.Eventually(t, func() bool {
+			bound.muBind.Lock()
+			defer bound.muBind.Unlock()
+
+			return bound.attempt == nil
+		}, 5*time.Second, 10*time.Millisecond)
+
+		_, err := harness.conn.WriteTo([]byte("still unprepared"), harness.peer)
+		assert.ErrorIs(t, err, ErrNotPrepared)
+		assert.NoError(t, harness.conn.PreparePeer(context.Background(), harness.peer))
+		assert.Equal(t, int32(1), harness.bindCount.Load(), "the second waiter observes existing readiness")
 	})
 
 	t.Run("cancellation wakes waiter during in-flight permission transaction", func(t *testing.T) {
@@ -467,6 +500,44 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 		err := harness.conn.PreparePeer(context.Background(), harness.peer)
 		assert.ErrorIs(t, err, errChannelBindTransactionFailed)
 		assert.False(t, harness.conn.isClosed())
+
+		mock.performTransaction = inner
+		assert.NoError(t, harness.conn.PreparePeer(context.Background(), harness.peer),
+			"a fresh transaction failure is attempt-local and a later caller may retry")
+		assert.Equal(t, int32(2), harness.bindCount.Load())
+	})
+
+	t.Run("joined bind failure is attempt-local for every waiter", func(t *testing.T) {
+		harness := newPrepareHarness(t, false)
+		gate := make(chan struct{})
+		mock := harness.mock
+		inner := mock.performTransaction
+		mock.performTransaction = func(msg *stun.Message, dontWait bool) (TransactionResult, error) {
+			if msg.Type.Method == stun.MethodChannelBind {
+				harness.bindCount.Add(1)
+				<-gate
+
+				return TransactionResult{}, errFake
+			}
+
+			return inner(msg, dontWait)
+		}
+
+		results := make(chan error, 2)
+		for range 2 {
+			go func() { results <- harness.conn.PreparePeer(context.Background(), harness.peer) }()
+		}
+		require.Eventually(t, func() bool { return harness.bindCount.Load() == 1 }, 5*time.Second, 10*time.Millisecond)
+		close(gate)
+
+		for range 2 {
+			assert.ErrorIs(t, <-results, errChannelBindTransactionFailed)
+		}
+		assert.Equal(t, int32(1), harness.bindCount.Load())
+
+		mock.performTransaction = inner
+		assert.NoError(t, harness.conn.PreparePeer(context.Background(), harness.peer))
+		assert.Equal(t, int32(2), harness.bindCount.Load())
 	})
 
 	t.Run("server bind rejection surfaces typed TURN error", func(t *testing.T) {
@@ -567,12 +638,15 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 	t.Run("re-entry after binding expiry is terminal", func(t *testing.T) {
 		harness := newPrepareHarness(t, false)
 
-		assert.NoError(t, harness.conn.PreparePeer(context.Background(), harness.peer))
 		bound, ok := harness.conn.bindingMgr.getOrCreate(harness.peer)
 		require.True(t, ok)
-		bound.setRefreshedAt(time.Now().Add(-channelBindingLifetime))
+		confirmedAt := time.Now().Add(-channelBindingLifetime)
+		confirmBindingAt(t, bound, confirmedAt)
+		final, err := bound.preparationAccess(confirmedAt)
+		require.True(t, final)
+		require.NoError(t, err)
 
-		err := harness.conn.PreparePeer(context.Background(), harness.peer)
+		err = harness.conn.PreparePeer(context.Background(), harness.peer)
 		assert.ErrorIs(t, err, ErrChannelBindingExpired,
 			"a preparing caller re-entering an expired binding must observe the expiry")
 	})
@@ -622,10 +696,13 @@ func TestWriteToPreparedOnly(t *testing.T) {
 			name: "prepared then binding expired",
 			arrange: func(t *testing.T, harness *prepareHarness) {
 				t.Helper()
-				assert.NoError(t, harness.conn.PreparePeer(context.Background(), harness.peer))
 				bound, ok := harness.conn.bindingMgr.getOrCreate(harness.peer)
 				require.True(t, ok)
-				bound.setRefreshedAt(time.Now().Add(-channelBindingLifetime))
+				confirmedAt := time.Now().Add(-channelBindingLifetime)
+				confirmBindingAt(t, bound, confirmedAt)
+				final, err := bound.preparationAccess(confirmedAt)
+				require.True(t, final)
+				require.NoError(t, err)
 			},
 			wantErr:    ErrChannelBindingExpired,
 			wantWrites: 0,

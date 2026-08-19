@@ -115,7 +115,8 @@ func TestUDPConnHandleChannelDataDeliversAssignedUnpreparedBinding(t *testing.T)
 	payload[0] = 'x'
 
 	assert.True(t, handled)
-	assert.False(t, bound.prepared.Load(), "inbound ChannelData must not require a prepared binding")
+	assert.ErrorIs(t, bound.writeAccess(time.Now()), ErrNotPrepared,
+		"inbound ChannelData must not establish prepared write access")
 	buf := make([]byte, len(payload))
 	n, from, err := conn.ReadFrom(buf)
 	require.NoError(t, err)
@@ -393,61 +394,60 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 	}
 
 	t.Run("maybeBind()", func(t *testing.T) {
-		tests := []struct {
-			name          string
-			initialState  bindingState
-			interimState  bindingState
-			finalState    bindingState
-			pastInterval  bool
-			shouldSucceed bool
-		}{
-			{"idle -> request -> ready", bindingStateIdle, bindingStateRequest, bindingStateReady, false, true},
-			{"idle -> request -> failed", bindingStateIdle, bindingStateRequest, bindingStateFailed, false, false},
-			{"unknown -> request -> ready", bindingStateUnknown, bindingStateRequest, bindingStateReady, false, true},
-			{"ready unknown -> refresh -> ready", bindingStateReadyUnknown, bindingStateRefresh, bindingStateReady, false, true},
-			{"ready (stale) -> refresh -> ready", bindingStateReady, bindingStateRefresh, bindingStateReady, true, true},
-			{"ready (stale) -> refresh -> failed", bindingStateReady, bindingStateRefresh, bindingStateFailed, true, false},
+		t.Run("fresh success becomes preparable", func(t *testing.T) {
+			bm := newBindingManager()
+			bound := requireBinding(t, bm, netip.MustParseAddrPort("127.0.0.1:1234"))
+			conn := makeConn(&mockClient{
+				performTransaction: func(*stun.Message, bool) (TransactionResult, error) {
+					return TransactionResult{Msg: new(stun.Message)}, nil
+				},
+			}, bm)
 
-			// Noop cases:
-			{"ready (noop)", bindingStateReady, bindingStateReady, bindingStateReady, false, true},
-			{"request (noop)", bindingStateRequest, bindingStateRequest, bindingStateRequest, false, true},
-			{"refresh (noop)", bindingStateRefresh, bindingStateRefresh, bindingStateRefresh, false, true},
-			{"failed (noop)", bindingStateFailed, bindingStateFailed, bindingStateFailed, false, true},
-		}
+			conn.maybeBind(bound)
+			assert.Eventually(t, func() bool {
+				bound.muBind.Lock()
+				defer bound.muBind.Unlock()
 
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				unblock := make(chan struct{})
+				return bound.attempt == nil
+			}, 5*time.Second, 10*time.Millisecond)
+			final, err := bound.preparationAccess(time.Now())
+			assert.True(t, final)
+			assert.NoError(t, err)
+		})
 
-				bm := newBindingManager()
-				bound := requireBinding(t, bm, netip.MustParseAddrPort("127.0.0.1:1234"))
-				conn := makeConn(&mockClient{
-					performTransaction: func(msg *stun.Message, dontWait bool) (TransactionResult, error) {
-						<-unblock
-						if tt.shouldSucceed {
-							return TransactionResult{Msg: new(stun.Message)}, nil
-						}
+		t.Run("recent confirmation does not refresh", func(t *testing.T) {
+			bm := newBindingManager()
+			bound := requireBinding(t, bm, netip.MustParseAddrPort("127.0.0.1:1234"))
+			confirmBindingAt(t, bound, time.Now())
+			var attempts atomic.Int32
+			conn := makeConn(&mockClient{
+				performTransaction: func(*stun.Message, bool) (TransactionResult, error) {
+					attempts.Add(1)
 
-						return TransactionResult{Msg: staleNonceMsg()}, nil
-					},
-				}, bm)
+					return TransactionResult{Msg: new(stun.Message)}, nil
+				},
+			}, bm)
 
-				bound.setState(tt.initialState)
-				if tt.pastInterval {
-					bound.setRefreshedAt(time.Now().Add(-(defaultBindingRefreshInterval + 1*time.Minute)))
-				}
+			conn.maybeBind(bound)
+			assert.Equal(t, int32(0), attempts.Load())
+		})
 
-				conn.maybeBind(bound)
-				assert.Equal(t, tt.interimState, bound.state())
+		t.Run("stale confirmation refreshes", func(t *testing.T) {
+			bm := newBindingManager()
+			bound := requireBinding(t, bm, netip.MustParseAddrPort("127.0.0.1:1234"))
+			confirmBindingAt(t, bound, time.Now().Add(-defaultBindingRefreshInterval-time.Minute))
+			var attempts atomic.Int32
+			conn := makeConn(&mockClient{
+				performTransaction: func(*stun.Message, bool) (TransactionResult, error) {
+					attempts.Add(1)
 
-				// Release barrier so inner bind() can move forward.
-				close(unblock)
+					return TransactionResult{Msg: new(stun.Message)}, nil
+				},
+			}, bm)
 
-				assert.Eventually(t, func() bool {
-					return bound.state() == tt.finalState
-				}, 5*time.Second, 10*time.Millisecond)
-			})
-		}
+			conn.maybeBind(bound)
+			assert.Eventually(t, func() bool { return attempts.Load() == 1 }, 5*time.Second, 10*time.Millisecond)
+		})
 	})
 
 	t.Run("bind()", func(t *testing.T) {
@@ -582,10 +582,14 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 			},
 		}, bm)
 
-		err := conn.bindChannel(bound, bindingStateIdle)
+		token, class, started := bound.beginAttempt(time.Now(), defaultBindingRefreshInterval)
+		require.True(t, started)
+		err := conn.bindChannel(bound, token, class)
 		assert.ErrorIs(t, err, errTryAgain)
 		assert.Equal(t, int32(maxRetryAttempts), attempts.Load())
-		assert.Equal(t, bindingStateFailed, bound.state())
+		final, readinessErr := bound.preparationAccess(time.Now())
+		assert.True(t, final)
+		assert.ErrorIs(t, readinessErr, errTryAgain)
 		var turnErr *stun.TurnError
 		assert.False(t, errors.As(err, &turnErr), "438 retry exhaustion must not become a typed TURN error")
 	})
@@ -608,12 +612,20 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 
 		conn.maybeBind(bound)
 		assert.Eventually(t, func() bool {
-			return bound.state() == bindingStateUnknown
+			bound.muBind.Lock()
+			defer bound.muBind.Unlock()
+
+			return bound.attempt == nil
 		}, 5*time.Second, 10*time.Millisecond)
+		final, err := bound.preparationAccess(time.Now())
+		assert.False(t, final)
+		assert.NoError(t, err)
 
 		conn.maybeBind(bound)
 		assert.Eventually(t, func() bool {
-			return bound.state() == bindingStateReady
+			final, err = bound.preparationAccess(time.Now())
+
+			return final && err == nil
 		}, 5*time.Second, 10*time.Millisecond)
 
 		b2, ok := bm.findByAddr(bound.addr)
@@ -675,7 +687,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		conn.maybeBind(bound)
 
 		assert.Eventually(t, func() bool {
-			return bound.state() == bindingStateFailed && conn.isClosed()
+			return conn.isClosed()
 		}, 5*time.Second, 10*time.Millisecond)
 
 		select {
@@ -757,12 +769,15 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 
 		conn.maybeBind(bound)
 		assert.Eventually(t, func() bool {
-			return bound.state() == bindingStateUnknown
+			bound.muBind.Lock()
+			defer bound.muBind.Unlock()
+
+			return bound.attempt == nil
 		}, 5*time.Second, 10*time.Millisecond)
 
 		conn.maybeBind(bound)
 		assert.Eventually(t, func() bool {
-			return bound.state() == bindingStateFailed && conn.isClosed()
+			return conn.isClosed()
 		}, 5*time.Second, 10*time.Millisecond)
 		assert.Equal(t, int32(2), channelBindAttempts.Load())
 
@@ -815,19 +830,29 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 
 		bound := requireBinding(t, conn.bindingMgr, peerAddr)
 		staleRefreshedAt := time.Now().Add(-(defaultBindingRefreshInterval + time.Minute))
-		bound.setState(bindingStateReady)
-		bound.setRefreshedAt(staleRefreshedAt)
+		confirmBindingAt(t, bound, staleRefreshedAt)
 
 		conn.maybeBind(bound)
 		assert.Eventually(t, func() bool {
-			return bound.state() == bindingStateReadyUnknown
+			bound.muBind.Lock()
+			defer bound.muBind.Unlock()
+
+			return bound.attempt == nil
 		}, 5*time.Second, 10*time.Millisecond)
+		final, err := bound.preparationAccess(time.Now())
+		require.True(t, final)
+		require.NoError(t, err)
 
 		conn.maybeBind(bound)
 		assert.Eventually(t, func() bool {
-			return channelBindAttempts.Load() == 2 && bound.state() == bindingStateReady
+			bound.muBind.Lock()
+			defer bound.muBind.Unlock()
+
+			return channelBindAttempts.Load() == 2 && bound.attempt == nil
 		}, 5*time.Second, 10*time.Millisecond)
-		assert.True(t, bound.refreshedAt().Equal(staleRefreshedAt))
+		_, err = bound.preparationAccess(staleRefreshedAt.Add(channelBindingLifetime))
+		assert.ErrorIs(t, err, ErrChannelBindingExpired,
+			"recovered 400 must not advance confirmation time")
 		assert.False(t, conn.isClosed())
 	})
 
@@ -836,8 +861,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		bound := requireBinding(t, bm, netip.MustParseAddrPort("127.0.0.1:1234"))
 		staleRefreshedAt := time.Now().Add(-(defaultBindingRefreshInterval + time.Minute))
 		var channelBindAttempts atomic.Int32
-		bound.setState(bindingStateReady)
-		bound.setRefreshedAt(staleRefreshedAt)
+		confirmBindingAt(t, bound, staleRefreshedAt)
 		conn := makeConn(&mockClient{
 			performTransaction: func(msg *stun.Message, dontWait bool) (TransactionResult, error) {
 				channelBindAttempts.Add(1)
@@ -848,13 +872,13 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 
 		conn.maybeBind(bound)
 		assert.Eventually(t, func() bool {
-			return channelBindAttempts.Load() == 1 && bound.state() == bindingStateReady
+			bound.muBind.Lock()
+			defer bound.muBind.Unlock()
+
+			return channelBindAttempts.Load() == 1 && bound.attempt == nil
 		}, 5*time.Second, 10*time.Millisecond)
-		assert.True(t, bound.refreshedAt().Equal(staleRefreshedAt))
-		startState, ok := conn.startBinding(bound)
-		assert.True(t, ok, "recovered binding should remain eligible for refresh")
-		assert.Equal(t, bindingStateReady, startState)
-		assert.Equal(t, bindingStateRefresh, bound.state())
+		conn.maybeBind(bound)
+		assert.Eventually(t, func() bool { return channelBindAttempts.Load() == 2 }, 5*time.Second, 10*time.Millisecond)
 		assert.False(t, conn.isClosed())
 	})
 
@@ -877,9 +901,10 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 
 		bm := newBindingManager()
 		binding := requireBinding(t, bm, addr)
-		binding.setState(bindingStateReady)
-		binding.setRefreshedAt(time.Now())
-		binding.prepared.Store(true)
+		confirmBindingAt(t, binding, time.Now())
+		final, err := binding.preparationAccess(time.Now())
+		require.True(t, final)
+		require.NoError(t, err)
 
 		conn := UDPConn{
 			permMap:    pm,
