@@ -589,3 +589,35 @@ PR [#76](https://github.com/the-sarge/turn/pull/76) landed Track 3 Slice T3.S1 a
 **Next**
 
 - No deferred review finding survived for a follow-up issue and no untraced readiness effect remains. Post-merge closure will reconcile parent #67, tracking issue [#71](https://github.com/the-sarge/turn/issues/71), and the OmniFocus mirror; the attempt-coalescing re-audit is a post-Track-3 evidence checkpoint, not a dispatchable implementation slice.
+
+---
+
+## Allocation timing validity landed - 2026-08-19 15:26 EDT
+
+**Main:** `4417a67775a9`
+**Actor:** Codex
+
+**Summary**
+
+PR [#81](https://github.com/the-sarge/turn/pull/81) landed Track 4 Slice T4.S1 as `4417a67` and closed [#80](https://github.com/the-sarge/turn/issues/80). Public `NewClient` construction now rejects negative permission-refresh cadences and explicit cadences at or above the five-minute TURN Permission Lifetime while preserving zero-as-default and every positive cadence below five minutes.
+
+**Completed**
+
+- Added the sole public validity guard in `NewClient`, after nil-connection and canonical-server checks, with a private construction error and no duplicate validation in `NewUDPConn`.
+- Corrected the `ClientConfig.PermissionRefreshInterval` documentation to name the field and document the two-minute zero default, strict five-minute upper bound, rejection behavior, and operational-delay ceiling.
+- Added the accepted eight-row constructor table covering negative, zero, small positive, immediately below five minutes, exactly five minutes, above five minutes, and both existing-error precedence cases; preserved the existing 50-millisecond end-to-end cadence.
+- Marked T4.S1, Track 4, and the four-track architecture deepening program complete in the product PR with no successor frontier.
+
+**Decisions**
+
+- `NewClient` remains the single owner of public cadence validity; `NewUDPConn` retains only zero-to-default interpretation, and `UDPConn` retains timer execution and Allocation lifecycle. The accepted universal duration predicate, non-goals, and evidence ceiling remain in the [allocation construction timing validity plan](adr/2026-08-19-allocation-construction-timing-validity-plan.md) and [program index](adr/2026-08-19-architecture-deepening-program.md).
+
+**Validation**
+
+- Red-first execution showed that negative, exactly-five-minute, and above-five-minute rows were accepted before the guard. The focused table and existing 50-millisecond end-to-end test passed afterward, followed by `go test ./...` and `go test -race ./...`.
+- Initial RAS review `20260819T191429-d0be4a43ba7ef72c52ff16f5` produced no `Fix First` or follow-up clusters. Its two low observations—optional wording polish and private-sentinel identity coverage—were independently rejected as preference and out-of-budget verification-aid strengthening, so no verification or replacement review was required.
+- Exact-head `task preflight` certified `a4aa4f789c1f26b326212fa09027b21c5fc40d27` against base `b9d8890e5c003e15b56f75c84ffb8f197ebc9a62`, including format, vet, tests, lint, docs, race, dependency/vulnerability, Darwin/Windows build, workflow, and full-history secret gates. Post-ready hosted run [32292763340](https://github.com/the-sarge/turn/actions/runs/32292763340) passed `ci-required` on that exact head before guarded squash merge.
+
+**Next**
+
+- No implementation frontier, deferred review finding, or untraced cadence effect remains. Post-merge closure will reconcile parent [#79](https://github.com/the-sarge/turn/issues/79) and the OmniFocus program mirror.
