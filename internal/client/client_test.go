@@ -5,43 +5,89 @@ package client
 
 import (
 	"net"
+	"sync"
+	"testing"
+	"time"
 
 	"github.com/pion/stun/v3"
 )
 
-type mockClient struct {
+// testConnScript is the single internal test adapter for UDPConn's package
+// crossings. Method values read these fields at call time, so tests may
+// rescript an already-built connection without writing its private fields.
+type testConnScript struct {
 	writeTo            func(data []byte) (int, error)
 	performTransaction func(msg *stun.Message, dontWait bool) (TransactionResult, error)
 	onDeallocated      func(relayedAddr net.Addr)
+
+	writes struct {
+		sync.Mutex
+		data [][]byte
+	}
 }
 
-func (c *mockClient) WriteTo(data []byte) (int, error) {
-	if c.writeTo != nil {
-		return c.writeTo(data)
+func (s *testConnScript) WriteTo(data []byte) (int, error) {
+	s.writes.Lock()
+	s.writes.data = append(s.writes.data, append([]byte(nil), data...))
+	s.writes.Unlock()
+
+	if s.writeTo != nil {
+		return s.writeTo(data)
 	}
 
-	return 0, nil
+	return len(data), nil
 }
 
-func (c *mockClient) PerformTransaction(msg *stun.Message, dontWait bool) (TransactionResult, error) {
-	if c.performTransaction != nil {
-		return c.performTransaction(msg, dontWait)
+func (s *testConnScript) PerformTransaction(msg *stun.Message, dontWait bool) (TransactionResult, error) {
+	if s.performTransaction != nil {
+		return s.performTransaction(msg, dontWait)
 	}
 
 	return TransactionResult{}, errFake
 }
 
-func (c *mockClient) OnDeallocated(relayedAddr net.Addr) {
-	if c.onDeallocated != nil {
-		c.onDeallocated(relayedAddr)
+func (s *testConnScript) OnDeallocated(relayedAddr net.Addr) {
+	if s.onDeallocated != nil {
+		s.onDeallocated(relayedAddr)
 	}
 }
 
-// configure installs the mock's package-crossing operations on conn. The
-// method values dispatch through the mock's fields at call time, so a test
-// may rescript the mock after the allocation is built.
-func (c *mockClient) configure(conn *UDPConn) {
-	conn.writeTo = c.WriteTo
-	conn.performTransaction = c.PerformTransaction
-	conn.onDeallocated = c.OnDeallocated
+func (s *testConnScript) writeCount() int {
+	s.writes.Lock()
+	defer s.writes.Unlock()
+
+	return len(s.writes.data)
+}
+
+func (s *testConnScript) lastWrite() []byte {
+	s.writes.Lock()
+	defer s.writes.Unlock()
+
+	if len(s.writes.data) == 0 {
+		return nil
+	}
+
+	return s.writes.data[len(s.writes.data)-1]
+}
+
+func testAllocationConfig(script *testConnScript) *AllocationConfig {
+	return &AllocationConfig{
+		WriteTo:            script.WriteTo,
+		PerformTransaction: script.PerformTransaction,
+		OnDeallocated:      script.OnDeallocated,
+		RelayedAddr:        &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 54321},
+		Username:           stun.NewUsername("user"),
+		Realm:              stun.NewRealm("realm"),
+		Integrity:          stun.NewShortTermIntegrity("pass"),
+		Nonce:              stun.NewNonce("nonce"),
+		Lifetime:           time.Hour,
+	}
+}
+
+// newTestConn builds an unstarted UDPConn through the same invariant-owning
+// constructor as production. Tests that exercise timers call start explicitly.
+func newTestConn(t *testing.T, script *testConnScript) *UDPConn {
+	t.Helper()
+
+	return newUDPConn(testAllocationConfig(script), func() {})
 }

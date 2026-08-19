@@ -49,25 +49,52 @@ func (e *timeoutError) Timeout() bool {
 }
 
 func TestNewUDPConnRejectsMissingAbortBeforeStartingWork(t *testing.T) {
-	mock := &mockClient{}
+	mock := &testConnScript{}
 	var conn *UDPConn
 
 	require.Panics(t, func() {
-		conn = NewUDPConn(&AllocationConfig{
-			WriteTo:            mock.WriteTo,
-			PerformTransaction: mock.PerformTransaction,
-			OnDeallocated:      mock.OnDeallocated,
-			RelayedAddr:        &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 54321},
-			Username:           stun.NewUsername("user"),
-			Realm:              stun.NewRealm("realm"),
-			Integrity:          stun.NewShortTermIntegrity("pass"),
-			Nonce:              stun.NewNonce("nonce"),
-			Lifetime:           time.Hour,
-		}, nil)
+		conn = NewUDPConn(testAllocationConfig(mock), nil)
 	})
 	if conn != nil {
 		_ = conn.Close()
 	}
+}
+
+func TestNewUDPConnBuildsUnstartedAndClosesOnce(t *testing.T) {
+	var releases atomic.Int32
+	mock := &testConnScript{
+		performTransaction: func(msg *stun.Message, dontWait bool) (TransactionResult, error) {
+			if msg.Type.Method == stun.MethodRefresh && dontWait {
+				releases.Add(1)
+			}
+
+			return TransactionResult{}, nil
+		},
+	}
+	conn := newTestConn(t, mock)
+
+	assert.False(t, conn.refreshAllocTimer.IsRunning())
+	assert.False(t, conn.refreshPermsTimer.IsRunning())
+	assert.False(t, conn.checkBindingsTimer.IsRunning())
+	require.NoError(t, conn.Close())
+	assert.Equal(t, int32(1), releases.Load())
+	assert.False(t, conn.refreshAllocTimer.IsRunning())
+	assert.False(t, conn.refreshPermsTimer.IsRunning())
+	assert.False(t, conn.checkBindingsTimer.IsRunning())
+}
+
+func TestNewUDPConnStartsTimers(t *testing.T) {
+	mock := &testConnScript{
+		performTransaction: func(*stun.Message, bool) (TransactionResult, error) {
+			return TransactionResult{}, nil
+		},
+	}
+	conn := NewUDPConn(testAllocationConfig(mock), func() {})
+	t.Cleanup(func() { _ = conn.Close() })
+
+	assert.True(t, conn.refreshAllocTimer.IsRunning())
+	assert.True(t, conn.refreshPermsTimer.IsRunning())
+	assert.True(t, conn.checkBindingsTimer.IsRunning())
 }
 
 func TestUDPConnHandleDataIndicationOwnsQueuedPayload(t *testing.T) {
@@ -129,24 +156,11 @@ func TestUDPConnHandleChannelDataDeliversAssignedUnpreparedBinding(t *testing.T)
 func newInboundDeliveryConn(t *testing.T) *UDPConn {
 	t.Helper()
 
-	conn := NewUDPConn(&AllocationConfig{
-		WriteTo: func(data []byte) (int, error) {
-			return len(data), nil
-		},
-		PerformTransaction: func(*stun.Message, bool) (TransactionResult, error) {
+	return newTestConn(t, &testConnScript{
+		performTransaction: func(*stun.Message, bool) (TransactionResult, error) {
 			return TransactionResult{}, nil
 		},
-		OnDeallocated: func(net.Addr) {},
-		RelayedAddr:   &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 54321},
-		Username:      stun.NewUsername("user"),
-		Realm:         stun.NewRealm("realm"),
-		Integrity:     stun.NewShortTermIntegrity("pass"),
-		Nonce:         stun.NewNonce("nonce"),
-		Lifetime:      time.Hour,
-	}, func() {})
-	t.Cleanup(func() { _ = conn.Close() })
-
-	return conn
+	})
 }
 
 func TestUDPConnDecodedDeliveryQueueAndSealDispositions(t *testing.T) {
@@ -213,11 +227,11 @@ func assertRequestShape(
 }
 
 func TestRefreshAllocationPreservesRequestAndRetriesStaleNonce(t *testing.T) {
-	const lifetime = 10 * time.Minute
+	const lifetime = time.Hour
 	username := stun.NewUsername("user")
 	realm := stun.NewRealm("realm")
 	integrity := stun.NewShortTermIntegrity("pass")
-	oldNonce := stun.NewNonce("old-nonce")
+	oldNonce := stun.NewNonce("nonce")
 	freshNonce := stun.NewNonce("fresh-nonce")
 
 	for _, tt := range []struct {
@@ -230,7 +244,7 @@ func TestRefreshAllocationPreservesRequestAndRetriesStaleNonce(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			calls := 0
-			mock := &mockClient{
+			script := &testConnScript{
 				performTransaction: func(msg *stun.Message, dontWait bool) (TransactionResult, error) {
 					calls++
 					assert.False(t, dontWait)
@@ -268,14 +282,7 @@ func TestRefreshAllocationPreservesRequestAndRetriesStaleNonce(t *testing.T) {
 					)}, nil
 				},
 			}
-			conn := UDPConn{
-				username:  username,
-				realm:     realm,
-				integrity: integrity,
-				_nonce:    oldNonce,
-				_lifetime: lifetime,
-			}
-			mock.configure(&conn)
+			conn := newTestConn(t, script)
 
 			conn.refreshAllocationWithRetries()
 
@@ -297,10 +304,8 @@ func TestPermissionAndBindingRequestShapes(t *testing.T) {
 	nonce := stun.NewNonce("nonce")
 	peerA := netip.MustParseAddrPort("192.0.2.1:5000")
 	peerB := netip.MustParseAddrPort("192.0.2.2:6000")
-	bindingMgr := newBindingManager()
-	bound := requireBinding(t, bindingMgr, peerA)
-
-	mock := &mockClient{
+	var bound *binding
+	script := &testConnScript{
 		performTransaction: func(msg *stun.Message, dontWait bool) (TransactionResult, error) {
 			assert.False(t, dontWait)
 			switch msg.Type.Method {
@@ -355,28 +360,16 @@ func TestPermissionAndBindingRequestShapes(t *testing.T) {
 			}
 		},
 	}
-	conn := UDPConn{
-		username:   username,
-		realm:      realm,
-		integrity:  integrity,
-		_nonce:     nonce,
-		bindingMgr: bindingMgr,
-	}
-	mock.configure(&conn)
+	conn := newTestConn(t, script)
+	bound = requireBinding(t, conn.bindingMgr, peerA)
 
 	require.NoError(t, conn.CreatePermissions(peerA, peerB))
 	require.NoError(t, conn.bind(bound))
 }
 
 func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
-	makeConn := func(client *mockClient, bm *bindingManager) *UDPConn {
-		conn := UDPConn{
-			bindingMgr:             bm,
-			bindingRefreshInterval: defaultBindingRefreshInterval,
-		}
-		client.configure(&conn)
-
-		return &conn
+	makeConn := func(script *testConnScript) *UDPConn {
+		return newTestConn(t, script)
 	}
 
 	staleNonceMsg := func() *stun.Message {
@@ -396,13 +389,12 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 
 	t.Run("maybeBind()", func(t *testing.T) {
 		t.Run("fresh success becomes preparable", func(t *testing.T) {
-			bm := newBindingManager()
-			bound := requireBinding(t, bm, netip.MustParseAddrPort("127.0.0.1:1234"))
-			conn := makeConn(&mockClient{
+			conn := makeConn(&testConnScript{
 				performTransaction: func(*stun.Message, bool) (TransactionResult, error) {
 					return TransactionResult{Msg: new(stun.Message)}, nil
 				},
-			}, bm)
+			})
+			bound := requireBinding(t, conn.bindingMgr, netip.MustParseAddrPort("127.0.0.1:1234"))
 
 			conn.maybeBind(bound)
 			assert.Eventually(t, func() bool {
@@ -417,34 +409,32 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		})
 
 		t.Run("recent confirmation does not refresh", func(t *testing.T) {
-			bm := newBindingManager()
-			bound := requireBinding(t, bm, netip.MustParseAddrPort("127.0.0.1:1234"))
-			confirmBindingAt(t, bound, time.Now())
 			var attempts atomic.Int32
-			conn := makeConn(&mockClient{
+			conn := makeConn(&testConnScript{
 				performTransaction: func(*stun.Message, bool) (TransactionResult, error) {
 					attempts.Add(1)
 
 					return TransactionResult{Msg: new(stun.Message)}, nil
 				},
-			}, bm)
+			})
+			bound := requireBinding(t, conn.bindingMgr, netip.MustParseAddrPort("127.0.0.1:1234"))
+			confirmBindingAt(t, bound, time.Now())
 
 			conn.maybeBind(bound)
 			assert.Equal(t, int32(0), attempts.Load())
 		})
 
 		t.Run("stale confirmation refreshes", func(t *testing.T) {
-			bm := newBindingManager()
-			bound := requireBinding(t, bm, netip.MustParseAddrPort("127.0.0.1:1234"))
-			confirmBindingAt(t, bound, time.Now().Add(-defaultBindingRefreshInterval-time.Minute))
 			var attempts atomic.Int32
-			conn := makeConn(&mockClient{
+			conn := makeConn(&testConnScript{
 				performTransaction: func(*stun.Message, bool) (TransactionResult, error) {
 					attempts.Add(1)
 
 					return TransactionResult{Msg: new(stun.Message)}, nil
 				},
-			}, bm)
+			})
+			bound := requireBinding(t, conn.bindingMgr, netip.MustParseAddrPort("127.0.0.1:1234"))
+			confirmBindingAt(t, bound, time.Now().Add(-defaultBindingRefreshInterval-time.Minute))
 
 			conn.maybeBind(bound)
 			assert.Eventually(t, func() bool { return attempts.Load() == 1 }, 5*time.Second, 10*time.Millisecond)
@@ -523,9 +513,8 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
-				bm := newBindingManager()
-				bound := requireBinding(t, bm, netip.MustParseAddrPort("127.0.0.1:1234"))
-				conn := makeConn(&mockClient{performTransaction: tt.transactionFn}, bm)
+				conn := makeConn(&testConnScript{performTransaction: tt.transactionFn})
+				bound := requireBinding(t, conn.bindingMgr, netip.MustParseAddrPort("127.0.0.1:1234"))
 
 				nonceT0 := conn.nonce()
 
@@ -548,14 +537,14 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 				}
 
 				if tt.expectBindingDeleted {
-					assert.Empty(t, bm.chanMap)
-					assert.Empty(t, bm.addrMap)
+					assert.Empty(t, conn.bindingMgr.chanMap)
+					assert.Empty(t, conn.bindingMgr.addrMap)
 				} else {
 					// Binding should remain so we don't re-bind the same peer with a different channel number
 					// after a lost/failed ChannelBind transaction.
-					assert.NotEmpty(t, bm.chanMap)
-					assert.NotEmpty(t, bm.addrMap)
-					b2, ok := bm.findByAddr(bound.addr)
+					assert.NotEmpty(t, conn.bindingMgr.chanMap)
+					assert.NotEmpty(t, conn.bindingMgr.addrMap)
+					b2, ok := conn.bindingMgr.findByAddr(bound.addr)
 					assert.True(t, ok)
 					assert.Equal(t, bound.number, b2.number)
 				}
@@ -572,16 +561,15 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 	})
 
 	t.Run("bindChannel exhausts stale nonce retries without a typed TURN error", func(t *testing.T) {
-		bm := newBindingManager()
-		bound := requireBinding(t, bm, netip.MustParseAddrPort("127.0.0.1:1234"))
 		var attempts atomic.Int32
-		conn := makeConn(&mockClient{
+		conn := makeConn(&testConnScript{
 			performTransaction: func(*stun.Message, bool) (TransactionResult, error) {
 				attempts.Add(1)
 
 				return TransactionResult{Msg: staleNonceMsg()}, nil
 			},
-		}, bm)
+		})
+		bound := requireBinding(t, conn.bindingMgr, netip.MustParseAddrPort("127.0.0.1:1234"))
 
 		token, class, started := bound.beginAttempt(time.Now(), defaultBindingRefreshInterval)
 		require.True(t, started)
@@ -598,10 +586,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 	t.Run("maybeBind() retries unknown binding after transaction failure", func(t *testing.T) {
 		var failed atomic.Bool
 
-		bm := newBindingManager()
-		bound := requireBinding(t, bm, netip.MustParseAddrPort("127.0.0.1:1234"))
-		originalCh := bound.number
-		conn := makeConn(&mockClient{
+		conn := makeConn(&testConnScript{
 			performTransaction: func(msg *stun.Message, dontWait bool) (TransactionResult, error) {
 				if failed.CompareAndSwap(false, true) {
 					return TransactionResult{}, errFake
@@ -609,7 +594,9 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 
 				return TransactionResult{Msg: new(stun.Message)}, nil
 			},
-		}, bm)
+		})
+		bound := requireBinding(t, conn.bindingMgr, netip.MustParseAddrPort("127.0.0.1:1234"))
+		originalCh := bound.number
 
 		conn.maybeBind(bound)
 		assert.Eventually(t, func() bool {
@@ -629,7 +616,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 			return final && err == nil
 		}, 5*time.Second, 10*time.Millisecond)
 
-		b2, ok := bm.findByAddr(bound.addr)
+		b2, ok := conn.bindingMgr.findByAddr(bound.addr)
 		assert.True(t, ok)
 		assert.Equal(t, originalCh, b2.number)
 	})
@@ -642,7 +629,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		refreshDontWaitCh := make(chan bool, 1)
 		refreshErrCh := make(chan error, 1)
 
-		client := &mockClient{
+		script := &testConnScript{
 			performTransaction: func(msg *stun.Message, dontWait bool) (TransactionResult, error) {
 				switch msg.Type.Method {
 				case stun.MethodChannelBind:
@@ -671,18 +658,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 			},
 		}
 
-		conn := NewUDPConn(&AllocationConfig{
-			WriteTo:            client.WriteTo,
-			PerformTransaction: client.PerformTransaction,
-			OnDeallocated:      client.OnDeallocated,
-			RelayedAddr:        relayedAddr,
-			Username:           stun.NewUsername("user"),
-			Realm:              stun.NewRealm("realm"),
-			Integrity:          stun.NewShortTermIntegrity("pass"),
-			Nonce:              stun.NewNonce("nonce"),
-			Lifetime:           time.Hour,
-		}, func() {})
-		defer func() { _ = conn.Close() }()
+		conn := newTestConn(t, script)
 
 		bound := requireBinding(t, conn.bindingMgr, peerAddr)
 		conn.maybeBind(bound)
@@ -734,7 +710,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		var channelBindAttempts atomic.Int32
 		deallocatedCh := make(chan net.Addr, 1)
 
-		client := &mockClient{
+		script := &testConnScript{
 			performTransaction: func(msg *stun.Message, dontWait bool) (TransactionResult, error) {
 				switch msg.Type.Method {
 				case stun.MethodChannelBind:
@@ -753,18 +729,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 				deallocatedCh <- addr
 			},
 		}
-		conn := NewUDPConn(&AllocationConfig{
-			WriteTo:            client.WriteTo,
-			PerformTransaction: client.PerformTransaction,
-			OnDeallocated:      client.OnDeallocated,
-			RelayedAddr:        relayedAddr,
-			Username:           stun.NewUsername("user"),
-			Realm:              stun.NewRealm("realm"),
-			Integrity:          stun.NewShortTermIntegrity("pass"),
-			Nonce:              stun.NewNonce("nonce"),
-			Lifetime:           time.Hour,
-		}, func() {})
-		defer func() { _ = conn.Close() }()
+		conn := newTestConn(t, script)
 
 		bound := requireBinding(t, conn.bindingMgr, peerAddr)
 
@@ -796,11 +761,10 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 	})
 
 	t.Run("ChannelBind 400 after lost ready refresh keeps saved binding", func(t *testing.T) {
-		relayedAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 54321}
 		peerAddr := netip.MustParseAddrPort("127.0.0.1:1234")
 		var channelBindAttempts atomic.Int32
 
-		client := &mockClient{
+		script := &testConnScript{
 			performTransaction: func(msg *stun.Message, dontWait bool) (TransactionResult, error) {
 				switch msg.Type.Method {
 				case stun.MethodChannelBind:
@@ -816,18 +780,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 				}
 			},
 		}
-		conn := NewUDPConn(&AllocationConfig{
-			WriteTo:            client.WriteTo,
-			PerformTransaction: client.PerformTransaction,
-			OnDeallocated:      client.OnDeallocated,
-			RelayedAddr:        relayedAddr,
-			Username:           stun.NewUsername("user"),
-			Realm:              stun.NewRealm("realm"),
-			Integrity:          stun.NewShortTermIntegrity("pass"),
-			Nonce:              stun.NewNonce("nonce"),
-			Lifetime:           time.Hour,
-		}, func() {})
-		defer func() { _ = conn.Close() }()
+		conn := newTestConn(t, script)
 
 		bound := requireBinding(t, conn.bindingMgr, peerAddr)
 		staleRefreshedAt := time.Now().Add(-(defaultBindingRefreshInterval + time.Minute))
@@ -858,18 +811,17 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 	})
 
 	t.Run("ChannelBind 400 refresh keeps saved binding", func(t *testing.T) {
-		bm := newBindingManager()
-		bound := requireBinding(t, bm, netip.MustParseAddrPort("127.0.0.1:1234"))
 		staleRefreshedAt := time.Now().Add(-(defaultBindingRefreshInterval + time.Minute))
 		var channelBindAttempts atomic.Int32
-		confirmBindingAt(t, bound, staleRefreshedAt)
-		conn := makeConn(&mockClient{
+		conn := makeConn(&testConnScript{
 			performTransaction: func(msg *stun.Message, dontWait bool) (TransactionResult, error) {
 				channelBindAttempts.Add(1)
 
 				return TransactionResult{Msg: badRequestMsg()}, nil
 			},
-		}, bm)
+		})
+		bound := requireBinding(t, conn.bindingMgr, netip.MustParseAddrPort("127.0.0.1:1234"))
+		confirmBindingAt(t, bound, staleRefreshedAt)
 
 		conn.maybeBind(bound)
 		assert.Eventually(t, func() bool {
@@ -884,7 +836,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 	})
 
 	t.Run("WriteTo()", func(t *testing.T) {
-		client := &mockClient{
+		script := &testConnScript{
 			performTransaction: func(*stun.Message, bool) (TransactionResult, error) {
 				return TransactionResult{}, errFake
 			},
@@ -895,23 +847,16 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 
 		addr := netip.MustParseAddrPort("127.0.0.1:1234")
 
-		pm := newPermissionMap()
-		assert.True(t, pm.insert(addr, &permission{
+		conn := newTestConn(t, script)
+		assert.True(t, conn.permMap.insert(addr, &permission{
 			st: permStatePermitted,
 		}))
 
-		bm := newBindingManager()
-		binding := requireBinding(t, bm, addr)
+		binding := requireBinding(t, conn.bindingMgr, addr)
 		confirmBindingAt(t, binding, time.Now())
 		final, err := binding.preparationAccess(time.Now())
 		require.True(t, final)
 		require.NoError(t, err)
-
-		conn := UDPConn{
-			permMap:    pm,
-			bindingMgr: bm,
-		}
-		client.configure(&conn)
 
 		buf := []byte("Hello")
 		n, err := conn.WriteTo(buf, addr)
@@ -921,14 +866,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 
 	t.Run("ChannelBind transaction failure retains channel number", func(t *testing.T) {
 		addr := netip.MustParseAddrPort("127.0.0.1:9999")
-		pm := newPermissionMap()
-		assert.True(t, pm.insert(addr, &permission{st: permStatePermitted}))
-
-		bm := newBindingManager()
-		bound := requireBinding(t, bm, addr)
-		originalCh := bound.number
-
-		client := &mockClient{
+		script := &testConnScript{
 			performTransaction: func(*stun.Message, bool) (TransactionResult, error) {
 				return TransactionResult{}, errFake
 			},
@@ -936,16 +874,10 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 				return len(data), nil
 			},
 		}
-
-		conn := UDPConn{
-			permMap:    pm,
-			username:   stun.NewUsername("user"),
-			realm:      stun.NewRealm("realm"),
-			integrity:  stun.NewShortTermIntegrity("pass"),
-			_nonce:     stun.NewNonce("nonce"),
-			bindingMgr: bm,
-		}
-		client.configure(&conn)
+		conn := newTestConn(t, script)
+		assert.True(t, conn.permMap.insert(addr, &permission{st: permStatePermitted}))
+		bound := requireBinding(t, conn.bindingMgr, addr)
+		originalCh := bound.number
 
 		// A failed bind attempt should not remove the binding: the same peer keeps
 		// its channel number, and a write (which fails, unprepared) does not
@@ -956,7 +888,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		_, err = conn.WriteTo([]byte("hi"), addr)
 		assert.ErrorIs(t, err, ErrNotPrepared)
 
-		b2, ok := bm.findByAddr(addr)
+		b2, ok := conn.bindingMgr.findByAddr(addr)
 		assert.True(t, ok)
 		assert.Equal(t, originalCh, b2.number)
 	})
@@ -1030,7 +962,7 @@ func TestUDPConnBindingAttemptResultOwnership(t *testing.T) {
 func TestCreatePermissions(t *testing.T) {
 	t.Run("CreatePermissions success", func(t *testing.T) {
 		called := false
-		client := &mockClient{
+		script := &testConnScript{
 			performTransaction: func(msg *stun.Message, _ bool) (TransactionResult, error) {
 				called = true
 				// Simulate a successful response
@@ -1040,13 +972,7 @@ func TestCreatePermissions(t *testing.T) {
 				return TransactionResult{Msg: res}, nil
 			},
 		}
-		conn := &UDPConn{
-			username:  stun.NewUsername("user"),
-			realm:     stun.NewRealm("realm"),
-			integrity: stun.NewShortTermIntegrity("pass"),
-			_nonce:    stun.NewNonce("nonce"),
-		}
-		client.configure(conn)
+		conn := newTestConn(t, script)
 		addr := netip.MustParseAddrPort("5.6.7.8:12345")
 		err := conn.CreatePermissions(addr)
 		assert.NoError(t, err)
@@ -1054,7 +980,7 @@ func TestCreatePermissions(t *testing.T) {
 	})
 
 	t.Run("CreatePermissions error", func(t *testing.T) {
-		client := &mockClient{
+		script := &testConnScript{
 			performTransaction: func(msg *stun.Message, _ bool) (TransactionResult, error) {
 				res := stun.New()
 				res.Type = stun.NewType(stun.MethodCreatePermission, stun.ClassErrorResponse)
@@ -1067,13 +993,7 @@ func TestCreatePermissions(t *testing.T) {
 				return TransactionResult{Msg: res}, nil
 			},
 		}
-		conn := &UDPConn{
-			username:  stun.NewUsername("user"),
-			realm:     stun.NewRealm("realm"),
-			integrity: stun.NewShortTermIntegrity("pass"),
-			_nonce:    stun.NewNonce("nonce"),
-		}
-		client.configure(conn)
+		conn := newTestConn(t, script)
 		addr := netip.MustParseAddrPort("5.6.7.8:12345")
 		err := conn.CreatePermissions(addr)
 		var turnErr *stun.TurnError

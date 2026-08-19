@@ -10,8 +10,6 @@ import (
 	"net"
 	"net/netip"
 	"reflect"
-	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -21,74 +19,6 @@ import (
 	"github.com/the-sarge/turn/v5/internal/client"
 	"github.com/the-sarge/turn/v5/internal/proto"
 )
-
-// allocHarness drives an Allocation over a UDPConn whose transactions are
-// scripted to succeed, capturing every base-socket write.
-type allocHarness struct {
-	alloc     *Allocation
-	permCount atomic.Int32
-	bindCount atomic.Int32
-	writes    struct {
-		sync.Mutex
-		data [][]byte
-	}
-}
-
-func newAllocHarness(t *testing.T) *allocHarness {
-	t.Helper()
-
-	harness := &allocHarness{}
-	conn := client.NewUDPConn(&client.AllocationConfig{
-		WriteTo: func(data []byte) (int, error) {
-			harness.writes.Lock()
-			harness.writes.data = append(harness.writes.data, append([]byte(nil), data...))
-			harness.writes.Unlock()
-
-			return len(data), nil
-		},
-		PerformTransaction: func(msg *stun.Message, _ bool) (client.TransactionResult, error) {
-			switch msg.Type.Method {
-			case stun.MethodCreatePermission:
-				harness.permCount.Add(1)
-
-				return client.TransactionResult{Msg: stun.MustBuild(
-					stun.NewType(stun.MethodCreatePermission, stun.ClassSuccessResponse),
-				)}, nil
-			case stun.MethodChannelBind:
-				harness.bindCount.Add(1)
-
-				return client.TransactionResult{Msg: stun.MustBuild(
-					stun.NewType(stun.MethodChannelBind, stun.ClassSuccessResponse),
-				)}, nil
-			default:
-				return client.TransactionResult{}, nil
-			}
-		},
-		OnDeallocated: func(net.Addr) {},
-		RelayedAddr:   &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 54321},
-		Username:      stun.NewUsername("user"),
-		Realm:         stun.NewRealm("realm"),
-		Integrity:     stun.NewShortTermIntegrity("pass"),
-		Nonce:         stun.NewNonce("nonce"),
-		Lifetime:      time.Hour,
-	}, func() {})
-	t.Cleanup(func() { _ = conn.Close() })
-
-	harness.alloc = newAllocation(conn, netip.MustParseAddrPort("127.0.0.1:54321"))
-
-	return harness
-}
-
-func (harness *allocHarness) lastWrite() []byte {
-	harness.writes.Lock()
-	defer harness.writes.Unlock()
-
-	if len(harness.writes.data) == 0 {
-		return nil
-	}
-
-	return harness.writes.data[len(harness.writes.data)-1]
-}
 
 // invalidPeers is the rejection table for the canonical netip.AddrPort peer
 // domain: every entry must fail PreparePeer and WriteTo with ErrInvalidPeer.
@@ -103,44 +33,46 @@ func invalidPeers() map[string]netip.AddrPort {
 }
 
 func TestAllocationRejectsInvalidPeers(t *testing.T) {
-	harness := newAllocHarness(t)
+	script := &scriptedAllocationScript{}
+	allocation, _ := newScriptedAllocation(t, script)
 
 	for name, peer := range invalidPeers() {
 		t.Run("PreparePeer "+name, func(t *testing.T) {
-			assert.ErrorIs(t, harness.alloc.PreparePeer(context.Background(), peer), ErrInvalidPeer)
+			assert.ErrorIs(t, allocation.PreparePeer(context.Background(), peer), ErrInvalidPeer)
 		})
 		t.Run("WriteTo "+name, func(t *testing.T) {
-			_, err := harness.alloc.WriteTo([]byte("data"), peer)
+			_, err := allocation.WriteTo([]byte("data"), peer)
 			assert.ErrorIs(t, err, ErrInvalidPeer)
 		})
 	}
 
-	assert.Equal(t, int32(0), harness.permCount.Load(), "rejected peers must not reach the permission machinery")
-	assert.Equal(t, int32(0), harness.bindCount.Load(), "rejected peers must not reach the binding machinery")
+	assert.Equal(t, int32(0), script.permissionCount.Load(), "rejected peers must not reach the permission machinery")
+	assert.Equal(t, int32(0), script.bindingCount.Load(), "rejected peers must not reach the binding machinery")
 }
 
 // TestAllocationPeerAliasCanonicalizes is the positive anchor: an IPv4-mapped
 // IPv6 spelling of a peer canonicalizes onto the same permission and channel
 // binding as the IPv4 literal, so writes after PreparePeer are ChannelData.
 func TestAllocationPeerAliasCanonicalizes(t *testing.T) {
-	harness := newAllocHarness(t)
+	script := &scriptedAllocationScript{}
+	allocation, _ := newScriptedAllocation(t, script)
 
 	mapped := netip.AddrPortFrom(
 		netip.AddrFrom16([16]byte{10: 0xff, 11: 0xff, 12: 127, 13: 0, 14: 0, 15: 1}), 1234)
 	require.True(t, mapped.Addr().Is4In6(), "test input must be the mapped spelling")
 
-	assert.NoError(t, harness.alloc.PreparePeer(context.Background(), mapped))
-	assert.Equal(t, int32(1), harness.permCount.Load())
-	assert.Equal(t, int32(1), harness.bindCount.Load())
+	assert.NoError(t, allocation.PreparePeer(context.Background(), mapped))
+	assert.Equal(t, int32(1), script.permissionCount.Load())
+	assert.Equal(t, int32(1), script.bindingCount.Load())
 
-	n, err := harness.alloc.WriteTo([]byte("hello"), netip.MustParseAddrPort("127.0.0.1:1234"))
+	n, err := allocation.WriteTo([]byte("hello"), netip.MustParseAddrPort("127.0.0.1:1234"))
 	assert.NoError(t, err)
 	assert.Equal(t, 5, n)
-	assert.True(t, proto.IsChannelData(harness.lastWrite()),
+	assert.True(t, proto.IsChannelData(script.lastWrite()),
 		"write to the unmapped spelling of a prepared mapped peer must be ChannelData")
-	assert.Equal(t, int32(1), harness.bindCount.Load(), "alias must not create a second binding")
+	assert.Equal(t, int32(1), script.bindingCount.Load(), "alias must not create a second binding")
 
-	assert.Equal(t, netip.MustParseAddrPort("127.0.0.1:54321"), harness.alloc.RelayedAddr())
+	assert.Equal(t, netip.MustParseAddrPort("127.0.0.1:54321"), allocation.RelayedAddr())
 }
 
 // scriptInvalidRelayedServer answers Allocate requests on serverSock with a

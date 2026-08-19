@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -23,7 +22,7 @@ import (
 // prepareHarness drives a NewUDPConn against a scripted mock TURN server.
 type prepareHarness struct {
 	conn       *UDPConn
-	mock       *mockClient
+	script     *testConnScript
 	peer       netip.AddrPort
 	permCount  atomic.Int32
 	bindCount  atomic.Int32
@@ -31,10 +30,6 @@ type prepareHarness struct {
 	permGate   chan struct{} // If non-nil, CreatePermission transactions block on it
 	failPerms  atomic.Bool   // If set, CreatePermission transactions return 403
 	staleNonce atomic.Bool   // If set, CreatePermission transactions return 438
-	writes     struct {
-		sync.Mutex
-		data [][]byte
-	}
 }
 
 func newPrepareHarness(t *testing.T, gateBinds bool) *prepareHarness {
@@ -47,7 +42,7 @@ func newPrepareHarness(t *testing.T, gateBinds bool) *prepareHarness {
 		harness.bindGate = make(chan struct{})
 	}
 
-	mock := &mockClient{
+	script := &testConnScript{
 		performTransaction: func(msg *stun.Message, _ bool) (TransactionResult, error) {
 			switch msg.Type.Method {
 			case stun.MethodCreatePermission:
@@ -87,48 +82,21 @@ func newPrepareHarness(t *testing.T, gateBinds bool) *prepareHarness {
 				return TransactionResult{}, errFake
 			}
 		},
-		writeTo: func(data []byte) (int, error) {
-			harness.writes.Lock()
-			harness.writes.data = append(harness.writes.data, append([]byte(nil), data...))
-			harness.writes.Unlock()
-
-			return len(data), nil
-		},
 	}
 
-	harness.mock = mock
-	harness.conn = NewUDPConn(&AllocationConfig{
-		WriteTo:            mock.WriteTo,
-		PerformTransaction: mock.PerformTransaction,
-		OnDeallocated:      mock.OnDeallocated,
-		RelayedAddr:        &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 54321},
-		Username:           stun.NewUsername("user"),
-		Realm:              stun.NewRealm("realm"),
-		Integrity:          stun.NewShortTermIntegrity("pass"),
-		Nonce:              stun.NewNonce("nonce"),
-		Lifetime:           time.Hour,
-	}, func() {})
+	harness.script = script
+	harness.conn = newTestConn(t, script)
 	t.Cleanup(func() { _ = harness.conn.Close() })
 
 	return harness
 }
 
 func (harness *prepareHarness) writeCount() int {
-	harness.writes.Lock()
-	defer harness.writes.Unlock()
-
-	return len(harness.writes.data)
+	return harness.script.writeCount()
 }
 
 func (harness *prepareHarness) lastWrite() []byte {
-	harness.writes.Lock()
-	defer harness.writes.Unlock()
-
-	if len(harness.writes.data) == 0 {
-		return nil
-	}
-
-	return harness.writes.data[len(harness.writes.data)-1]
+	return harness.script.lastWrite()
 }
 
 func fillBindingManager(t *testing.T, mgr *bindingManager) {
@@ -485,7 +453,7 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 		harness := newPrepareHarness(t, false)
 
 		// First permission succeeds, but every ChannelBind transaction fails.
-		mock := harness.mock
+		mock := harness.script
 		inner := mock.performTransaction
 		mock.performTransaction = func(msg *stun.Message, dontWait bool) (TransactionResult, error) {
 			if msg.Type.Method == stun.MethodChannelBind {
@@ -510,7 +478,7 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 	t.Run("joined bind failure is attempt-local for every waiter", func(t *testing.T) {
 		harness := newPrepareHarness(t, false)
 		gate := make(chan struct{})
-		mock := harness.mock
+		mock := harness.script
 		inner := mock.performTransaction
 		mock.performTransaction = func(msg *stun.Message, dontWait bool) (TransactionResult, error) {
 			if msg.Type.Method == stun.MethodChannelBind {
@@ -543,7 +511,7 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 	t.Run("server bind rejection surfaces typed TURN error", func(t *testing.T) {
 		harness := newPrepareHarness(t, false)
 
-		mock := harness.mock
+		mock := harness.script
 		inner := mock.performTransaction
 		mock.performTransaction = func(msg *stun.Message, dontWait bool) (TransactionResult, error) {
 			if msg.Type.Method == stun.MethodChannelBind {
