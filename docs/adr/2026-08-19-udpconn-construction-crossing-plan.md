@@ -1,7 +1,7 @@
 # UDPConn Construction and Transaction Crossing Implementation Plan
 
 **Date:** 2026-08-19
-**Status:** T1.S1 implemented by PR #96; T1.S2 accepted and not yet implemented
+**Status:** Implemented by PRs #96 and #98
 **Track:** 1 of 4 in the 2026-08-19 seam deepening program
 **Depends on:** Nothing — safe to start first; T1.S1 first is strongly recommended for T1.S2 but is not a blocker
 **Related:** [Program index](2026-08-19-seam-deepening-program.md), [Allocation lifecycle plan](2026-08-17-allocation-lifecycle-plan.md), [Transaction registry plan](2026-08-17-transaction-registry-plan.md), [Server-bound transport plan](2026-08-19-server-bound-transport-plan.md), [Allocation construction timing validity plan](2026-08-19-allocation-construction-timing-validity-plan.md)
@@ -47,7 +47,7 @@ Exact private Go spellings (`newUDPConn`, `start`, `newTestConn`, `emitRelease`,
 | Slice | Status/disposition | Delivers | Blocked by | Removes temporary seam |
 |---|---|---|---|---|
 | T1.S1 | Complete via PR #96 | `UDPConn` built by one constructor in production and tests; `mockClient.configure` and credential-carrying struct literals gone; one scripted helper per package | None | Private-field test construction |
-| T1.S2 | New | Two named transaction crossings; `TransactionResult` and the `dontWait` flag gone; release emission has a name | None (T1.S1 first strongly recommended) | Mode flag on the crossing |
+| T1.S2 | Complete via PR #98 | Two named transaction crossings; `TransactionResult` and the `dontWait` flag gone; release emission has a name | None (T1.S1 first strongly recommended) | Mode flag on the crossing |
 
 ## Implementation Slices
 
@@ -89,6 +89,8 @@ Exact private Go spellings (`newUDPConn`, `start`, `newTestConn`, `emitRelease`,
 
 **What it delivers:** One PR replacing `PerformTransaction(msg, dontWait) (TransactionResult, error)` with `PerformTransaction(msg) (*stun.Message, error)` plus `StartTransaction(msg) error`, deleting `TransactionResult` and root `Client.performTransaction`, wiring root with registry method values, splitting `refreshAllocation(lifetime)` from `emitRelease()` inside `UDPConn`, and rephrasing the refresh-failure and close-latency tests against the named closures.
 
+**Implementation:** PR #98 is this slice's one product PR.
+
 **Existing-work disposition:** New slice.
 
 **Blocked by:** None. T1.S1 first is strongly recommended: its helpers are where the crossing closures are scripted, so the signature change lands in two helpers plus mechanical return-type edits in every scripted `performTransaction` closure (`TransactionResult` has roughly 110 references across seven test files) instead of also rewriting ten literals and `mockClient`. Not a blocker; the slice is independently green either way, and text conflicts are rebased.
@@ -122,9 +124,9 @@ Exact private Go spellings (`newUDPConn`, `start`, `newTestConn`, `emitRelease`,
 - [x] `NewUDPConn` behaves exactly as before (started timers, same intervals, same abort panic) and is the only production constructor; an unexported build step establishes every invariant without goroutines and `Close` on a built-unstarted conn is valid. Domain: the finite construction paths in this repository; owner: `newUDPConn`/`start`; guarantee: universal over that set via the negative-grep evidence in T1.S1.
 - [x] No test writes `UDPConn` private func fields after construction; `mockClient` and `configure` do not exist; `UDPConn{` literals exist only at the six retained controlled-linearization/queue sites named in the T1.S1 PR.
 - [x] One scripted internal constructor and one root `newScriptedAllocation` replace `prepareHarness`'s construction, `allocHarness`, and `inboundDeliveryHarness`; `close_latency_test` keeps its own harness.
-- [ ] `AllocationConfig` exposes `PerformTransaction(msg) (*stun.Message, error)` and `StartTransaction(msg) error`; `TransactionResult`, `dontWait`, `ignoreResult`, and `Client.performTransaction` are absent; root wires registry method values.
-- [ ] The lifetime-zero release is emitted once from `startCloseLocked` via `StartTransaction`, byte-identical to today's after transaction-ID normalization, after abort and `onDeallocated`, and a failed emission is still joined into the terminal cause. Domain: the one release path; owner: `UDPConn.emitRelease`; guarantee: universal; evidence: txid-normalized byte equality plus the existing exactly-one-release and ordering tests.
-- [ ] Emitted Allocate/Refresh/CreatePermission/ChannelBind/ChannelData bytes, setter order, retransmission policy, public API, and Allocation lifecycle ownership are unchanged.
+- [x] `AllocationConfig` exposes `PerformTransaction(msg) (*stun.Message, error)` and `StartTransaction(msg) error`; `TransactionResult`, `dontWait`, `ignoreResult`, and `Client.performTransaction` are absent; root wires registry method values.
+- [x] The lifetime-zero release is emitted once from `startCloseLocked` via `StartTransaction`, byte-identical to today's after transaction-ID normalization, after abort and `onDeallocated`, and a failed emission is still joined into the terminal cause. Domain: the one release path; owner: `UDPConn.emitRelease`; guarantee: universal; evidence: txid-normalized byte equality plus the existing exactly-one-release and ordering tests.
+- [x] Emitted Allocate/Refresh/CreatePermission/ChannelBind/ChannelData bytes, setter order, retransmission policy, public API, and Allocation lifecycle ownership are unchanged.
 
 ## Validation Gates
 

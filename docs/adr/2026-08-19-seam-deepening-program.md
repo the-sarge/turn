@@ -1,6 +1,6 @@
 # TURN Seam Deepening Program — 2026-08-19
 
-**Status:** Accepted; T1.S1 implemented by PR #96; remaining slices not yet implemented
+**Status:** Accepted; Track 1 implemented by PRs #96 and #98; remaining slices not yet implemented
 
 ## What this is
 
@@ -23,12 +23,12 @@ Audit receipt: all six slices were independently slice-audited against `dad68d48
 
 | # | Track | Plan | Parent issue | Blocked by | Slices | Status |
 |---|---|---|---|---|---|---|
-| 1 | UDPConn construction and transaction crossing | [plan](2026-08-19-udpconn-construction-crossing-plan.md) | [#85](https://github.com/the-sarge/turn/issues/85) | None | 2 | FRONTIER (T1.S2); T1.S1 complete via PR #96 |
+| 1 | UDPConn construction and transaction crossing | [plan](2026-08-19-udpconn-construction-crossing-plan.md) | [#85](https://github.com/the-sarge/turn/issues/85) | None | 2 | Complete via PRs #96 and #98 |
 | 2 | Allocate admission and public error vocabulary | [plan](2026-08-19-allocate-admission-errors-plan.md) | pending | None | 2 | FRONTIER (T2.S1, T2.S2) |
 | 3 | Permission readiness | [plan](2026-08-19-permission-readiness-plan.md) | pending | None | 1 | FRONTIER (T3.S1) |
 | 4 | Allocate exchange | [plan](2026-08-19-allocate-exchange-plan.md) | pending | None | 1 | FRONTIER (T4.S1) |
 
-There are no genuine blocking edges; every remaining slice is independently green. T1.S1 landed before T1.S2 as strongly recommended, and the recommended remaining dispatch order to minimize rebases — advice, not a blocker — is T1.S2 → T2.S1 → T2.S2 → T3.S1 → T4.S1. Known file overlaps: T1 and T3 both touch `internal/client/prepare_test.go`; T1.S2 and T2.S1 both touch `AllocationConfig`; T4.S1 is root-only but shares `client.go` (`sendAllocateRequest`, `Allocate`) with T1.S2 and T2.S1. Text conflicts between independently implemented slices require rebasing, not artificial blockers. T3.S1 and T4.S1 share no files with each other. Recommended next slice: T1.S2.
+There are no genuine blocking edges; every remaining slice is independently green. T1.S1 and T1.S2 landed in the strongly recommended order, and the recommended remaining dispatch order to minimize rebases — advice, not a blocker — is T2.S1 → T2.S2 → T3.S1 → T4.S1. Known file overlaps: T1 and T3 both touch `internal/client/prepare_test.go`; T1.S2 and T2.S1 both touch `AllocationConfig`; T4.S1 is root-only but shares `client.go` (`sendAllocateRequest`, `Allocate`) with T1.S2 and T2.S1. Text conflicts between independently implemented slices require rebasing, not artificial blockers. T3.S1 and T4.S1 share no files with each other. Recommended next slice: T2.S1.
 
 ## Rules that bind every track
 
