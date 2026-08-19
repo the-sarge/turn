@@ -461,3 +461,31 @@ PR [#59](https://github.com/the-sarge/turn/pull/59) landed as `ce688e4` and clos
 **Next**
 
 - No follow-up issue was required. The architecture-deepening program frontier stays empty; wiremux adoption of `v5.2.1-gs.1` (GridSwarm/wiremux#1180) remains the only consumer step. Live view: [tracking issue #6](https://github.com/the-sarge/turn/issues/6).
+
+---
+
+## Portfolio CI standard landed - 2026-08-19 01:16 EDT
+
+**Main:** `c115b54807e2`
+**Actor:** Codex
+
+**Summary**
+
+PR [#61](https://github.com/the-sarge/turn/pull/61) standardized repository CI and squash-merged the exact reviewed head `597dd87a1880713ff6df95d64a72ba04ff5ae4cd` as `c115b54807e2464ca1533e3598ab761d2a660328`. Required pull-request CI now uses the fixed draft-gated portfolio workflow and repository-owned Taskfile routing, while deep and release validation remain non-required workflows.
+
+**Completed**
+
+- Replaced the certification-label, dispatch-SHA, status-bridge, classification-graph, and aggregate-result orchestration with one `pull_request` workflow whose `ci-required` job runs `task ci`; draft PR events start the workflow but execute no job steps.
+- Added the byte-identical portfolio classifier, retained repository checks behind `task check` and `task docs-check`, and moved scheduled/manual deep validation plus tag release validation into non-required workflows.
+- Applied active default-branch ruleset `21024823`, requiring pull requests, `ci-required` from the GitHub Actions integration, strict freshness, squash-only merging, and deletion/force-push protection.
+
+**Validation**
+
+- The repository and live-ruleset conformance audits reported no deviations. YAML parsing, actionlint, committed docs-only and source routing, Go 1.24 `task check`, bounded fuzz targets, and exact-head `task preflight` passed; preflight included race, vulnerability, cross-build, and secret checks.
+- The bounded review resolved all accepted findings, exact-head verification covered all six initial clusters, and the replacement review produced no fix-first or follow-up findings.
+- Draft run [32215127070](https://github.com/the-sarge/turn/actions/runs/32215127070) published `ci-required=skipped` with zero steps. After ready transition, run [32217828455](https://github.com/the-sarge/turn/actions/runs/32217828455) ran the source `check` path and passed `ci-required` on the exact merge head; GitHub reported the PR blocked while that check was pending and clean after success.
+- Docs-only routing was proven locally with committed clean and malformed ranges. Journal PR [#62](https://github.com/the-sarge/turn/pull/62) then supplied hosted evidence: run [32218914235](https://github.com/the-sarge/turn/actions/runs/32218914235) selected `docs-check`, did not run the source `check` path, and passed. A manufactured default-branch advance was not created, so the live-behind observation remains unforced.
+
+**Next**
+
+- Deletion of the obsolete `ci-certify` label remains a separately authorized repository cleanup step.
