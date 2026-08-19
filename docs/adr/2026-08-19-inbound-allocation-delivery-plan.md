@@ -1,12 +1,12 @@
 # Inbound Allocation Delivery Implementation Plan
 
 **Date:** 2026-08-19
-**Status:** Accepted; not yet implemented
+**Status:** Implemented by PR #74
 **Track:** 2 of 3 in the 2026-08-19 architecture deepening program
 **Depends on:** Nothing — parallel-safe with the other tracks
 **Related:** [Program index](2026-08-19-architecture-deepening-program.md), [Prepared-only writes ADR](2026-08-15-prepared-only-writes.md), [Allocation lifecycle plan](2026-08-17-allocation-lifecycle-plan.md)
 **Normative scope:** Current outcome, boundaries, invariants, acceptance evidence, blockers, and stop conditions
-**Audit history:** Independently audited against `122019cf5a040bcb7a8ba9002bd3a82e9ad947cf` on 2026-08-19; T2.S1 passed after delivery/seal linearization, ChannelData result semantics, no-live ownership, copy scope, queued-before-seal observability, deterministic evidence, and synchronization cost were closed
+**Audit history:** Independently audited against `122019cf5a040bcb7a8ba9002bd3a82e9ad947cf` on 2026-08-19; T2.S1 passed after delivery/seal linearization, ChannelData result semantics, no-live ownership, copy scope, queued-before-seal observability, deterministic evidence, and synchronization cost were closed; implementation completed by PR #74
 
 ## Goal
 
@@ -44,7 +44,7 @@ While live, both operations copy the payload before returning so caller read-buf
 
 | Slice | Status/disposition | Delivers | Blocked by | Removes temporary seam |
 |---|---|---|---|---|
-| T2.S1 | New | Decoded Data indications and ChannelData are delivered through Allocation-owned semantics | None | Removes outward channel lookup plus caller-composed lookup/queue delivery in the same slice |
+| T2.S1 | Complete via PR #74 | Decoded Data indications and ChannelData are delivered through Allocation-owned semantics | None | Removed outward channel lookup plus caller-composed lookup/queue delivery in the same slice |
 
 ## Implementation Slices
 
@@ -52,7 +52,7 @@ While live, both operations copy the payload before returning so caller read-buf
 
 **What it delivers:** One PR replacing the root `FindAddrByChannelNumber` then `HandleInbound` composition with two Allocation-owned delivery operations, consolidating live/sealed disposition, channel lookup, peer association, copy, and queue admission behind `UDPConn`, preserving root errors and wire responsibilities, and pinning the accepted post-seal silent-drop rule.
 
-**Existing-work disposition:** New slice. There are no open issues, PRs, or implementation branches to retain or rebaseline as of 2026-08-19.
+**Implementation:** PR #74 is the slice's one intended product PR; unmentioned historical branches were not used as an implementation baseline.
 
 **Blocked by:** None.
 
@@ -82,12 +82,12 @@ While live, both operations copy the payload before returning so caller read-buf
 
 ## Acceptance Criteria
 
-- [ ] Every admitted, successfully decoded Data indication and ChannelData item in the supported finite domain for which root loaded a nonnil Allocation delegates semantic delivery to `UDPConn`; root owns no-live discard, and all representation owners, the universal domain, and terminating evidence are defined in T2.S1.
-- [ ] Root `Client` no longer composes outward channel lookup with queue delivery, while it retains source admission, wire decoding, canonicalization, transaction completion, and existing unknown-channel error construction.
-- [ ] Live known channels and Data indications preserve peer labels, copy ownership, queue-full drop, short-buffer behavior, and assigned-but-unprepared inbound acceptance; only live unknown ChannelData returns the existing root error.
-- [ ] The delivery guard linearizes decoded delivery with seal: delivery ordered before seal may enqueue, while Data indication and known/unknown ChannelData ordered after seal are silently handled without additional delivery-owned copy, lookup, or queueing.
-- [ ] Seal does not drain, reorder, or close `readCh`; the unchanged `ReadFrom` select makes no guarantee which ready arm wins for pre-seal queued data after seal.
-- [ ] Public API, wire parsing, prepared-only outbound writes, binding identity, and packet-path performance policy remain unchanged.
+- [x] Every admitted, successfully decoded Data indication and ChannelData item in the supported finite domain for which root loaded a nonnil Allocation delegates semantic delivery to `UDPConn`; root owns no-live discard, and all representation owners, the universal domain, and terminating evidence are defined in T2.S1.
+- [x] Root `Client` no longer composes outward channel lookup with queue delivery, while it retains source admission, wire decoding, canonicalization, transaction completion, and existing unknown-channel error construction.
+- [x] Live known channels and Data indications preserve peer labels, copy ownership, queue-full drop, short-buffer behavior, and assigned-but-unprepared inbound acceptance; only live unknown ChannelData returns the existing root error.
+- [x] The delivery guard linearizes decoded delivery with seal: delivery ordered before seal may enqueue, while Data indication and known/unknown ChannelData ordered after seal are silently handled without additional delivery-owned copy, lookup, or queueing.
+- [x] Seal does not drain, reorder, or close `readCh`; the unchanged `ReadFrom` select makes no guarantee which ready arm wins for pre-seal queued data after seal.
+- [x] Public API, wire parsing, prepared-only outbound writes, binding identity, and packet-path performance policy remain unchanged.
 
 ## Validation Gates
 
