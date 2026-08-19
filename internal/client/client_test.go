@@ -4,7 +4,6 @@
 package client
 
 import (
-	"net"
 	"sync"
 	"testing"
 	"time"
@@ -19,7 +18,7 @@ type testConnScript struct {
 	writeTo            func(data []byte) (int, error)
 	performTransaction func(msg *stun.Message) (*stun.Message, error)
 	startTransaction   func(msg *stun.Message) error
-	onDeallocated      func(relayedAddr net.Addr)
+	onDeallocated      func()
 
 	writes struct {
 		sync.Mutex
@@ -55,9 +54,9 @@ func (s *testConnScript) StartTransaction(msg *stun.Message) error {
 	return nil
 }
 
-func (s *testConnScript) OnDeallocated(relayedAddr net.Addr) {
+func (s *testConnScript) OnDeallocated() {
 	if s.onDeallocated != nil {
-		s.onDeallocated(relayedAddr)
+		s.onDeallocated()
 	}
 }
 
@@ -85,7 +84,6 @@ func testAllocationConfig(script *testConnScript) *AllocationConfig {
 		PerformTransaction: script.PerformTransaction,
 		StartTransaction:   script.StartTransaction,
 		OnDeallocated:      script.OnDeallocated,
-		RelayedAddr:        &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 54321},
 		Username:           stun.NewUsername("user"),
 		Realm:              stun.NewRealm("realm"),
 		Integrity:          stun.NewShortTermIntegrity("pass"),

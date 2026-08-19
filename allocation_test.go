@@ -157,7 +157,7 @@ func TestAllocateRejectsInvalidRelayedAddress(t *testing.T) {
 		assert.Fail(t, "no deallocate Refresh observed for the rejected allocation")
 	}
 
-	assert.Nil(t, turnClient.relayedUDPConn(), "the client's allocation pointer must be cleared")
+	assert.Nil(t, turnClient.relayedUDPConn(), "the rejected allocation must never be published")
 }
 
 // TestDeletedSurfaceDoesNotResolve pins the negative API contract: the moved
@@ -194,4 +194,14 @@ func TestDeletedSurfaceDoesNotResolve(t *testing.T) {
 	startTransaction, ok := allocationConfig.FieldByName("StartTransaction")
 	require.True(t, ok)
 	assert.Equal(t, 1, startTransaction.Type.NumIn(), "fire-and-forget Allocation transactions accept one message")
+
+	_, ok = allocationConfig.FieldByName("RelayedAddr")
+	assert.False(t, ok, "the canonical relayed address belongs only to the root Allocation")
+
+	onDeallocated, ok := allocationConfig.FieldByName("OnDeallocated")
+	require.True(t, ok)
+	assert.Equal(t, 0, onDeallocated.Type.NumIn(), "deallocation notification carries no unused address")
+
+	_, ok = reflect.TypeFor[*client.UDPConn]().MethodByName("LocalAddr")
+	assert.False(t, ok, "UDPConn does not own or expose the relayed address")
 }

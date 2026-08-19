@@ -58,16 +58,15 @@ type UDPConn struct {
 	writeTo            func(data []byte) (int, error)
 	performTransaction func(msg *stun.Message) (*stun.Message, error)
 	startTransaction   func(msg *stun.Message) error
-	onDeallocated      func(relayedAddr net.Addr)
+	onDeallocated      func()
 	abortTransactions  func()
 
-	relayedAddr net.Addr // Read-only
-	permMap     *permissionMap
-	integrity   stun.MessageIntegrity // Read-only
-	username    stun.Username         // Read-only
-	realm       stun.Realm            // Read-only
-	_nonce      stun.Nonce            // Protected by mutex
-	_lifetime   time.Duration         // Protected by mutex
+	permMap   *permissionMap
+	integrity stun.MessageIntegrity // Read-only
+	username  stun.Username         // Read-only
+	realm     stun.Realm            // Read-only
+	_nonce    stun.Nonce            // Protected by mutex
+	_lifetime time.Duration         // Protected by mutex
 
 	refreshAllocTimer      *PeriodicTimer
 	refreshPermsTimer      *PeriodicTimer
@@ -113,7 +112,6 @@ func newUDPConn(config *AllocationConfig, abortTransactions func()) *UDPConn {
 		startTransaction:       config.StartTransaction,
 		onDeallocated:          config.OnDeallocated,
 		abortTransactions:      abortTransactions,
-		relayedAddr:            config.RelayedAddr,
 		permMap:                newPermissionMap(),
 		integrity:              config.Integrity,
 		username:               config.Username,
@@ -525,7 +523,7 @@ func (c *UDPConn) startCloseLocked(cause error) (bool, error) {
 	// wait out the retransmission budget against an unresponsive server.
 	c.abortTransactions()
 
-	c.onDeallocated(c.relayedAddr)
+	c.onDeallocated()
 
 	emitErr := c.emitRelease()
 	if cause != nil {
@@ -556,11 +554,6 @@ func (c *UDPConn) closedErrLocked() error {
 	}
 
 	return net.ErrClosed
-}
-
-// LocalAddr returns the local network address.
-func (c *UDPConn) LocalAddr() net.Addr {
-	return c.relayedAddr
 }
 
 func (c *UDPConn) isClosed() bool {

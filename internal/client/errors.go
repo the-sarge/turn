@@ -38,7 +38,6 @@ var (
 var (
 	errFake                          = errors.New("fake error")
 	errTryAgain                      = errors.New("try again")
-	errDoubleLock                    = errors.New("try-lock is already locked")
 	errTransactionClosed             = fmt.Errorf("transaction closed: %w", net.ErrClosed)
 	errTransactionAlreadyExists      = errors.New("transaction ID is already live")
 	errFailedToRetransmitTransaction = errors.New("turn: failed to retransmit transaction")

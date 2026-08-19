@@ -6,7 +6,6 @@ package client
 import (
 	"errors"
 	"fmt"
-	"net"
 	"time"
 
 	"github.com/pion/stun/v3"
@@ -21,10 +20,9 @@ type AllocationConfig struct {
 	PerformTransaction func(msg *stun.Message) (*stun.Message, error)
 	// StartTransaction starts a fire-and-forget STUN transaction against the configured server.
 	StartTransaction func(msg *stun.Message) error
-	// OnDeallocated is called once de-allocation of the relayed address is complete.
-	OnDeallocated func(relayedAddr net.Addr)
+	// OnDeallocated is called once de-allocation is complete.
+	OnDeallocated func()
 
-	RelayedAddr               net.Addr
 	Integrity                 stun.MessageIntegrity
 	Nonce                     stun.Nonce
 	Username                  stun.Username

@@ -52,16 +52,15 @@ func newSilentServerAllocation(t *testing.T) (*client.UDPConn, <-chan string) {
 
 			return cl.transactions.Start(msg)
 		},
-		OnDeallocated: func(addr net.Addr) {
+		OnDeallocated: func() {
 			closeOrder <- "deallocated"
-			cl.onDeallocated(addr)
+			cl.onDeallocated()
 		},
-		RelayedAddr: &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 54321},
-		Username:    stun.NewUsername("user"),
-		Realm:       stun.NewRealm("realm"),
-		Integrity:   stun.NewShortTermIntegrity("secret"),
-		Nonce:       stun.NewNonce("nonce"),
-		Lifetime:    time.Hour,
+		Username:  stun.NewUsername("user"),
+		Realm:     stun.NewRealm("realm"),
+		Integrity: stun.NewShortTermIntegrity("secret"),
+		Nonce:     stun.NewNonce("nonce"),
+		Lifetime:  time.Hour,
 	}
 
 	conn := client.NewUDPConn(config, func() {

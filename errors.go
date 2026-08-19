@@ -66,7 +66,6 @@ var (
 		"turn: PermissionRefreshInterval must be zero or a positive duration less than 5 minutes")
 	errNilContext                   = errors.New("turn: context must not be nil")
 	errChannelBindNotFound          = errors.New("no binding found for channel")
-	errOneAllocateOnly              = errors.New("only one Allocate() caller is allowed")
 	errUnexpectedServerDatagram     = errors.New("turn: datagram from server is neither STUN nor ChannelData")
 	errFailedToDecodeSTUN           = errors.New("failed to decode STUN message")
 	errUnexpectedSTUNRequestMessage = errors.New("unexpected STUN request message")

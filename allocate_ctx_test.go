@@ -250,6 +250,115 @@ func awaitAuthRequest(t *testing.T, cl *Client, conn *observerConn) []byte {
 	return awaitRequestAfter(t, conn, 1, transactionID(t, first))
 }
 
+type allocateResult struct {
+	alloc *Allocation
+	err   error
+}
+
+func startObservedAllocate(cl *Client, ctx context.Context) <-chan allocateResult {
+	result := make(chan allocateResult, 1)
+	go func() {
+		alloc, err := cl.Allocate(ctx)
+		result <- allocateResult{alloc: alloc, err: err}
+	}()
+
+	return result
+}
+
+func completeObservedAllocate(
+	t *testing.T,
+	cl *Client,
+	conn *observerConn,
+	firstWriteOrdinal int32,
+	result <-chan allocateResult,
+) *Allocation {
+	t.Helper()
+
+	first := awaitWrite(t, conn, firstWriteOrdinal)
+	require.NoError(t, cl.HandleInbound(unauthorizedResponse(t, first), testServerNetAddr()))
+	authenticated := awaitRequestAfter(t, conn, firstWriteOrdinal, transactionID(t, first))
+	require.NoError(t, cl.HandleInbound(allocateSuccessResponse(t, authenticated), testServerNetAddr()))
+
+	select {
+	case outcome := <-result:
+		require.NoError(t, outcome.err)
+		require.NotNil(t, outcome.alloc)
+
+		return outcome.alloc
+	case <-time.After(2 * time.Second):
+		require.Fail(t, "Allocate did not return after the success response")
+
+		return nil
+	}
+}
+
+func TestAllocateRejectsConcurrentCallerWithoutNetworkOutput(t *testing.T) {
+	conn := newObserverConn()
+	conn.blockFrom = 1
+	cl := newObservedClient(t, conn)
+
+	firstCtx, cancelFirst := context.WithCancelCause(context.Background())
+	defer cancelFirst(nil)
+	firstResult := startObservedAllocate(cl, firstCtx)
+
+	select {
+	case <-conn.blocked:
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "first Allocate write never blocked")
+	}
+
+	secondCtx, cancelSecond := context.WithTimeout(context.Background(), time.Second)
+	defer cancelSecond()
+	secondResult := startObservedAllocate(cl, secondCtx)
+	select {
+	case outcome := <-secondResult:
+		assert.Nil(t, outcome.alloc)
+		assert.Equal(t, ErrAlreadyAllocated, outcome.err)
+	case <-time.After(2 * time.Second):
+		require.Fail(t, "concurrent Allocate did not reject promptly")
+	}
+	assert.Equal(t, int32(1), conn.writeCount.Load(), "rejected concurrent Allocate must not write")
+
+	cause := errors.New("finish first Allocate") //nolint:err113 // test-local cause
+	cancelFirst(cause)
+	close(conn.gate)
+	select {
+	case outcome := <-firstResult:
+		assert.Nil(t, outcome.alloc)
+		assert.ErrorIs(t, outcome.err, cause)
+	case <-time.After(2 * time.Second):
+		require.Fail(t, "first Allocate did not return after cancellation")
+	}
+	require.Eventually(t, func() bool {
+		return conn.write(0) != nil
+	}, time.Second, 5*time.Millisecond, "released first write did not finish recording")
+
+	writesBeforeRetry := conn.writeCount.Load()
+	retryResult := startObservedAllocate(cl, context.Background())
+	retry := completeObservedAllocate(t, cl, conn, writesBeforeRetry+1, retryResult)
+	require.NoError(t, retry.Close())
+}
+
+func TestAllocateRejectsLiveAllocationAndAllowsAllocateAfterClose(t *testing.T) {
+	conn := newObserverConn()
+	cl := newObservedClient(t, conn)
+
+	firstResult := startObservedAllocate(cl, context.Background())
+	first := completeObservedAllocate(t, cl, conn, 1, firstResult)
+
+	writesBeforeReject := conn.writeCount.Load()
+	rejected, err := cl.Allocate(context.Background())
+	assert.Nil(t, rejected)
+	assert.Equal(t, ErrAlreadyAllocated, err)
+	assert.Equal(t, writesBeforeReject, conn.writeCount.Load(), "rejected live Allocate must not write")
+
+	require.NoError(t, first.Close())
+	writesBeforeRetry := conn.writeCount.Load()
+	retryResult := startObservedAllocate(cl, context.Background())
+	retry := completeObservedAllocate(t, cl, conn, writesBeforeRetry+1, retryResult)
+	require.NoError(t, retry.Close())
+}
+
 func TestAllocateTargetsConfiguredServer(t *testing.T) {
 	conn := newObserverConn()
 	cl := newObservedClient(t, conn)
@@ -530,6 +639,11 @@ func TestAllocateCancelVsClientClose(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		assert.Fail(t, "Allocate did not return after Client.Close")
 	}
+
+	writesBeforeRetry := conn.writeCount.Load()
+	retryResult := startObservedAllocate(cl, context.Background())
+	retry := completeObservedAllocate(t, cl, conn, writesBeforeRetry+1, retryResult)
+	require.NoError(t, retry.Close())
 }
 
 func TestAllocateLateSuccessDiscarded(t *testing.T) {
