@@ -47,7 +47,7 @@ func newPrepareHarness(t *testing.T, gateBinds bool) *prepareHarness {
 	}
 
 	mock := &mockClient{
-		performTransaction: func(msg *stun.Message, _ net.Addr, _ bool) (TransactionResult, error) {
+		performTransaction: func(msg *stun.Message, _ bool) (TransactionResult, error) {
 			switch msg.Type.Method {
 			case stun.MethodCreatePermission:
 				harness.permCount.Add(1)
@@ -86,7 +86,7 @@ func newPrepareHarness(t *testing.T, gateBinds bool) *prepareHarness {
 				return TransactionResult{}, errFake
 			}
 		},
-		writeTo: func(data []byte, _ net.Addr) (int, error) {
+		writeTo: func(data []byte) (int, error) {
 			harness.writes.Lock()
 			harness.writes.data = append(harness.writes.data, append([]byte(nil), data...))
 			harness.writes.Unlock()
@@ -101,7 +101,6 @@ func newPrepareHarness(t *testing.T, gateBinds bool) *prepareHarness {
 		PerformTransaction: mock.PerformTransaction,
 		OnDeallocated:      mock.OnDeallocated,
 		RelayedAddr:        &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 54321},
-		ServerAddr:         &net.UDPAddr{IP: net.ParseIP("10.0.0.1"), Port: 3478},
 		Username:           stun.NewUsername("user"),
 		Realm:              stun.NewRealm("realm"),
 		Integrity:          stun.NewShortTermIntegrity("pass"),
@@ -455,14 +454,14 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 		// First permission succeeds, but every ChannelBind transaction fails.
 		mock := harness.mock
 		inner := mock.performTransaction
-		mock.performTransaction = func(msg *stun.Message, to net.Addr, dontWait bool) (TransactionResult, error) {
+		mock.performTransaction = func(msg *stun.Message, dontWait bool) (TransactionResult, error) {
 			if msg.Type.Method == stun.MethodChannelBind {
 				harness.bindCount.Add(1)
 
 				return TransactionResult{}, errFake
 			}
 
-			return inner(msg, to, dontWait)
+			return inner(msg, dontWait)
 		}
 
 		err := harness.conn.PreparePeer(context.Background(), harness.peer)
@@ -475,7 +474,7 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 
 		mock := harness.mock
 		inner := mock.performTransaction
-		mock.performTransaction = func(msg *stun.Message, to net.Addr, dontWait bool) (TransactionResult, error) {
+		mock.performTransaction = func(msg *stun.Message, dontWait bool) (TransactionResult, error) {
 			if msg.Type.Method == stun.MethodChannelBind {
 				harness.bindCount.Add(1)
 
@@ -485,7 +484,7 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 				)}, nil
 			}
 
-			return inner(msg, to, dontWait)
+			return inner(msg, dontWait)
 		}
 
 		err := harness.conn.PreparePeer(context.Background(), harness.peer)

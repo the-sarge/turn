@@ -35,8 +35,9 @@ type observerConn struct {
 	gate          chan struct{} // Closed to release blocked writes
 	blocked       chan struct{} // Signaled once a write is blocked on the gate
 
-	mu     sync.Mutex
-	writes [][]byte
+	mu           sync.Mutex
+	writes       [][]byte
+	destinations []string
 }
 
 func newObserverConn() *observerConn {
@@ -46,7 +47,7 @@ func newObserverConn() *observerConn {
 	}
 }
 
-func (o *observerConn) WriteTo(p []byte, _ net.Addr) (int, error) {
+func (o *observerConn) WriteTo(p []byte, to net.Addr) (int, error) {
 	n := o.writeCount.Add(1)
 	if o.blockFrom > 0 && n >= o.blockFrom {
 		o.blocked <- struct{}{}
@@ -54,9 +55,20 @@ func (o *observerConn) WriteTo(p []byte, _ net.Addr) (int, error) {
 	}
 	o.mu.Lock()
 	o.writes = append(o.writes, append([]byte(nil), p...))
+	o.destinations = append(o.destinations, to.String())
 	o.mu.Unlock()
 
 	return len(p), nil
+}
+
+func (o *observerConn) destination(i int) string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if i >= len(o.destinations) {
+		return ""
+	}
+
+	return o.destinations[i]
 }
 
 func (o *observerConn) write(i int) []byte {
@@ -236,6 +248,39 @@ func awaitAuthRequest(t *testing.T, cl *Client, conn *observerConn) []byte {
 	require.NoError(t, cl.HandleInbound(unauthorizedResponse(t, first), testServerNetAddr()))
 
 	return awaitRequestAfter(t, conn, 1, transactionID(t, first))
+}
+
+func TestAllocateTargetsConfiguredServer(t *testing.T) {
+	conn := newObserverConn()
+	cl := newObservedClient(t, conn)
+
+	type outcome struct {
+		allocation *Allocation
+		err        error
+	}
+	resultCh := make(chan outcome, 1)
+	go func() {
+		allocation, err := cl.Allocate(context.Background())
+		resultCh <- outcome{allocation: allocation, err: err}
+	}()
+
+	first := awaitWrite(t, conn, 1)
+	require.NoError(t, cl.HandleInbound(unauthorizedResponse(t, first), testServerNetAddr()))
+	authenticated := awaitRequestAfter(t, conn, 1, transactionID(t, first))
+	require.NoError(t, cl.HandleInbound(allocateSuccessResponse(t, authenticated), testServerNetAddr()))
+
+	select {
+	case result := <-resultCh:
+		require.NoError(t, result.err)
+		require.NotNil(t, result.allocation)
+		t.Cleanup(func() { _ = result.allocation.Close() })
+	case <-time.After(time.Second):
+		require.Fail(t, "Allocate did not return after the success response")
+	}
+
+	want := testServerNetAddr().String()
+	assert.Equal(t, want, conn.destination(0), "anonymous Allocate destination")
+	assert.Equal(t, want, conn.destination(1), "authenticated Allocate destination")
 }
 
 func TestAllocateContext(t *testing.T) {

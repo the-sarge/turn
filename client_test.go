@@ -84,7 +84,7 @@ func TestHandleInboundAdmitsOnlyServer(t *testing.T) {
 
 		waited := make(chan client.TransactionResult, 1)
 		go func() {
-			result, _ := c.performTransaction(req, c.serverAddr, false)
+			result, _ := c.performTransaction(req, false)
 			waited <- result
 		}()
 		awaitWrite(t, conn, 1)
@@ -168,7 +168,7 @@ func TestClientCloseIsAnAbortCutNotATerminalState(t *testing.T) {
 	}
 	resultCh := make(chan outcome, 1)
 	go func() {
-		result, err := cl.performTransaction(request, cl.serverAddr, false)
+		result, err := cl.performTransaction(request, false)
 		resultCh <- outcome{result: result, err: err}
 	}()
 	awaitWrite(t, conn, 1)
@@ -191,7 +191,7 @@ func TestClientCloseWinsBlockedInitialSendWithoutRearm(t *testing.T) {
 
 	resultCh := make(chan error, 1)
 	go func() {
-		_, err := cl.performTransaction(request, cl.serverAddr, false)
+		_, err := cl.performTransaction(request, false)
 		resultCh <- err
 	}()
 	select {

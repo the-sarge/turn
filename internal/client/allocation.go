@@ -15,15 +15,14 @@ import (
 
 // AllocationConfig is a set of configuration params used by NewUDPConn.
 type AllocationConfig struct {
-	// WriteTo sends data to the given destination on the client's base socket.
-	WriteTo func(data []byte, to net.Addr) (int, error)
-	// PerformTransaction runs a STUN transaction against the given destination.
-	PerformTransaction func(msg *stun.Message, to net.Addr, dontWait bool) (TransactionResult, error)
+	// WriteTo sends data to the configured server on the client's base socket.
+	WriteTo func(data []byte) (int, error)
+	// PerformTransaction runs a STUN transaction against the configured server.
+	PerformTransaction func(msg *stun.Message, dontWait bool) (TransactionResult, error)
 	// OnDeallocated is called once de-allocation of the relayed address is complete.
 	OnDeallocated func(relayedAddr net.Addr)
 
 	RelayedAddr               net.Addr
-	ServerAddr                net.Addr
 	Integrity                 stun.MessageIntegrity
 	Nonce                     stun.Nonce
 	Username                  stun.Username
@@ -59,7 +58,7 @@ func (c *UDPConn) refreshAllocation(lifetime time.Duration, dontWait bool) error
 		return fmt.Errorf("%w: %w", errFailedToBuildRefreshRequest, err)
 	}
 
-	trRes, err := c.performTransaction(msg, c.serverAddr, dontWait)
+	trRes, err := c.performTransaction(msg, dontWait)
 	if err != nil {
 		return fmt.Errorf("%w: %w", errFailedToRefreshAllocation, err)
 	}

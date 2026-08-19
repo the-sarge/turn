@@ -1,12 +1,12 @@
 # Server-Bound Outbound Transport Implementation Plan
 
 **Date:** 2026-08-19
-**Status:** Accepted; not yet implemented
+**Status:** Implemented by PR #72
 **Track:** 1 of 3 in the 2026-08-19 architecture deepening program
 **Depends on:** Nothing — safe to start first
 **Related:** [Program index](2026-08-19-architecture-deepening-program.md), [Transaction registry plan](2026-08-17-transaction-registry-plan.md), [Allocation lifecycle plan](2026-08-17-allocation-lifecycle-plan.md)
 **Normative scope:** Current outcome, boundaries, invariants, acceptance evidence, blockers, and stop conditions
-**Audit history:** Independently audited against `122019cf5a040bcb7a8ba9002bd3a82e9ad947cf` on 2026-08-19; T1.S1 passed after its exact interface, construction boundary, characterization strategy, source-domain representation, performance ceiling, and evidence budget were closed
+**Audit history:** Independently audited against `122019cf5a040bcb7a8ba9002bd3a82e9ad947cf` on 2026-08-19; T1.S1 passed after its exact interface, construction boundary, characterization strategy, source-domain representation, performance ceiling, and evidence budget were closed; implementation completed by PR #72
 
 ## Goal
 
@@ -44,7 +44,7 @@ The same slice performs only constructor signature changes forced by removing de
 
 | Slice | Status/disposition | Delivers | Blocked by | Removes temporary seam |
 |---|---|---|---|---|
-| T1.S1 | New | Every production outbound send is structurally bound to the configured TURN server | None | Removes destination parameters and storage from the registry and Allocation seam in the same slice |
+| T1.S1 | Complete via PR #72 | Every production outbound send is structurally bound to the configured TURN server | None | Removed destination parameters and storage from the registry and Allocation seam in the same slice |
 
 ## Implementation Slices
 
@@ -52,7 +52,7 @@ The same slice performs only constructor signature changes forced by removing de
 
 **What it delivers:** One PR that binds the registry sender to root `Client.serverAddr`, removes destination fields and parameters from transaction operations, removes `ServerAddr` and arbitrary-destination callbacks from Allocation construction and `UDPConn`, adapts Refresh/CreatePermission/ChannelBind/release to the bound transaction capability, adapts ChannelData to the bound raw-send capability, and preserves every current outbound behavior through the real Client and Allocation seams.
 
-**Existing-work disposition:** New slice. There are no open issues, PRs, or implementation branches to retain or rebaseline as of 2026-08-19.
+**Implementation:** PR #72 is the slice's one intended product PR; unmentioned historical branches were not used as an implementation baseline.
 
 **Blocked by:** None.
 
@@ -82,11 +82,11 @@ The same slice performs only constructor signature changes forced by removing de
 
 ## Acceptance Criteria
 
-- [ ] Every outbound datagram in the supported retained UDP Client domain targets the one canonical server configured at `NewClient`; representation owner, universal domain, and finite evidence are defined in T1.S1.
-- [ ] No transaction entry or internal Allocation operation in the bounded compiled production send graph stores, accepts, or selects a destination; root `Client` alone adapts the server to the caller-owned socket. The compiled source/diff and recorded census own this universal structural guarantee.
-- [ ] Allocate, Refresh, CreatePermission, ChannelBind, lifetime-zero release, retries, and ChannelData preserve exact bytes, ordering, results, and error behavior.
-- [ ] Transaction one-winner concurrency, Client nonterminal close, Allocation abort-before-notification-before-release, invalid-relayed cleanup, and caller socket ownership remain unchanged.
-- [ ] No generic transport, authenticated exchange, builder, clock, or broader constructor module appears in the reviewed production diff; this is a universal structural guarantee over the bounded current source graph owned by the compiled source/diff and recorded census.
+- [x] Every outbound datagram in the supported retained UDP Client domain targets the one canonical server configured at `NewClient`; representation owner, universal domain, and finite evidence are defined in T1.S1.
+- [x] No transaction entry or internal Allocation operation in the bounded compiled production send graph stores, accepts, or selects a destination; root `Client` alone adapts the server to the caller-owned socket. The compiled source/diff and recorded census own this universal structural guarantee.
+- [x] Allocate, Refresh, CreatePermission, ChannelBind, lifetime-zero release, retries, and ChannelData preserve exact bytes, ordering, results, and error behavior.
+- [x] Transaction one-winner concurrency, Client nonterminal close, Allocation abort-before-notification-before-release, invalid-relayed cleanup, and caller socket ownership remain unchanged.
+- [x] No generic transport, authenticated exchange, builder, clock, or broader constructor module appears in the reviewed production diff; this is a universal structural guarantee over the bounded current source graph owned by the compiled source/diff and recorded census.
 
 ## Validation Gates
 

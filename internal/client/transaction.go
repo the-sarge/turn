@@ -7,7 +7,6 @@ import (
 	"context"
 	b64 "encoding/base64"
 	"fmt"
-	"net"
 	"sync"
 	"time"
 
@@ -28,7 +27,6 @@ type TransactionResult struct {
 type transactionRegistryEntry struct {
 	id       [stun.TransactionIDSize]byte
 	raw      []byte
-	to       net.Addr
 	interval time.Duration
 	nRtx     int
 	timer    *time.Timer
@@ -37,14 +35,14 @@ type transactionRegistryEntry struct {
 
 // TransactionRegistry owns the live transaction set and its terminal claims.
 type TransactionRegistry struct {
-	send  func([]byte, net.Addr) (int, error)
+	send  func([]byte) (int, error)
 	rto   time.Duration
 	mutex sync.Mutex
 	live  map[[stun.TransactionIDSize]byte]*transactionRegistryEntry
 }
 
 // NewTransactionRegistry creates a registry that can only send on the caller-owned socket.
-func NewTransactionRegistry(send func([]byte, net.Addr) (int, error), rto time.Duration) *TransactionRegistry {
+func NewTransactionRegistry(send func([]byte) (int, error), rto time.Duration) *TransactionRegistry {
 	return &TransactionRegistry{
 		send: send,
 		rto:  rto,
@@ -53,8 +51,8 @@ func NewTransactionRegistry(send func([]byte, net.Addr) (int, error), rto time.D
 }
 
 // Perform registers, initially sends, and waits for one transaction.
-func (r *TransactionRegistry) Perform(msg *stun.Message, to net.Addr) (TransactionResult, error) {
-	entry, err := r.begin(msg, to, false)
+func (r *TransactionRegistry) Perform(msg *stun.Message) (TransactionResult, error) {
+	entry, err := r.begin(msg, false)
 	if err != nil {
 		return TransactionResult{}, err
 	}
@@ -63,8 +61,8 @@ func (r *TransactionRegistry) Perform(msg *stun.Message, to net.Addr) (Transacti
 }
 
 // Start registers and initially sends one fire-and-forget transaction.
-func (r *TransactionRegistry) Start(msg *stun.Message, to net.Addr) error {
-	_, err := r.begin(msg, to, true)
+func (r *TransactionRegistry) Start(msg *stun.Message) error {
+	_, err := r.begin(msg, true)
 
 	return err
 }
@@ -73,13 +71,12 @@ func (r *TransactionRegistry) Start(msg *stun.Message, to net.Addr) error {
 func (r *TransactionRegistry) PerformWithContext(
 	ctx context.Context,
 	msg *stun.Message,
-	to net.Addr,
 ) (TransactionResult, error) {
 	if err := ctx.Err(); err != nil {
 		return TransactionResult{}, context.Cause(ctx)
 	}
 
-	entry, err := r.begin(msg, to, false)
+	entry, err := r.begin(msg, false)
 	if err != nil {
 		return TransactionResult{}, err
 	}
@@ -108,13 +105,11 @@ func (r *TransactionRegistry) PerformWithContext(
 
 func (r *TransactionRegistry) begin(
 	msg *stun.Message,
-	to net.Addr,
 	ignoreResult bool,
 ) (*transactionRegistryEntry, error) {
 	entry := &transactionRegistryEntry{
 		id:       msg.TransactionID,
 		raw:      append([]byte(nil), msg.Raw...),
-		to:       to,
 		interval: r.rto,
 	}
 	if !ignoreResult {
@@ -130,7 +125,7 @@ func (r *TransactionRegistry) begin(
 	r.live[msg.TransactionID] = entry
 	r.mutex.Unlock()
 
-	if _, err := r.send(entry.raw, entry.to); err != nil {
+	if _, err := r.send(entry.raw); err != nil {
 		r.mutex.Lock()
 		if r.live[entry.id] == entry {
 			delete(r.live, entry.id)
@@ -179,7 +174,7 @@ func (r *TransactionRegistry) retry(entry *transactionRegistryEntry) {
 	}
 	r.mutex.Unlock()
 
-	_, err := r.send(entry.raw, entry.to)
+	_, err := r.send(entry.raw)
 
 	r.mutex.Lock()
 	if r.live[entry.id] != entry {

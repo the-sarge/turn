@@ -46,13 +46,12 @@ type inboundData struct {
 type UDPConn struct {
 	// Package-crossing operations are immutable production/mock adapters. They
 	// do not own or mutate Allocation lifecycle state.
-	writeTo            func(data []byte, to net.Addr) (int, error)
-	performTransaction func(msg *stun.Message, to net.Addr, dontWait bool) (TransactionResult, error)
+	writeTo            func(data []byte) (int, error)
+	performTransaction func(msg *stun.Message, dontWait bool) (TransactionResult, error)
 	onDeallocated      func(relayedAddr net.Addr)
 	abortTransactions  func()
 
 	relayedAddr net.Addr // Read-only
-	serverAddr  net.Addr // Read-only
 	permMap     *permissionMap
 	integrity   stun.MessageIntegrity // Read-only
 	username    stun.Username         // Read-only
@@ -94,7 +93,6 @@ func NewUDPConn(config *AllocationConfig, abortTransactions func()) *UDPConn {
 		onDeallocated:          config.OnDeallocated,
 		abortTransactions:      abortTransactions,
 		relayedAddr:            config.RelayedAddr,
-		serverAddr:             config.ServerAddr,
 		permMap:                newPermissionMap(),
 		integrity:              config.Integrity,
 		username:               config.Username,
@@ -601,7 +599,7 @@ func (c *UDPConn) CreatePermissions(addrs ...netip.AddrPort) error {
 		return err
 	}
 
-	trRes, err := c.performTransaction(msg, c.serverAddr, false)
+	trRes, err := c.performTransaction(msg, false)
 	if err != nil {
 		return err
 	}
@@ -792,7 +790,7 @@ func (c *UDPConn) bind(bound *binding) error {
 		return err
 	}
 
-	trRes, err := c.performTransaction(msg, c.serverAddr, false)
+	trRes, err := c.performTransaction(msg, false)
 	if err != nil {
 		return fmt.Errorf("%w: %w", errChannelBindTransactionFailed, err)
 	}
@@ -838,7 +836,7 @@ func (c *UDPConn) sendChannelData(data []byte, chNum uint16) (int, error) {
 		Number: proto.ChannelNumber(chNum),
 	}
 	chData.Encode()
-	_, err := c.writeTo(chData.Raw, c.serverAddr)
+	_, err := c.writeTo(chData.Raw)
 	if err != nil {
 		return 0, err
 	}

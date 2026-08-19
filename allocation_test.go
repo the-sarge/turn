@@ -39,14 +39,14 @@ func newAllocHarness(t *testing.T) *allocHarness {
 
 	harness := &allocHarness{}
 	conn := client.NewUDPConn(&client.AllocationConfig{
-		WriteTo: func(data []byte, _ net.Addr) (int, error) {
+		WriteTo: func(data []byte) (int, error) {
 			harness.writes.Lock()
 			harness.writes.data = append(harness.writes.data, append([]byte(nil), data...))
 			harness.writes.Unlock()
 
 			return len(data), nil
 		},
-		PerformTransaction: func(msg *stun.Message, _ net.Addr, _ bool) (client.TransactionResult, error) {
+		PerformTransaction: func(msg *stun.Message, _ bool) (client.TransactionResult, error) {
 			switch msg.Type.Method {
 			case stun.MethodCreatePermission:
 				harness.permCount.Add(1)
@@ -66,7 +66,6 @@ func newAllocHarness(t *testing.T) *allocHarness {
 		},
 		OnDeallocated: func(net.Addr) {},
 		RelayedAddr:   &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 54321},
-		ServerAddr:    &net.UDPAddr{IP: net.ParseIP("10.0.0.1"), Port: 3478},
 		Username:      stun.NewUsername("user"),
 		Realm:         stun.NewRealm("realm"),
 		Integrity:     stun.NewShortTermIntegrity("pass"),
@@ -231,7 +230,8 @@ func TestAllocateRejectsInvalidRelayedAddress(t *testing.T) {
 
 // TestDeletedSurfaceDoesNotResolve pins the negative API contract: the moved
 // PrepareUDPPeer, the deleted deadline/LocalAddr surface, the deleted Listen
-// second idiom, and the removed LoggerFactory seam must not resolve.
+// second idiom, the removed LoggerFactory seam, and internal destination
+// authority must not resolve.
 func TestDeletedSurfaceDoesNotResolve(t *testing.T) {
 	_, ok := reflect.TypeFor[*Client]().MethodByName("PrepareUDPPeer")
 	assert.False(t, ok, "Client.PrepareUDPPeer moved to Allocation.PreparePeer")
@@ -246,4 +246,16 @@ func TestDeletedSurfaceDoesNotResolve(t *testing.T) {
 
 	_, ok = reflect.TypeFor[ClientConfig]().FieldByName("LoggerFactory")
 	assert.False(t, ok, "ClientConfig.LoggerFactory is deleted: the module does not log")
+
+	allocationConfig := reflect.TypeFor[client.AllocationConfig]()
+	_, ok = allocationConfig.FieldByName("ServerAddr")
+	assert.False(t, ok, "AllocationConfig.ServerAddr would restore internal destination authority")
+
+	writeTo, ok := allocationConfig.FieldByName("WriteTo")
+	require.True(t, ok)
+	assert.Equal(t, 1, writeTo.Type.NumIn(), "Allocation raw writes accept bytes only")
+
+	performTransaction, ok := allocationConfig.FieldByName("PerformTransaction")
+	require.True(t, ok)
+	assert.Equal(t, 2, performTransaction.Type.NumIn(), "Allocation transactions accept message and wait policy only")
 }
