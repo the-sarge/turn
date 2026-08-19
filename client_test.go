@@ -53,6 +53,76 @@ func TestNewClientRejectsNonCanonicalServer(t *testing.T) {
 	c.Close()
 }
 
+func TestNewClientValidatesPermissionRefreshInterval(t *testing.T) {
+	conn, err := net.ListenPacket("udp4", "127.0.0.1:0") // nolint: noctx
+	require.NoError(t, err)
+	defer conn.Close() //nolint:errcheck
+
+	server := netip.MustParseAddrPort("192.0.2.1:3478")
+
+	tests := []struct {
+		name     string
+		conn     net.PacketConn
+		server   netip.AddrPort
+		interval time.Duration
+		wantErr  error
+		wantText string
+	}{
+		{
+			name: "negative",
+			conn: conn, server: server, interval: -time.Nanosecond,
+			wantText: "turn: PermissionRefreshInterval must be zero or a positive duration less than 5 minutes",
+		},
+		{name: "zero", conn: conn, server: server},
+		{name: "small positive", conn: conn, server: server, interval: time.Nanosecond},
+		{name: "immediately below five minutes", conn: conn, server: server, interval: 5*time.Minute - 1},
+		{
+			name: "exactly five minutes",
+			conn: conn, server: server, interval: 5 * time.Minute,
+			wantText: "turn: PermissionRefreshInterval must be zero or a positive duration less than 5 minutes",
+		},
+		{
+			name: "above five minutes",
+			conn: conn, server: server, interval: 5*time.Minute + 1,
+			wantText: "turn: PermissionRefreshInterval must be zero or a positive duration less than 5 minutes",
+		},
+		{
+			name:   "nil connection takes precedence over invalid interval",
+			server: server, interval: -time.Nanosecond, wantErr: errNilConn,
+		},
+		{
+			name: "invalid server takes precedence over invalid interval",
+			conn: conn, interval: -time.Nanosecond, wantErr: errInvalidServer,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client, newErr := NewClient(&ClientConfig{
+				Conn:                      tt.conn,
+				Server:                    tt.server,
+				PermissionRefreshInterval: tt.interval,
+			})
+			if tt.wantErr != nil {
+				assert.ErrorIs(t, newErr, tt.wantErr)
+				assert.Nil(t, client)
+
+				return
+			}
+			if tt.wantText != "" {
+				assert.EqualError(t, newErr, tt.wantText)
+				assert.Nil(t, client)
+
+				return
+			}
+
+			require.NoError(t, newErr)
+			require.NotNil(t, client)
+			client.Close()
+		})
+	}
+}
+
 // TestHandleInboundAdmitsOnlyServer proves the server-source admission owned by
 // HandleInbound: a datagram whose canonical source is not the configured
 // Server is ignored with a nil error and zero delivery, while a datagram from

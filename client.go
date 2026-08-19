@@ -45,7 +45,10 @@ type ClientConfig struct {
 	RTO      time.Duration
 	Conn     net.PacketConn // Caller-owned socket; the caller runs the read pump.
 
-	// PermissionTimeout sets the refresh interval of permissions. Defaults to 2 minutes.
+	// PermissionRefreshInterval sets the refresh cadence for permissions. Zero
+	// selects the two-minute default. Explicit values must be positive and
+	// strictly less than five minutes; other values are rejected by NewClient.
+	// Accepted values do not guarantee refresh before expiry under operational delay.
 	PermissionRefreshInterval time.Duration
 
 	bindingRefreshInterval time.Duration
@@ -137,6 +140,9 @@ func NewClient(config *ClientConfig) (*Client, error) {
 	server, ok := canonicalAddrPort(config.Server, canonicalStrict)
 	if !ok {
 		return nil, errInvalidServer
+	}
+	if config.PermissionRefreshInterval < 0 || config.PermissionRefreshInterval >= 5*time.Minute {
+		return nil, errInvalidPermissionRefreshInterval
 	}
 
 	rto := defaultRTO

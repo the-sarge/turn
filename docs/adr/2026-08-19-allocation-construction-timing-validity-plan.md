@@ -1,13 +1,13 @@
 # Allocation Construction Timing Validity Implementation Plan
 
 **Date:** 2026-08-19
-**Status:** Audited; ready for one implementation slice after issue publication
+**Status:** Implemented by PR #81
 **Track:** 4 of 4 in the 2026-08-19 architecture deepening program
 **Depends on:** Track 1 complete via PR #72; no remaining implementation blocker
 **Related:** [Program index](2026-08-19-architecture-deepening-program.md), [Server-bound transport plan](2026-08-19-server-bound-transport-plan.md), [Allocation lifecycle plan](2026-08-17-allocation-lifecycle-plan.md), [RFC 8656 Section 9](https://www.rfc-editor.org/rfc/rfc8656.html#section-9)
-**Parent issue:** pending
+**Parent issue:** #79
 **Normative scope:** Current outcome, boundaries, invariants, acceptance evidence, blockers, and stop conditions
-**Audit history:** Independently audited against `e57b9061efa66b979bc616834b3803cc932ecbdf` on 2026-08-19; T4.S1 passed after its configuration-only guarantee, split artifact classes, constructor-error precedence, immutable consumer receipt, slice debate, evidence budget, and non-goals were closed
+**Audit history:** Independently audited against `e57b9061efa66b979bc616834b3803cc932ecbdf` on 2026-08-19; T4.S1 passed after its configuration-only guarantee, split artifact classes, constructor-error precedence, immutable consumer receipt, slice debate, evidence budget, and non-goals were closed; implementation completed by PR #81
 
 ## Goal
 
@@ -45,7 +45,7 @@ The five-minute limit is the nominal protocol lifetime boundary, not a promise t
 
 | Slice | Status/disposition | Delivers | Blocked by | Removes temporary seam |
 |---|---|---|---|---|
-| T4.S1 | Frontier after issue publication | Public Client construction rejects permission-refresh cadences outside zero or the strict `(0, 5m)` interval | None; Track 1 checkpoint is complete | None introduced |
+| T4.S1 | Complete via PR #81 | Public Client construction rejects permission-refresh cadences outside zero or the strict `(0, 5m)` interval | None; Track 1 checkpoint is complete | None introduced |
 
 ## Implementation Slices
 
@@ -53,7 +53,7 @@ The five-minute limit is the nominal protocol lifetime boundary, not a promise t
 
 **What it delivers:** One PR that adds the public construction guard in `NewClient`, corrects and completes the `ClientConfig.PermissionRefreshInterval` documentation, and adds deterministic table-driven construction evidence for every semantic duration class while preserving all accepted values.
 
-**Implementation:** New slice. No open implementation issue, PR, or implementation branch is an accepted baseline; this issue and its implementation PR are pending publication. The local `codex/timing-validity-handoff` branch contains planning docs only and is not implementation work.
+**Implementation:** PR #81 is the slice's one intended product PR; unmentioned historical branches were not used as an implementation baseline.
 
 **Existing-work disposition:** New work opened by the post-Track-1 evidence gate. Tracks 1–3 remain complete and are not rebaselined. The post-Track-3 attempt-coalescing checkpoint closes without code because the current Permission and binding policies still require distinct deletion, transition, worker, and lifecycle ownership.
 
@@ -85,11 +85,11 @@ The five-minute limit is the nominal protocol lifetime boundary, not a promise t
 
 ## Acceptance Criteria
 
-- [ ] `NewClient` accepts exactly zero and positive `PermissionRefreshInterval` values strictly below five minutes, and rejects negative, exactly-five-minute, and above-five-minute values before constructing a Client.
-- [ ] Zero still selects the existing two-minute default in Allocation construction; accepted positive values remain unchanged, including the repository's 50-millisecond end-to-end cadence.
-- [ ] The public field comment names `PermissionRefreshInterval` and documents the zero default, strict upper bound, and rejection behavior without promising success under arbitrary operational delay.
-- [ ] No exported error, duplicate internal validation, silent clamp/default, timer rewrite, constructor abstraction, broad timing policy, wire change, worker change, or Allocation lifecycle change is introduced.
-- [ ] The finite duration and constructor-precedence table, static single-owner flow, ordinary suite, race suite, preflight, bounded review, and same-head hosted CI satisfy the declared terminating evidence plan without claiming refresh liveness or bounded cost for accepted explicit positives.
+- [x] `NewClient` accepts exactly zero and positive `PermissionRefreshInterval` values strictly below five minutes, and rejects negative, exactly-five-minute, and above-five-minute values before constructing a Client.
+- [x] Zero still selects the existing two-minute default in Allocation construction; accepted positive values remain unchanged, including the repository's 50-millisecond end-to-end cadence.
+- [x] The public field comment names `PermissionRefreshInterval` and documents the zero default, strict upper bound, and rejection behavior without promising success under arbitrary operational delay.
+- [x] No exported error, duplicate internal validation, silent clamp/default, timer rewrite, constructor abstraction, broad timing policy, wire change, worker change, or Allocation lifecycle change is introduced.
+- [x] The finite duration and constructor-precedence table, static single-owner flow, ordinary suite, race suite, preflight, bounded review, and same-head hosted CI satisfy the declared terminating evidence plan without claiming refresh liveness or bounded cost for accepted explicit positives.
 
 ## Validation Gates
 
