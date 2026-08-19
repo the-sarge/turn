@@ -489,3 +489,37 @@ PR [#61](https://github.com/the-sarge/turn/pull/61) standardized repository CI a
 **Next**
 
 - Deletion of the obsolete `ci-certify` label remains a separately authorized repository cleanup step.
+
+---
+
+## Server-bound outbound transport landed - 2026-08-19 12:49 EDT
+
+**Main:** `2a3fcd73b02d`
+**Actor:** Codex
+
+**Summary**
+
+PR [#72](https://github.com/the-sarge/turn/pull/72) landed Track 1 Slice T1.S1 as `2a3fcd7` and closed [#68](https://github.com/the-sarge/turn/issues/68). Root `Client` now binds the caller-owned socket to the one canonical configured TURN server, while transaction-registry and Allocation internals no longer store, accept, or select outbound destinations.
+
+**Completed**
+
+- Added the sole `Client.sendToServer` socket-address adapter and captured it in the transaction registry and Allocation construction.
+- Removed transaction-entry destinations plus destination parameters from registry perform/start/context operations, `AllocationConfig`, `UDPConn`, Refresh, CreatePermission, ChannelBind, lifetime-zero release, retry, and ChannelData paths.
+- Preserved exact request and ChannelData bytes, payload-length reporting, copied retry bytes, one-winner transaction behavior, cancellation, nonterminal Client close, abort-before-notification-before-release, invalid-relayed cleanup, and caller socket ownership.
+- Added a real-Client observer regression for anonymous and authenticated Allocate destinations, strengthened the deleted-surface contract for internal Allocation destination authority, and committed the T1.S1/program completion transition in the product PR.
+
+**Decisions**
+
+- Root `Client` remains the sole configured-server and socket-address adaptation owner; the registry remains the transaction owner and `UDPConn` remains the Allocation lifecycle owner. The accepted contract and post-merge checkpoint remain in the [server-bound transport plan](adr/2026-08-19-server-bound-transport-plan.md) and [program index](adr/2026-08-19-architecture-deepening-program.md).
+
+**Validation**
+
+- The green destination-sensitive characterization observed both Allocate sends targeting the configured server; the destination-free registry test then failed at compile time before the narrow signature migration and passed afterward.
+- Focused configured-server, inbound-source, request-shape, registry, cancellation, close, invalid-relayed, ChannelData, and lifecycle tests passed, followed by `go test ./...` and `go test -race ./...`.
+- Initial RAS review `20260819T163835-891bd69426b2c32c6af9e866` produced no `Fix First` or follow-up clusters. Its sole low process-status observation was rejected because the governing workflow requires completion/frontier facts in the product PR before first review; no verification or replacement review was required.
+- Exact-head `task preflight` certified `942e9299cacb0c86459890822dfb378272163f6d` against base `f722466a1864b1ca89e9e364daa962a7c1c5ba23`, including format, vet, lint, docs, race, dependency/vulnerability, Darwin/Windows build, workflow, and secret gates. Post-ready hosted run [32277868371](https://github.com/the-sarge/turn/actions/runs/32277868371) passed `ci-required` on that exact head before guarded squash merge.
+
+**Next**
+
+- T2.S1 ([#69](https://github.com/the-sarge/turn/issues/69)) and T3.S1 ([#70](https://github.com/the-sarge/turn/issues/70)) remain independent ready frontier slices. Allocation construction is a post-Track-1 evidence-gated re-audit, not a dispatchable implementation slice; the live program view is [tracking issue #71](https://github.com/the-sarge/turn/issues/71).
+- No review follow-up issue was required, and the bounded production census found no untraced outbound destination effect.
