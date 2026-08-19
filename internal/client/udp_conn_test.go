@@ -5,6 +5,7 @@ package client
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/netip"
@@ -585,7 +586,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		token, class, started := bound.beginAttempt(time.Now(), defaultBindingRefreshInterval)
 		require.True(t, started)
 		err := conn.bindChannel(bound, token, class)
-		assert.ErrorIs(t, err, errTryAgain)
+		assert.NoError(t, err, "the permanent exhausted-retry cause lives only in readiness")
 		assert.Equal(t, int32(maxRetryAttempts), attempts.Load())
 		final, readinessErr := bound.preparationAccess(time.Now())
 		assert.True(t, final)
@@ -958,6 +959,71 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		b2, ok := bm.findByAddr(addr)
 		assert.True(t, ok)
 		assert.Equal(t, originalCh, b2.number)
+	})
+}
+
+func TestUDPConnBindingCompletionOrdersWithClose(t *testing.T) {
+	t0 := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
+	bound := &binding{}
+	token, _, started := bound.beginAttempt(t0, defaultBindingRefreshInterval)
+	require.True(t, started)
+	conn := &UDPConn{closeCh: make(chan struct{})}
+	sealCause := errors.New("self-seal won") //nolint:err113 // Test-local cause.
+
+	conn.closeMutex.Lock()
+	result := make(chan struct {
+		applied bool
+		err     error
+	}, 1)
+	go func() {
+		applied, err := conn.completeBindingAttempt(bound, token, bindingAttemptConfirmed, nil, t0)
+		result <- struct {
+			applied bool
+			err     error
+		}{applied: applied, err: err}
+	}()
+	conn.terminalCause = sealCause
+	close(conn.closeCh)
+	conn.closeMutex.Unlock()
+
+	got := <-result
+	assert.False(t, got.applied)
+	assert.ErrorIs(t, got.err, net.ErrClosed)
+	assert.ErrorIs(t, got.err, sealCause)
+	final, err := bound.preparationAccess(t0)
+	assert.False(t, final, "close-winning completion must not create readiness")
+	assert.NoError(t, err)
+}
+
+func TestUDPConnBindingAttemptResultOwnership(t *testing.T) {
+	t0 := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
+
+	t.Run("permanent cause lives only in readiness", func(t *testing.T) {
+		bound := &binding{}
+		token, class, started := bound.beginAttempt(t0, defaultBindingRefreshInterval)
+		require.True(t, started)
+		conn := &UDPConn{closeCh: make(chan struct{})}
+		cause := fmt.Errorf("permanent: %w", errCannotBindChannel)
+
+		attemptResult := conn.resolveBindError(bound, token, class, cause)
+		assert.NoError(t, attemptResult, "attempt coordination must not duplicate a durable cause")
+		final, readinessErr := bound.preparationAccess(t0)
+		assert.True(t, final)
+		assert.ErrorIs(t, readinessErr, cause)
+	})
+
+	t.Run("uncertainty remains attempt-local", func(t *testing.T) {
+		bound := &binding{}
+		token, class, started := bound.beginAttempt(t0, defaultBindingRefreshInterval)
+		require.True(t, started)
+		conn := &UDPConn{closeCh: make(chan struct{})}
+		cause := fmt.Errorf("%w: %w", errChannelBindTransactionFailed, errFake)
+
+		attemptResult := conn.resolveBindError(bound, token, class, cause)
+		assert.ErrorIs(t, attemptResult, cause)
+		final, readinessErr := bound.preparationAccess(t0)
+		assert.False(t, final)
+		assert.NoError(t, readinessErr, "transient attempt results must not become durable readiness causes")
 	})
 }
 

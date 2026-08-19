@@ -39,6 +39,21 @@ func TestBindingReadinessBeginsAndRetriesFreshAttempt(t *testing.T) {
 		"a stale completion must not overwrite a newer attempt")
 }
 
+func TestBindingReadinessRejectsDuplicateResolution(t *testing.T) {
+	t0 := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
+	bound := &binding{}
+	token, _, started := bound.beginAttempt(t0, defaultBindingRefreshInterval)
+	require.True(t, started)
+	require.True(t, bound.resolveAttempt(token, bindingAttemptUncertain, nil, t0))
+
+	assert.False(t, bound.resolveAttempt(token, bindingAttemptConfirmed, nil, t0.Add(time.Minute)),
+		"one live token may resolve at most once")
+	nextToken, class, started := bound.beginAttempt(t0.Add(time.Minute), defaultBindingRefreshInterval)
+	require.True(t, started, "the first uncertainty outcome must remain retryable")
+	assert.NotEqual(t, token, nextToken)
+	assert.Equal(t, bindingAttemptFresh, class)
+}
+
 func TestBindingReadinessRefreshThresholdAndPreservedConfirmation(t *testing.T) {
 	t0 := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
 	bound := &binding{}

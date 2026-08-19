@@ -176,10 +176,8 @@ func (b *binding) preparationAccess(now time.Time) (bool, error) {
 	if !b.usableLocked() {
 		return false, nil
 	}
-	if now.Sub(b.confirmedAt) >= channelBindingLifetime {
-		b.terminalizeLocked(ErrChannelBindingExpired)
-
-		return true, ErrChannelBindingExpired
+	if err := b.expireLocked(now); err != nil {
+		return true, err
 	}
 
 	b.prepared = true
@@ -202,13 +200,8 @@ func (b *binding) writeAccess(now time.Time) error {
 	if !b.usableLocked() {
 		return ErrChannelBindFailed
 	}
-	if now.Sub(b.confirmedAt) >= channelBindingLifetime {
-		b.terminalizeLocked(ErrChannelBindingExpired)
 
-		return ErrChannelBindingExpired
-	}
-
-	return nil
+	return b.expireLocked(now)
 }
 
 // failPrepared applies tokenless Permission-refresh loss. Preparation and
@@ -227,6 +220,15 @@ func (b *binding) failPrepared(cause error) bool {
 
 func (b *binding) usableLocked() bool {
 	return b.st == bindingStateReady || b.st == bindingStateRefresh || b.st == bindingStateReadyUnknown
+}
+
+func (b *binding) expireLocked(now time.Time) error {
+	if now.Sub(b.confirmedAt) < channelBindingLifetime {
+		return nil
+	}
+	b.terminalizeLocked(ErrChannelBindingExpired)
+
+	return ErrChannelBindingExpired
 }
 
 func (b *binding) failureCauseLocked() error {

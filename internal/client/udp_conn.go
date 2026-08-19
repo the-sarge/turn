@@ -530,9 +530,13 @@ func (c *UDPConn) startCloseLocked(cause error) (bool, error) {
 // wrapped with the recorded terminal cause when the allocation sealed itself.
 func (c *UDPConn) closedErr() error {
 	c.closeMutex.Lock()
-	cause := c.terminalCause
-	c.closeMutex.Unlock()
+	defer c.closeMutex.Unlock()
 
+	return c.closedErrLocked()
+}
+
+func (c *UDPConn) closedErrLocked() error {
+	cause := c.terminalCause
 	if cause != nil {
 		return fmt.Errorf("%w: %w", net.ErrClosed, cause)
 	}
@@ -692,20 +696,33 @@ func (c *UDPConn) bindChannel(
 			break
 		}
 	}
-	if c.isClosed() {
-		if err != nil {
-			return err
-		}
-
-		return c.closedErr()
-	}
 	if err != nil {
 		return c.resolveBindError(bound, token, class, err)
 	}
 
-	bound.resolveAttempt(token, bindingAttemptConfirmed, nil, time.Now())
+	_, completionErr := c.completeBindingAttempt(bound, token, bindingAttemptConfirmed, nil, time.Now())
 
-	return nil
+	return completionErr
+}
+
+// completeBindingAttempt orders readiness publication with Allocation seal.
+// The close lock is never held across TURN I/O; the only nested order is
+// closeMutex then one binding's readiness lock.
+func (c *UDPConn) completeBindingAttempt(
+	bound *binding,
+	token bindingAttemptToken,
+	outcome bindingAttemptOutcome,
+	cause error,
+	now time.Time,
+) (bool, error) {
+	c.closeMutex.Lock()
+	defer c.closeMutex.Unlock()
+
+	if c.isClosed() {
+		return false, c.closedErrLocked()
+	}
+
+	return bound.resolveAttempt(token, outcome, cause, now), nil
 }
 
 func (c *UDPConn) resolveBindError(
@@ -715,22 +732,49 @@ func (c *UDPConn) resolveBindError(
 	err error,
 ) error {
 	if errors.Is(err, errChannelBindBadRequest) && class == bindingAttemptPreviouslyConfirmed {
-		bound.resolveAttempt(token, bindingAttemptPreserveConfirmation, nil, time.Now())
+		_, completionErr := c.completeBindingAttempt(
+			bound,
+			token,
+			bindingAttemptPreserveConfirmation,
+			nil,
+			time.Now(),
+		)
 
-		return nil
+		return completionErr
 	}
 	if errors.Is(err, errChannelBindTransactionFailed) {
-		bound.resolveAttempt(token, bindingAttemptUncertain, nil, time.Now())
+		applied, completionErr := c.completeBindingAttempt(
+			bound,
+			token,
+			bindingAttemptUncertain,
+			nil,
+			time.Now(),
+		)
+		if completionErr != nil {
+			return completionErr
+		}
+		if !applied {
+			return nil
+		}
 
 		return err
 	}
 
-	applied := bound.resolveAttempt(token, bindingAttemptPermanentFailure, err, time.Now())
+	applied, completionErr := c.completeBindingAttempt(
+		bound,
+		token,
+		bindingAttemptPermanentFailure,
+		err,
+		time.Now(),
+	)
+	if completionErr != nil {
+		return completionErr
+	}
 	if applied && errors.Is(err, errChannelBindBadRequest) {
 		c.closeAfterChannelBindBadRequest(err)
 	}
 
-	return err
+	return nil
 }
 
 // closeAfterChannelBindBadRequest terminalizes the whole allocation after a
