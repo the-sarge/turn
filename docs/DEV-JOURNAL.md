@@ -556,3 +556,36 @@ PR [#74](https://github.com/the-sarge/turn/pull/74) landed Track 2 Slice T2.S1 a
 **Next**
 
 - T3.S1 ([#70](https://github.com/the-sarge/turn/issues/70)) remains an independently ready frontier slice. Post-merge closure will reconcile parent #66, tracking issue [#71](https://github.com/the-sarge/turn/issues/71), and the OmniFocus mirror; no review follow-up issue or remaining untraced delivery effect was identified.
+
+---
+
+## Channel-binding readiness landed - 2026-08-19 14:07 EDT
+
+**Main:** `77b3dd93bd94`
+**Actor:** Codex
+
+**Summary**
+
+PR [#76](https://github.com/the-sarge/turn/pull/76) landed Track 3 Slice T3.S1 as `77b3dd9` and closed [#70](https://github.com/the-sarge/turn/issues/70). Binding-local readiness now owns readiness phase, confirmation and prepared history, durable terminal causes, expiry, generation-token validity, and terminal collapse, while `UDPConn` retains TURN policy, active-attempt coordination, Permission orchestration, workers, and Allocation lifecycle.
+
+**Completed**
+
+- Added binding-local begin/resolve, preparation access, write access, and prepared-permission-loss operations over one readiness lock and a finite generation-token model.
+- Moved refresh eligibility, inclusive ten-minute expiry, prepared-only admission, permission-loss ordering, fresh/previously-confirmed uncertainty, 400 preservation/failure, permanent causes, and non-resurrection behind that owner; new bindings no longer manufacture a confirmation timestamp.
+- Kept each active attempt's done signal and transient result on `UDPConn`, ordered final outcome publication with Allocation seal, and prevented a completion returning after close from creating readiness or losing the full `net.ErrClosed`/terminal-cause chain.
+- Replaced raw binding state/time/error/prepared test setup with explicit-time decision, access, ordering, cancellation, close, and public PreparePeer/WriteTo behavior evidence. The product PR also marked T3.S1 and the three-track program complete.
+
+**Decisions**
+
+- Binding readiness remains the only readiness mutation owner; `bindingManager` remains the channel identity/capacity owner, and `UDPConn` remains the TURN classification, coordination, Permission, worker, and Allocation lifecycle owner. The accepted finite domain and post-Track-3 checkpoint remain in the [channel-binding readiness plan](adr/2026-08-19-channel-binding-readiness-plan.md) and [program index](adr/2026-08-19-architecture-deepening-program.md).
+
+**Validation**
+
+- Red-first tests exposed the missing readiness seam and a close-winning completion that could still publish confirmation. Focused state/access, cancellation, close, request-shape, prepared-only write, 400, permission-refresh, error-chain, and retry tests passed with the full ordinary and race suites.
+- The terminal-collapse mutation made the in-flight expiry/non-resurrection regression fail, and the active-token-to-generation mutation made the duplicate-resolution regression fail; both guards were restored and the focused tests passed afterward.
+- Initial RAS review `20260819T173516-09333163618b2b3da1c3e01e` produced four `fix-now` clusters: close/outcome linearization, one expiry expression, discriminating duplicate-token evidence, and transient-versus-durable error storage. Exact-head verification resolved all four at `7b75571594ec3a8eb98fd7af24ad986fe20a88b4`; the sole optional unread-field observation remained rejected, and replacement review `20260819T175615-589ce85902c38121e581f9ae` was clean.
+- Exact-head `task preflight` certified `7b75571594ec3a8eb98fd7af24ad986fe20a88b4` against base `250ed49e777ce2d7e978c7f8d53ffde0771a4f52`, including formatting, vet, tests, lint, docs, race, dependency/vulnerability, Darwin/Windows build, workflow, and secret gates. Post-ready hosted run [32285202550](https://github.com/the-sarge/turn/actions/runs/32285202550) passed `ci-required` on that exact head before guarded squash merge.
+
+**Next**
+
+- No deferred review finding survived for a follow-up issue and no untraced readiness effect remains. Post-merge closure will reconcile parent #67, tracking issue [#71](https://github.com/the-sarge/turn/issues/71), and the OmniFocus mirror; the attempt-coalescing re-audit is a post-Track-3 evidence checkpoint, not a dispatchable implementation slice.
