@@ -1,7 +1,7 @@
 # Allocate Admission and Public Error Vocabulary Implementation Plan
 
 **Date:** 2026-08-19
-**Status:** Accepted; not yet implemented
+**Status:** T2.S1 implemented by PR #100; T2.S2 pending
 **Track:** 2 of 4 in the 2026-08-19 seam deepening program
 **Depends on:** Nothing — parallel-safe; T1.S1 is recommended first to reduce test churn but is not a blocker
 **Related:** [Program index](2026-08-19-seam-deepening-program.md), [Allocation lifecycle plan](2026-08-17-allocation-lifecycle-plan.md), [Modernize kept API plan](2026-08-15-modernize-kept-api-plan.md), [Allocation construction timing validity plan](2026-08-19-allocation-construction-timing-validity-plan.md)
@@ -44,7 +44,7 @@ Error vocabulary is split across the seam: `errNilContext` exists in both packag
 
 | Slice | Status/disposition | Delivers | Blocked by | Removes temporary seam |
 |---|---|---|---|---|
-| T2.S1 | New | One admission rule and error for the single live Allocation; relayed address crosses the seam only as canonical `netip.AddrPort`; `TryLock`, `LocalAddr`, `RelayedAddr`, `OnDeallocated` parameter gone; publish-after-validate | None | Second guard; unvalidated relayed-address spelling |
+| T2.S1 | Complete via PR #100 | One admission rule and error for the single live Allocation; relayed address crosses the seam only as canonical `netip.AddrPort`; `TryLock`, `LocalAddr`, `RelayedAddr`, `OnDeallocated` parameter gone; publish-after-validate | None | Second guard; unvalidated relayed-address spelling |
 | T2.S2 | New | One owner for public error identity, prose, and prefix; nil-context checked once at the public ingress; `errFake` out of production vocabulary | None | Duplicate `errNilContext`; diverged prose |
 
 ## Implementation Slices
@@ -52,6 +52,8 @@ Error vocabulary is split across the seam: `errNilContext` exists in both packag
 ### Slice T2.S1 — One admission rule for the single live Allocation
 
 **What it delivers:** One PR replacing `TryLock` + pointer check with one guarded claim returning `ErrAlreadyAllocated` for in-flight and live cases, deleting `TryLock`/`trylock_test.go`/`errOneAllocateOnly`/`errDoubleLock`, deleting `AllocationConfig.RelayedAddr`/`UDPConn.relayedAddr`/`UDPConn.LocalAddr`, changing `OnDeallocated` to `func()`, publishing the Allocation only after canonical validation, and adding public-interface admission tests.
+
+**Implementation:** PR #100 is this slice's one product PR.
 
 **Existing-work disposition:** New slice.
 
@@ -126,9 +128,9 @@ Error vocabulary is split across the seam: `errNilContext` exists in both packag
 
 ## Acceptance Criteria
 
-- [ ] A concurrent second Allocate, or an Allocate while an Allocation is live, returns `ErrAlreadyAllocated` with zero network output, and an Allocate after the live Allocation ends (caller Close or self-seal) succeeds. Domain: the T2.S1 matrix; owner: `Client.Allocate`; guarantee: universal over that finite set; evidence: the matrix plus one guard mutation.
-- [ ] `TryLock`, `errOneAllocateOnly`, `errDoubleLock`, `UDPConn.LocalAddr`, `AllocationConfig.RelayedAddr`, and the `OnDeallocated` address parameter do not exist; the relayed address lives only on root `Allocation` as canonical `netip.AddrPort`.
-- [ ] An invalid relayed address still yields exactly one lifetime-zero release and `ErrInvalidRelayedAddress`, and the doomed Allocation is never published to the inbound path.
+- [x] A concurrent second Allocate, or an Allocate while an Allocation is live, returns `ErrAlreadyAllocated` with zero network output, and an Allocate after the live Allocation ends (caller Close or self-seal) succeeds. Domain: the T2.S1 matrix; owner: `Client.Allocate`; guarantee: universal over that finite set; evidence: the matrix plus one guard mutation.
+- [x] `TryLock`, `errOneAllocateOnly`, `errDoubleLock`, `UDPConn.LocalAddr`, `AllocationConfig.RelayedAddr`, and the `OnDeallocated` address parameter do not exist; the relayed address lives only on root `Allocation` as canonical `netip.AddrPort`.
+- [x] An invalid relayed address still yields exactly one lifetime-zero release and `ErrInvalidRelayedAddress`, and the doomed Allocation is never published to the inbound path.
 - [ ] `Allocate(nil, …)` and `Allocation.PreparePeer(nil, …)` return root's `errNilContext` (checked first); no internal `errNilContext` or production `errFake` exists; every sentinel defined in root `errors.go` has a message starting with `turn:` (the six re-exports keep their text); sentinel identities are unchanged. Domain: root-defined sentinels and the two public ingresses; owner: root `errors.go`; guarantee: universal over that finite set; evidence: two ingress tests and one grep.
 - [ ] Client close semantics, Allocation lifecycle ownership, wire bytes, and public API shape (beyond error text) are unchanged.
 
