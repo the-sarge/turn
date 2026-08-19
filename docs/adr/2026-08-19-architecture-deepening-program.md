@@ -1,6 +1,6 @@
 # TURN Architecture Deepening Program — 2026-08-19
 
-**Status:** Active; Tracks 1, 2, and 3 complete, Track 4 has one audited frontier slice
+**Status:** Complete; Tracks 1–4 complete
 
 ## What this is
 
@@ -21,11 +21,11 @@ This program packages the 2026-08-19 architecture review and delegated grill of 
 | 1 | Server-bound outbound transport | [plan](2026-08-19-server-bound-transport-plan.md) | #65 | None | 1 | Complete via PR #72 |
 | 2 | Inbound Allocation delivery | [plan](2026-08-19-inbound-allocation-delivery-plan.md) | #66 | None | 1 | Complete via PR #74 |
 | 3 | Channel-binding readiness | [plan](2026-08-19-channel-binding-readiness-plan.md) | #67 | None | 1 | Complete via PR #76 |
-| 4 | Allocation construction timing validity | [plan](2026-08-19-allocation-construction-timing-validity-plan.md) | pending | None | 1 | T4.S1 frontier after issue publication |
+| 4 | Allocation construction timing validity | [plan](2026-08-19-allocation-construction-timing-validity-plan.md) | #79 | None | 1 | Complete via PR #81 |
 
-There are no genuine slice-level blocking edges. Tracks 1–3 are complete. Track 4 depended only on the completed Track 1 construction checkpoint and now has the sole frontier slice; its public configuration guard is independent of the completed inbound-delivery and binding-readiness seams.
+There are no genuine slice-level blocking edges. Tracks 1–4 are complete, and no implementation frontier remains.
 
-The required post-track checkpoints are closed. Allocation construction still admitted a reachable invalid public cadence after Track 1, producing Track 4's focused T4.S1. Attempt coalescing still lacked a policy-free single owner after Track 3 and closes without implementation.
+The required post-track checkpoints are closed. Track 4's focused T4.S1 closes the reachable invalid public cadence that remained after Track 1. Attempt coalescing still lacked a policy-free single owner after Track 3 and closes without implementation.
 
 ## Rules that bind every track
 
