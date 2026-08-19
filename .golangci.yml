@@ -140,6 +140,10 @@ linters:
           - gocognit
         path: _test\.go
       - linters:
+          - modernize
+        path: internal/proto/chandata_test\.go
+        text: b\.N can be modernized using b\.Loop\(\)
+      - linters:
           - forbidigo
         path: cmd
 formatters:

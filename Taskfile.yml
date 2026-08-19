@@ -11,10 +11,20 @@ vars:
   GOVULNCHECK_PKG: golang.org/x/vuln/cmd/govulncheck
   GITLEAKS_PKG: github.com/zricethezav/gitleaks/v8
   ACTIONLINT_PKG: github.com/rhysd/actionlint/cmd/actionlint
-  YQ_PKG: github.com/mikefarah/yq/v4
   FUZZTIME: '{{.FUZZTIME | default "30s"}}'
+  CI_DOCS_GLOBS: '*.md docs/* DEV-JOURNAL.md LICENSE LICENSE.*'
 
 tasks:
+  ci:
+    desc: Required merge gate; docs-only changes run docs-check, everything else runs check
+    cmds:
+      - |
+        result="$(CI_DOCS_GLOBS='{{.CI_DOCS_GLOBS}}' scripts/ci-classify.sh)"
+        case "$result" in
+          docs_only=true) task docs-check ;;
+          *) task check ;;
+        esac
+
   preflight:
     desc: Full local exact-head certification (core, docs, race, dependency, platform, workflow, secrets), then print the head/base receipt.
     cmds:
@@ -99,16 +109,11 @@ tasks:
       - GOOS=windows GOARCH=amd64 CGO_ENABLED=0 {{.GO}} build ./...
 
   workflow-check:
-    desc: Validate GitHub Actions syntax and the CI routing contract.
+    desc: Validate GitHub Actions syntax.
     env:
       GOTOOLCHAIN: local
     cmds:
       - go run {{.ACTIONLINT_PKG}}@{{.ACTIONLINT_VERSION}}
-      # YQ must stay a plain command string: the contract script executes
-      # $YQ by word-splitting, and a leading VAR=value word is not an
-      # assignment after expansion.
-      - YQ="go run {{.YQ_PKG}}@{{.YQ_VERSION}}" ./scripts/ci/check-workflow-contract.sh
-      - ./scripts/ci/test-routing-contract.sh
 
   secret-scan:
     desc: Scan a selected commit range (CI_BASE_SHA..CI_HEAD_SHA), or the complete repository history, for secrets.

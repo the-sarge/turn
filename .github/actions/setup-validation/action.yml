@@ -15,7 +15,7 @@ runs:
         set -a
         source ./scripts/tool-versions.env
         set +a
-        for variable in GO_VERSION TASK_VERSION GOLANGCI_LINT_VERSION GOVULNCHECK_VERSION ACTIONLINT_VERSION YQ_VERSION GITLEAKS_VERSION; do
+        for variable in GO_VERSION TASK_VERSION GOLANGCI_LINT_VERSION GOVULNCHECK_VERSION ACTIONLINT_VERSION GITLEAKS_VERSION; do
           printf '%s=%s\n' "$variable" "${!variable}"
         done >> "$GITHUB_ENV"
 
