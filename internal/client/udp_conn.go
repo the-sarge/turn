@@ -93,6 +93,15 @@ type UDPConn struct {
 // required capability: every allocation must be able to wake its pending
 // transaction waits before deallocation and lifetime-zero release.
 func NewUDPConn(config *AllocationConfig, abortTransactions func()) *UDPConn {
+	conn := newUDPConn(config, abortTransactions)
+	conn.start()
+
+	return conn
+}
+
+// newUDPConn builds a UDPConn with every construction invariant established
+// but no timer goroutines started.
+func newUDPConn(config *AllocationConfig, abortTransactions func()) *UDPConn {
 	if abortTransactions == nil {
 		panic("client: missing abort capability") //nolint:forbidigo // Programmer-invalid internal construction.
 	}
@@ -150,11 +159,14 @@ func NewUDPConn(config *AllocationConfig, abortTransactions func()) *UDPConn {
 		bindingCheckInterval,
 	)
 
-	conn.refreshAllocTimer.Start()
-	conn.refreshPermsTimer.Start()
-	conn.checkBindingsTimer.Start()
-
 	return conn
+}
+
+// start arms every timer owned by the allocation.
+func (c *UDPConn) start() {
+	c.refreshAllocTimer.Start()
+	c.refreshPermsTimer.Start()
+	c.checkBindingsTimer.Start()
 }
 
 // ReadFrom reads one relayed datagram, copying the payload into p. It returns

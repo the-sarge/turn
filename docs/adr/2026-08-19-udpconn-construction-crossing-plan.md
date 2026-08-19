@@ -1,7 +1,7 @@
 # UDPConn Construction and Transaction Crossing Implementation Plan
 
 **Date:** 2026-08-19
-**Status:** Accepted; not yet implemented
+**Status:** T1.S1 implemented by PR #96; T1.S2 accepted and not yet implemented
 **Track:** 1 of 4 in the 2026-08-19 seam deepening program
 **Depends on:** Nothing — safe to start first; T1.S1 first is strongly recommended for T1.S2 but is not a blocker
 **Related:** [Program index](2026-08-19-seam-deepening-program.md), [Allocation lifecycle plan](2026-08-17-allocation-lifecycle-plan.md), [Transaction registry plan](2026-08-17-transaction-registry-plan.md), [Server-bound transport plan](2026-08-19-server-bound-transport-plan.md), [Allocation construction timing validity plan](2026-08-19-allocation-construction-timing-validity-plan.md)
@@ -46,7 +46,7 @@ Exact private Go spellings (`newUDPConn`, `start`, `newTestConn`, `emitRelease`,
 
 | Slice | Status/disposition | Delivers | Blocked by | Removes temporary seam |
 |---|---|---|---|---|
-| T1.S1 | New | `UDPConn` built by one constructor in production and tests; `mockClient.configure` and credential-carrying struct literals gone; one scripted helper per package | None | Private-field test construction |
+| T1.S1 | Complete via PR #96 | `UDPConn` built by one constructor in production and tests; `mockClient.configure` and credential-carrying struct literals gone; one scripted helper per package | None | Private-field test construction |
 | T1.S2 | New | Two named transaction crossings; `TransactionResult` and the `dontWait` flag gone; release emission has a name | None (T1.S1 first strongly recommended) | Mode flag on the crossing |
 
 ## Implementation Slices
@@ -54,6 +54,8 @@ Exact private Go spellings (`newUDPConn`, `start`, `newTestConn`, `emitRelease`,
 ### Slice T1.S1 — Build, then start: one construction seam for UDPConn
 
 **What it delivers:** One PR splitting `NewUDPConn` into unexported build and start steps (`NewUDPConn` = both, behavior unchanged), adding one scripted internal test constructor and one root `newScriptedAllocation` helper, deleting `mockClient`/`configure`, migrating the seven credential-carrying struct literals and the direct worker invocation to the helper, and collapsing the duplicated `AllocationConfig`/script/credential literals to the helper in both packages.
+
+**Implementation:** PR #96 is this slice's one product PR.
 
 **Existing-work disposition:** New slice. No open PR, branch, or review finding targets this seam as of 2026-08-19.
 
@@ -117,9 +119,9 @@ Exact private Go spellings (`newUDPConn`, `start`, `newTestConn`, `emitRelease`,
 
 ## Acceptance Criteria
 
-- [ ] `NewUDPConn` behaves exactly as before (started timers, same intervals, same abort panic) and is the only production constructor; an unexported build step establishes every invariant without goroutines and `Close` on a built-unstarted conn is valid. Domain: the finite construction paths in this repository; owner: `newUDPConn`/`start`; guarantee: universal over that set via the negative-grep evidence in T1.S1.
-- [ ] No test writes `UDPConn` private func fields after construction; `mockClient` and `configure` do not exist; `UDPConn{` literals exist only at the six retained controlled-linearization/queue sites named in the T1.S1 PR.
-- [ ] One scripted internal constructor and one root `newScriptedAllocation` replace `prepareHarness`'s construction, `allocHarness`, and `inboundDeliveryHarness`; `close_latency_test` keeps its own harness.
+- [x] `NewUDPConn` behaves exactly as before (started timers, same intervals, same abort panic) and is the only production constructor; an unexported build step establishes every invariant without goroutines and `Close` on a built-unstarted conn is valid. Domain: the finite construction paths in this repository; owner: `newUDPConn`/`start`; guarantee: universal over that set via the negative-grep evidence in T1.S1.
+- [x] No test writes `UDPConn` private func fields after construction; `mockClient` and `configure` do not exist; `UDPConn{` literals exist only at the six retained controlled-linearization/queue sites named in the T1.S1 PR.
+- [x] One scripted internal constructor and one root `newScriptedAllocation` replace `prepareHarness`'s construction, `allocHarness`, and `inboundDeliveryHarness`; `close_latency_test` keeps its own harness.
 - [ ] `AllocationConfig` exposes `PerformTransaction(msg) (*stun.Message, error)` and `StartTransaction(msg) error`; `TransactionResult`, `dontWait`, `ignoreResult`, and `Client.performTransaction` are absent; root wires registry method values.
 - [ ] The lifetime-zero release is emitted once from `startCloseLocked` via `StartTransaction`, byte-identical to today's after transaction-ID normalization, after abort and `onDeallocated`, and a failed emission is still joined into the terminal cause. Domain: the one release path; owner: `UDPConn.emitRelease`; guarantee: universal; evidence: txid-normalized byte equality plus the existing exactly-one-release and ordering tests.
 - [ ] Emitted Allocate/Refresh/CreatePermission/ChannelBind/ChannelData bytes, setter order, retransmission policy, public API, and Allocation lifecycle ownership are unchanged.

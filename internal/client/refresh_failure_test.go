@@ -41,7 +41,7 @@ func newRefreshFailureHarness(
 	t.Helper()
 
 	harness := &refreshFailureHarness{waitedRefresh: waited, emitErr: emitErr}
-	mock := &mockClient{
+	script := &testConnScript{
 		performTransaction: func(msg *stun.Message, dontWait bool) (TransactionResult, error) {
 			switch msg.Type.Method {
 			case stun.MethodRefresh:
@@ -73,17 +73,7 @@ func newRefreshFailureHarness(
 		},
 	}
 
-	harness.conn = NewUDPConn(&AllocationConfig{
-		WriteTo:            mock.WriteTo,
-		PerformTransaction: mock.PerformTransaction,
-		OnDeallocated:      mock.OnDeallocated,
-		RelayedAddr:        &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 54321},
-		Username:           stun.NewUsername("user"),
-		Realm:              stun.NewRealm("realm"),
-		Integrity:          stun.NewShortTermIntegrity("pass"),
-		Nonce:              stun.NewNonce("nonce"),
-		Lifetime:           time.Hour, // The periodic timer never fires inside a test.
-	}, func() {})
+	harness.conn = newTestConn(t, script)
 
 	return harness
 }
