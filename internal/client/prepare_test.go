@@ -43,7 +43,7 @@ func newPrepareHarness(t *testing.T, gateBinds bool) *prepareHarness {
 	}
 
 	script := &testConnScript{
-		performTransaction: func(msg *stun.Message, _ bool) (TransactionResult, error) {
+		performTransaction: func(msg *stun.Message) (*stun.Message, error) {
 			switch msg.Type.Method {
 			case stun.MethodCreatePermission:
 				harness.permCount.Add(1)
@@ -51,35 +51,33 @@ func newPrepareHarness(t *testing.T, gateBinds bool) *prepareHarness {
 					<-harness.permGate
 				}
 				if harness.failPerms.Load() {
-					return TransactionResult{Msg: stun.MustBuild(
+					return stun.MustBuild(
 						stun.NewType(stun.MethodCreatePermission, stun.ClassErrorResponse),
 						stun.ErrorCodeAttribute{Code: stun.CodeForbidden, Reason: []byte("Forbidden")},
-					)}, nil
+					), nil
 				}
 				if harness.staleNonce.Load() {
-					return TransactionResult{Msg: stun.MustBuild(
+					return stun.MustBuild(
 						stun.NewType(stun.MethodCreatePermission, stun.ClassErrorResponse),
 						stun.ErrorCodeAttribute{Code: stun.CodeStaleNonce, Reason: []byte("Stale Nonce")},
 						stun.NewNonce("nonce2"),
-					)}, nil
+					), nil
 				}
 
-				return TransactionResult{Msg: stun.MustBuild(
+				return stun.MustBuild(
 					stun.NewType(stun.MethodCreatePermission, stun.ClassSuccessResponse),
-				)}, nil
+				), nil
 			case stun.MethodChannelBind:
 				harness.bindCount.Add(1)
 				if harness.bindGate != nil {
 					<-harness.bindGate
 				}
 
-				return TransactionResult{Msg: stun.MustBuild(
+				return stun.MustBuild(
 					stun.NewType(stun.MethodChannelBind, stun.ClassSuccessResponse),
-				)}, nil
-			case stun.MethodRefresh:
-				return TransactionResult{}, nil
+				), nil
 			default:
-				return TransactionResult{}, errFake
+				return nil, errFake
 			}
 		},
 	}
@@ -455,14 +453,14 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 		// First permission succeeds, but every ChannelBind transaction fails.
 		mock := harness.script
 		inner := mock.performTransaction
-		mock.performTransaction = func(msg *stun.Message, dontWait bool) (TransactionResult, error) {
+		mock.performTransaction = func(msg *stun.Message) (*stun.Message, error) {
 			if msg.Type.Method == stun.MethodChannelBind {
 				harness.bindCount.Add(1)
 
-				return TransactionResult{}, errFake
+				return nil, errFake
 			}
 
-			return inner(msg, dontWait)
+			return inner(msg)
 		}
 
 		err := harness.conn.PreparePeer(context.Background(), harness.peer)
@@ -480,15 +478,15 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 		gate := make(chan struct{})
 		mock := harness.script
 		inner := mock.performTransaction
-		mock.performTransaction = func(msg *stun.Message, dontWait bool) (TransactionResult, error) {
+		mock.performTransaction = func(msg *stun.Message) (*stun.Message, error) {
 			if msg.Type.Method == stun.MethodChannelBind {
 				harness.bindCount.Add(1)
 				<-gate
 
-				return TransactionResult{}, errFake
+				return nil, errFake
 			}
 
-			return inner(msg, dontWait)
+			return inner(msg)
 		}
 
 		results := make(chan error, 2)
@@ -513,17 +511,17 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 
 		mock := harness.script
 		inner := mock.performTransaction
-		mock.performTransaction = func(msg *stun.Message, dontWait bool) (TransactionResult, error) {
+		mock.performTransaction = func(msg *stun.Message) (*stun.Message, error) {
 			if msg.Type.Method == stun.MethodChannelBind {
 				harness.bindCount.Add(1)
 
-				return TransactionResult{Msg: stun.MustBuild(
+				return stun.MustBuild(
 					stun.NewType(stun.MethodChannelBind, stun.ClassErrorResponse),
 					stun.ErrorCodeAttribute{Code: stun.CodeForbidden, Reason: []byte("Forbidden")},
-				)}, nil
+				), nil
 			}
 
-			return inner(msg, dontWait)
+			return inner(msg)
 		}
 
 		err := harness.conn.PreparePeer(context.Background(), harness.peer)

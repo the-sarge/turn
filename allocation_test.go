@@ -189,5 +189,9 @@ func TestDeletedSurfaceDoesNotResolve(t *testing.T) {
 
 	performTransaction, ok := allocationConfig.FieldByName("PerformTransaction")
 	require.True(t, ok)
-	assert.Equal(t, 2, performTransaction.Type.NumIn(), "Allocation transactions accept message and wait policy only")
+	assert.Equal(t, 1, performTransaction.Type.NumIn(), "waited Allocation transactions accept one message")
+
+	startTransaction, ok := allocationConfig.FieldByName("StartTransaction")
+	require.True(t, ok)
+	assert.Equal(t, 1, startTransaction.Type.NumIn(), "fire-and-forget Allocation transactions accept one message")
 }

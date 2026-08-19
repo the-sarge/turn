@@ -16,7 +16,6 @@ import (
 	"github.com/pion/stun/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/the-sarge/turn/v5/internal/client"
 	"github.com/the-sarge/turn/v5/internal/proto"
 	"github.com/the-sarge/turn/v5/turntest"
 )
@@ -143,7 +142,7 @@ func TestHandleInboundAdmitsOnlyServer(t *testing.T) {
 
 	// pendingResponse starts work through the Client's transaction seam and
 	// returns the matching success plus the observable waiter result.
-	pendingResponse := func(t *testing.T, c *Client, conn *observerConn) ([]byte, <-chan client.TransactionResult) {
+	pendingResponse := func(t *testing.T, c *Client, conn *observerConn) ([]byte, <-chan *stun.Message) {
 		t.Helper()
 		req := stun.MustBuild(stun.TransactionID, stun.BindingRequest)
 		res, err := stun.Build(
@@ -152,9 +151,9 @@ func TestHandleInboundAdmitsOnlyServer(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		waited := make(chan client.TransactionResult, 1)
+		waited := make(chan *stun.Message, 1)
 		go func() {
-			result, _ := c.performTransaction(req, false)
+			result, _ := c.transactions.Perform(req)
 			waited <- result
 		}()
 		awaitWrite(t, conn, 1)
@@ -162,18 +161,17 @@ func TestHandleInboundAdmitsOnlyServer(t *testing.T) {
 		return res.Raw, waited
 	}
 
-	expectDelivered := func(t *testing.T, waited <-chan client.TransactionResult) {
+	expectDelivered := func(t *testing.T, waited <-chan *stun.Message) {
 		t.Helper()
 		select {
 		case res := <-waited:
-			assert.NoError(t, res.Err)
-			assert.NotNil(t, res.Msg)
+			assert.NotNil(t, res)
 		case <-time.After(time.Second):
 			assert.Fail(t, "waiter was not woken by a delivered server response")
 		}
 	}
 
-	expectIgnored := func(t *testing.T, waited <-chan client.TransactionResult) {
+	expectIgnored := func(t *testing.T, waited <-chan *stun.Message) {
 		t.Helper()
 		select {
 		case res := <-waited:
@@ -405,12 +403,12 @@ func TestClientCloseIsAnAbortCutNotATerminalState(t *testing.T) {
 		stun.NewType(stun.MethodBinding, stun.ClassSuccessResponse),
 	)
 	type outcome struct {
-		result client.TransactionResult
+		result *stun.Message
 		err    error
 	}
 	resultCh := make(chan outcome, 1)
 	go func() {
-		result, err := cl.performTransaction(request, false)
+		result, err := cl.transactions.Perform(request)
 		resultCh <- outcome{result: result, err: err}
 	}()
 	awaitWrite(t, conn, 1)
@@ -419,7 +417,7 @@ func TestClientCloseIsAnAbortCutNotATerminalState(t *testing.T) {
 	select {
 	case got := <-resultCh:
 		assert.NoError(t, got.err)
-		assert.NotNil(t, got.result.Msg)
+		assert.NotNil(t, got.result)
 	case <-time.After(time.Second):
 		assert.Fail(t, "transaction begun after Client.Close did not complete")
 	}
@@ -433,7 +431,7 @@ func TestClientCloseWinsBlockedInitialSendWithoutRearm(t *testing.T) {
 
 	resultCh := make(chan error, 1)
 	go func() {
-		_, err := cl.performTransaction(request, false)
+		_, err := cl.transactions.Perform(request)
 		resultCh <- err
 	}()
 	select {

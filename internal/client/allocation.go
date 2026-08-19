@@ -18,7 +18,9 @@ type AllocationConfig struct {
 	// WriteTo sends data to the configured server on the client's base socket.
 	WriteTo func(data []byte) (int, error)
 	// PerformTransaction runs a STUN transaction against the configured server.
-	PerformTransaction func(msg *stun.Message, dontWait bool) (TransactionResult, error)
+	PerformTransaction func(msg *stun.Message) (*stun.Message, error)
+	// StartTransaction starts a fire-and-forget STUN transaction against the configured server.
+	StartTransaction func(msg *stun.Message) error
 	// OnDeallocated is called once de-allocation of the relayed address is complete.
 	OnDeallocated func(relayedAddr net.Addr)
 
@@ -43,7 +45,7 @@ func (c *UDPConn) setNonceFromMsg(msg *stun.Message) {
 	}
 }
 
-func (c *UDPConn) refreshAllocation(lifetime time.Duration, dontWait bool) error {
+func (c *UDPConn) buildRefresh(lifetime time.Duration) (*stun.Message, error) {
 	msg, err := stun.Build(
 		stun.TransactionID,
 		stun.NewType(stun.MethodRefresh, stun.ClassRequest),
@@ -55,19 +57,22 @@ func (c *UDPConn) refreshAllocation(lifetime time.Duration, dontWait bool) error
 		stun.Fingerprint,
 	)
 	if err != nil {
-		return fmt.Errorf("%w: %w", errFailedToBuildRefreshRequest, err)
+		return nil, fmt.Errorf("%w: %w", errFailedToBuildRefreshRequest, err)
 	}
 
-	trRes, err := c.performTransaction(msg, dontWait)
+	return msg, nil
+}
+
+func (c *UDPConn) refreshAllocation(lifetime time.Duration) error {
+	msg, err := c.buildRefresh(lifetime)
+	if err != nil {
+		return err
+	}
+
+	res, err := c.performTransaction(msg)
 	if err != nil {
 		return fmt.Errorf("%w: %w", errFailedToRefreshAllocation, err)
 	}
-
-	if dontWait {
-		return nil
-	}
-
-	res := trRes.Msg
 	if res.Type.Class == stun.ClassErrorResponse {
 		var code stun.ErrorCodeAttribute
 		if err = code.GetFrom(res); err == nil {
@@ -99,6 +104,19 @@ func (c *UDPConn) refreshAllocation(lifetime time.Duration, dontWait bool) error
 	return nil
 }
 
+func (c *UDPConn) emitRelease() error {
+	msg, err := c.buildRefresh(0)
+	if err != nil {
+		return err
+	}
+
+	if err = c.startTransaction(msg); err != nil {
+		return fmt.Errorf("%w: %w", errFailedToRefreshAllocation, err)
+	}
+
+	return nil
+}
+
 func (c *UDPConn) refreshPermissions() error {
 	addrs := c.permMap.addrs()
 	if len(addrs) == 0 {
@@ -126,7 +144,7 @@ func (c *UDPConn) refreshAllocationWithRetries() {
 	// Limit the max retries on errTryAgain to 3
 	// when stale nonce returns, sencond retry should succeed
 	for range maxRetryAttempts {
-		err = c.refreshAllocation(lifetime, false)
+		err = c.refreshAllocation(lifetime)
 		if !errors.Is(err, errTryAgain) {
 			break
 		}

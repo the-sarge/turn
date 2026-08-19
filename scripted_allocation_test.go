@@ -18,7 +18,8 @@ import (
 )
 
 type scriptedAllocationScript struct {
-	performTransaction func(msg *stun.Message, dontWait bool) (client.TransactionResult, error)
+	performTransaction func(msg *stun.Message) (*stun.Message, error)
+	startTransaction   func(msg *stun.Message) error
 	onDeallocated      func(relayedAddr net.Addr)
 	onChannelBind      func(msg *stun.Message)
 	permissionCount    atomic.Int32
@@ -39,31 +40,39 @@ func (s *scriptedAllocationScript) writeTo(data []byte) (int, error) {
 }
 
 func (s *scriptedAllocationScript) transact(
-	msg *stun.Message, dontWait bool,
-) (client.TransactionResult, error) {
+	msg *stun.Message,
+) (*stun.Message, error) {
 	if s.performTransaction != nil {
-		return s.performTransaction(msg, dontWait)
+		return s.performTransaction(msg)
 	}
 
 	switch msg.Type.Method {
 	case stun.MethodCreatePermission:
 		s.permissionCount.Add(1)
 
-		return client.TransactionResult{Msg: stun.MustBuild(
+		return stun.MustBuild(
 			stun.NewType(stun.MethodCreatePermission, stun.ClassSuccessResponse),
-		)}, nil
+		), nil
 	case stun.MethodChannelBind:
 		s.bindingCount.Add(1)
 		if s.onChannelBind != nil {
 			s.onChannelBind(msg)
 		}
 
-		return client.TransactionResult{Msg: stun.MustBuild(
+		return stun.MustBuild(
 			stun.NewType(stun.MethodChannelBind, stun.ClassSuccessResponse),
-		)}, nil
+		), nil
 	default:
-		return client.TransactionResult{}, nil
+		return new(stun.Message), nil
 	}
+}
+
+func (s *scriptedAllocationScript) start(msg *stun.Message) error {
+	if s.startTransaction != nil {
+		return s.startTransaction(msg)
+	}
+
+	return nil
 }
 
 func (s *scriptedAllocationScript) deallocated(relayedAddr net.Addr) {
@@ -92,6 +101,7 @@ func newScriptedAllocation(
 	conn := client.NewUDPConn(&client.AllocationConfig{
 		WriteTo:            script.writeTo,
 		PerformTransaction: script.transact,
+		StartTransaction:   script.start,
 		OnDeallocated:      script.deallocated,
 		RelayedAddr:        net.UDPAddrFromAddrPort(relayed),
 		Username:           stun.NewUsername("user"),
