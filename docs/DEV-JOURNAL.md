@@ -621,3 +621,35 @@ PR [#81](https://github.com/the-sarge/turn/pull/81) landed Track 4 Slice T4.S1 a
 **Next**
 
 - No implementation frontier, deferred review finding, or untraced cadence effect remains. Post-merge closure will reconcile parent [#79](https://github.com/the-sarge/turn/issues/79) and the OmniFocus program mirror.
+
+---
+
+## UDPConn build-then-start landed - 2026-08-19 17:41 EDT
+
+**Main:** `be3f58d49408`
+**Actor:** Codex
+
+**Summary**
+
+PR [#96](https://github.com/the-sarge/turn/pull/96) landed Track 1 Slice T1.S1 as `be3f58d` and closed [#89](https://github.com/the-sarge/turn/issues/89). `NewUDPConn` is now exactly build-then-start: one unexported constructor establishes every Allocation invariant without goroutines, and one `start` seam arms the same three timers.
+
+**Completed**
+
+- Added focused evidence that a built-unstarted `UDPConn` has no running timers, closes validly, and emits exactly one release, while exported `NewUDPConn` still returns all three timers running and preserves the missing-abort panic.
+- Replaced mutable private-field setup with one `testConnScript`/`newTestConn` constructor in `internal/client` tests and one root `newScriptedAllocation` constructor with write capture.
+- Deleted `mockClient`, `configure`, `allocHarness`, and `inboundDeliveryHarness`; retained only the six audited capacity-one queue, completion-versus-seal, and attempt-result ownership literals.
+- Marked T1.S1 complete and T1.S2 as the remaining Track 1 frontier in the normative plan and program index.
+
+**Decisions**
+
+- `newUDPConn` owns construction invariants, `start` owns timer arming, `NewUDPConn` remains the only production constructor, and root `Client.Allocate` remains the only production `AllocationConfig` assembler. The finite representation domain, helper ceiling, and non-goals remain in the [UDPConn construction and transaction crossing plan](adr/2026-08-19-udpconn-construction-crossing-plan.md).
+
+**Validation**
+
+- Red-first constructor coverage failed on the missing `newUDPConn` seam, then the focused internal and root suites, `go test ./...`, and `go test -race ./...` passed after the split and harness migration.
+- Initial RAS review `20260819T212745-63a628fb2697c32ad5535cdf` found no contract-relevant behavioral failure. Its two low observations—an unused root script override and nonuniform cleanup for unstarted helpers—were independently rejected as hypothetical verification-aid cleanup with no unmet acceptance criterion, so no verification or replacement review was required.
+- Exact-head `task preflight` certified `8fa8810252df015f1f22c83643204de60aba8a19` against base `dfee1df4bbd4d828f9185b1fa6afc94161b4139d`, including format, vet, tests, lint, docs, race, dependency/vulnerability, Darwin/Windows build, workflow, and secret gates. Post-ready hosted run [32304899521](https://github.com/the-sarge/turn/actions/runs/32304899521) passed `ci-required` on that exact head before the guarded squash merge.
+
+**Next**
+
+- T1.S2 ([#90](https://github.com/the-sarge/turn/issues/90)) is the remaining Track 1 slice and stays independently ready; the live cross-track frontier is [tracking issue #95](https://github.com/the-sarge/turn/issues/95). No deferred review finding or untraced construction effect remains.
