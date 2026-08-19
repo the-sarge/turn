@@ -10,22 +10,22 @@ import (
 )
 
 type mockClient struct {
-	writeTo            func(data []byte, to net.Addr) (int, error)
-	performTransaction func(msg *stun.Message, to net.Addr, dontWait bool) (TransactionResult, error)
+	writeTo            func(data []byte) (int, error)
+	performTransaction func(msg *stun.Message, dontWait bool) (TransactionResult, error)
 	onDeallocated      func(relayedAddr net.Addr)
 }
 
-func (c *mockClient) WriteTo(data []byte, to net.Addr) (int, error) {
+func (c *mockClient) WriteTo(data []byte) (int, error) {
 	if c.writeTo != nil {
-		return c.writeTo(data, to)
+		return c.writeTo(data)
 	}
 
 	return 0, nil
 }
 
-func (c *mockClient) PerformTransaction(msg *stun.Message, to net.Addr, dontWait bool) (TransactionResult, error) {
+func (c *mockClient) PerformTransaction(msg *stun.Message, dontWait bool) (TransactionResult, error) {
 	if c.performTransaction != nil {
-		return c.performTransaction(msg, to, dontWait)
+		return c.performTransaction(msg, dontWait)
 	}
 
 	return TransactionResult{}, errFake

@@ -56,7 +56,7 @@ type ClientConfig struct {
 type Client struct {
 	conn       net.PacketConn // Read-only
 	server     netip.AddrPort // Read-only; canonical, the inbound admission comparand
-	serverAddr net.Addr       // Read-only; server as the transaction destination on conn
+	serverAddr net.Addr       // Read-only; socket-facing form of server
 
 	username     stun.Username               // Read-only
 	password     string                      // Read-only
@@ -155,14 +155,14 @@ func NewClient(config *ClientConfig) (*Client, error) {
 		bindingRefreshInterval:    config.bindingRefreshInterval,
 		bindingCheckInterval:      config.bindingCheckInterval,
 	}
-	turnClient.transactions = client.NewTransactionRegistry(turnClient.writeTo, rto)
+	turnClient.transactions = client.NewTransactionRegistry(turnClient.sendToServer, rto)
 
 	return turnClient, nil
 }
 
-// writeTo sends data to the specified destination using the base socket.
-func (c *Client) writeTo(data []byte, to net.Addr) (int, error) {
-	return c.conn.WriteTo(data, to)
+// sendToServer sends data to the configured server using the base socket.
+func (c *Client) sendToServer(data []byte) (int, error) {
+	return c.conn.WriteTo(data, c.serverAddr)
 }
 
 // Close closes this client: every pending transaction is closed and its
@@ -307,11 +307,10 @@ func (c *Client) Allocate(ctx context.Context) (*Allocation, error) {
 	}
 
 	relayedConn = client.NewUDPConn(&client.AllocationConfig{
-		WriteTo:                   c.writeTo,
+		WriteTo:                   c.sendToServer,
 		PerformTransaction:        c.performTransaction,
 		OnDeallocated:             c.onDeallocated,
 		RelayedAddr:               relayedAddr,
-		ServerAddr:                c.serverAddr,
 		Realm:                     c.realm,
 		Username:                  c.username,
 		Integrity:                 c.integrity,
@@ -336,14 +335,14 @@ func (c *Client) Allocate(ctx context.Context) (*Allocation, error) {
 }
 
 // performTransaction performs STUN transaction.
-func (c *Client) performTransaction(msg *stun.Message, to net.Addr, ignoreResult bool) (client.TransactionResult,
+func (c *Client) performTransaction(msg *stun.Message, ignoreResult bool) (client.TransactionResult,
 	error,
 ) {
 	if ignoreResult {
-		return client.TransactionResult{}, c.transactions.Start(msg, to)
+		return client.TransactionResult{}, c.transactions.Start(msg)
 	}
 
-	return c.transactions.Perform(msg, to)
+	return c.transactions.Perform(msg)
 }
 
 // performAllocateTransaction delegates Allocate's private cancelable wait to
@@ -351,7 +350,7 @@ func (c *Client) performTransaction(msg *stun.Message, to net.Addr, ignoreResult
 func (c *Client) performAllocateTransaction(ctx context.Context, msg *stun.Message) (
 	client.TransactionResult, error,
 ) {
-	return c.transactions.PerformWithContext(ctx, msg, c.serverAddr)
+	return c.transactions.PerformWithContext(ctx, msg)
 }
 
 // onDeallocated is called when de-allocation of relay address has been complete.

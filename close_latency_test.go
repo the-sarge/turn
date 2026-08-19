@@ -43,20 +43,19 @@ func newSilentServerAllocation(t *testing.T) (*client.UDPConn, <-chan string) {
 	closeOrder := make(chan string, 3)
 
 	config := &client.AllocationConfig{
-		WriteTo: cl.writeTo,
-		PerformTransaction: func(msg *stun.Message, to net.Addr, dontWait bool) (client.TransactionResult, error) {
+		WriteTo: cl.sendToServer,
+		PerformTransaction: func(msg *stun.Message, dontWait bool) (client.TransactionResult, error) {
 			if msg.Type.Method == stun.MethodRefresh && dontWait {
 				closeOrder <- "release"
 			}
 
-			return cl.performTransaction(msg, to, dontWait)
+			return cl.performTransaction(msg, dontWait)
 		},
 		OnDeallocated: func(addr net.Addr) {
 			closeOrder <- "deallocated"
 			cl.onDeallocated(addr)
 		},
 		RelayedAddr: &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 54321},
-		ServerAddr:  cl.serverAddr,
 		Username:    stun.NewUsername("user"),
 		Realm:       stun.NewRealm("realm"),
 		Integrity:   stun.NewShortTermIntegrity("secret"),

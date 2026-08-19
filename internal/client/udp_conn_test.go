@@ -56,7 +56,6 @@ func TestNewUDPConnRejectsMissingAbortBeforeStartingWork(t *testing.T) {
 			PerformTransaction: mock.PerformTransaction,
 			OnDeallocated:      mock.OnDeallocated,
 			RelayedAddr:        &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 54321},
-			ServerAddr:         &net.UDPAddr{IP: net.ParseIP("10.0.0.1"), Port: 3478},
 			Username:           stun.NewUsername("user"),
 			Realm:              stun.NewRealm("realm"),
 			Integrity:          stun.NewShortTermIntegrity("pass"),
@@ -97,7 +96,6 @@ func TestRefreshAllocationPreservesRequestAndRetriesStaleNonce(t *testing.T) {
 	integrity := stun.NewShortTermIntegrity("pass")
 	oldNonce := stun.NewNonce("old-nonce")
 	freshNonce := stun.NewNonce("fresh-nonce")
-	serverAddr := &net.UDPAddr{IP: net.ParseIP("10.0.0.1"), Port: 3478}
 
 	for _, tt := range []struct {
 		name       string
@@ -110,7 +108,7 @@ func TestRefreshAllocationPreservesRequestAndRetriesStaleNonce(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			calls := 0
 			mock := &mockClient{
-				performTransaction: func(msg *stun.Message, _ net.Addr, dontWait bool) (TransactionResult, error) {
+				performTransaction: func(msg *stun.Message, dontWait bool) (TransactionResult, error) {
 					calls++
 					assert.False(t, dontWait)
 					nonce := oldNonce
@@ -148,12 +146,11 @@ func TestRefreshAllocationPreservesRequestAndRetriesStaleNonce(t *testing.T) {
 				},
 			}
 			conn := UDPConn{
-				serverAddr: serverAddr,
-				username:   username,
-				realm:      realm,
-				integrity:  integrity,
-				_nonce:     oldNonce,
-				_lifetime:  lifetime,
+				username:  username,
+				realm:     realm,
+				integrity: integrity,
+				_nonce:    oldNonce,
+				_lifetime: lifetime,
 			}
 			mock.configure(&conn)
 
@@ -175,14 +172,13 @@ func TestPermissionAndBindingRequestShapes(t *testing.T) {
 	realm := stun.NewRealm("realm")
 	integrity := stun.NewShortTermIntegrity("pass")
 	nonce := stun.NewNonce("nonce")
-	serverAddr := &net.UDPAddr{IP: net.ParseIP("10.0.0.1"), Port: 3478}
 	peerA := netip.MustParseAddrPort("192.0.2.1:5000")
 	peerB := netip.MustParseAddrPort("192.0.2.2:6000")
 	bindingMgr := newBindingManager()
 	bound := requireBinding(t, bindingMgr, peerA)
 
 	mock := &mockClient{
-		performTransaction: func(msg *stun.Message, _ net.Addr, dontWait bool) (TransactionResult, error) {
+		performTransaction: func(msg *stun.Message, dontWait bool) (TransactionResult, error) {
 			assert.False(t, dontWait)
 			switch msg.Type.Method {
 			case stun.MethodCreatePermission:
@@ -237,7 +233,6 @@ func TestPermissionAndBindingRequestShapes(t *testing.T) {
 		},
 	}
 	conn := UDPConn{
-		serverAddr: serverAddr,
 		username:   username,
 		realm:      realm,
 		integrity:  integrity,
@@ -306,7 +301,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 				bm := newBindingManager()
 				bound := requireBinding(t, bm, netip.MustParseAddrPort("127.0.0.1:1234"))
 				conn := makeConn(&mockClient{
-					performTransaction: func(msg *stun.Message, addr net.Addr, dontWait bool) (TransactionResult, error) {
+					performTransaction: func(msg *stun.Message, dontWait bool) (TransactionResult, error) {
 						<-unblock
 						if tt.shouldSucceed {
 							return TransactionResult{Msg: new(stun.Message)}, nil
@@ -337,7 +332,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 	t.Run("bind()", func(t *testing.T) {
 		tests := []struct {
 			name                 string
-			transactionFn        func(*stun.Message, net.Addr, bool) (TransactionResult, error)
+			transactionFn        func(*stun.Message, bool) (TransactionResult, error)
 			expectErr            error
 			expectErrContains    string
 			expectBadRequest     bool
@@ -347,7 +342,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		}{
 			{
 				name: "PerformTransaction returns error",
-				transactionFn: func(*stun.Message, net.Addr, bool) (TransactionResult, error) {
+				transactionFn: func(*stun.Message, bool) (TransactionResult, error) {
 					return TransactionResult{}, errFake
 				},
 				expectErr:            errFake,
@@ -355,7 +350,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 			},
 			{
 				name: "ErrorResponse with CodeStaleNonce triggers nonce update",
-				transactionFn: func(*stun.Message, net.Addr, bool) (TransactionResult, error) {
+				transactionFn: func(*stun.Message, bool) (TransactionResult, error) {
 					return TransactionResult{Msg: staleNonceMsg()}, nil
 				},
 				expectErr:          errTryAgain,
@@ -363,7 +358,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 			},
 			{
 				name: "ErrorResponse with error code returns cannot bind channel error",
-				transactionFn: func(*stun.Message, net.Addr, bool) (TransactionResult, error) {
+				transactionFn: func(*stun.Message, bool) (TransactionResult, error) {
 					res := stun.MustBuild(
 						stun.NewType(stun.MethodChannelBind, stun.ClassErrorResponse),
 						stun.ErrorCodeAttribute{Code: stun.CodeForbidden, Reason: []byte("Forbidden")},
@@ -377,7 +372,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 			},
 			{
 				name: "ErrorResponse with CodeBadRequest is detectable",
-				transactionFn: func(*stun.Message, net.Addr, bool) (TransactionResult, error) {
+				transactionFn: func(*stun.Message, bool) (TransactionResult, error) {
 					res := stun.MustBuild(
 						stun.NewType(stun.MethodChannelBind, stun.ClassErrorResponse),
 						stun.ErrorCodeAttribute{Code: stun.CodeBadRequest, Reason: []byte("Bad Request")},
@@ -392,7 +387,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 			},
 			{
 				name: "ErrorResponse without error code returns unexpected response type error",
-				transactionFn: func(*stun.Message, net.Addr, bool) (TransactionResult, error) {
+				transactionFn: func(*stun.Message, bool) (TransactionResult, error) {
 					res := stun.MustBuild(
 						stun.NewType(stun.MethodChannelBind, stun.ClassErrorResponse),
 					)
@@ -459,7 +454,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		bound := requireBinding(t, bm, netip.MustParseAddrPort("127.0.0.1:1234"))
 		var attempts atomic.Int32
 		conn := makeConn(&mockClient{
-			performTransaction: func(*stun.Message, net.Addr, bool) (TransactionResult, error) {
+			performTransaction: func(*stun.Message, bool) (TransactionResult, error) {
 				attempts.Add(1)
 
 				return TransactionResult{Msg: staleNonceMsg()}, nil
@@ -481,7 +476,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		bound := requireBinding(t, bm, netip.MustParseAddrPort("127.0.0.1:1234"))
 		originalCh := bound.number
 		conn := makeConn(&mockClient{
-			performTransaction: func(msg *stun.Message, addr net.Addr, dontWait bool) (TransactionResult, error) {
+			performTransaction: func(msg *stun.Message, dontWait bool) (TransactionResult, error) {
 				if failed.CompareAndSwap(false, true) {
 					return TransactionResult{}, errFake
 				}
@@ -508,15 +503,13 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 	t.Run("ChannelBind 400 closes allocation", func(t *testing.T) {
 		relayedAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 54321}
 		peerAddr := netip.MustParseAddrPort("127.0.0.1:50000")
-		serverAddr := &net.UDPAddr{IP: net.ParseIP("10.0.0.1"), Port: 3478}
-
 		deallocatedCh := make(chan net.Addr, 1)
 		refreshLifetimeCh := make(chan time.Duration, 1)
 		refreshDontWaitCh := make(chan bool, 1)
 		refreshErrCh := make(chan error, 1)
 
 		client := &mockClient{
-			performTransaction: func(msg *stun.Message, _ net.Addr, dontWait bool) (TransactionResult, error) {
+			performTransaction: func(msg *stun.Message, dontWait bool) (TransactionResult, error) {
 				switch msg.Type.Method {
 				case stun.MethodChannelBind:
 					return TransactionResult{
@@ -549,7 +542,6 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 			PerformTransaction: client.PerformTransaction,
 			OnDeallocated:      client.OnDeallocated,
 			RelayedAddr:        relayedAddr,
-			ServerAddr:         serverAddr,
 			Username:           stun.NewUsername("user"),
 			Realm:              stun.NewRealm("realm"),
 			Integrity:          stun.NewShortTermIntegrity("pass"),
@@ -605,13 +597,11 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 	t.Run("ChannelBind 400 after unknown binding closes allocation", func(t *testing.T) {
 		relayedAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 54321}
 		peerAddr := netip.MustParseAddrPort("127.0.0.1:1234")
-		serverAddr := &net.UDPAddr{IP: net.ParseIP("10.0.0.1"), Port: 3478}
-
 		var channelBindAttempts atomic.Int32
 		deallocatedCh := make(chan net.Addr, 1)
 
 		client := &mockClient{
-			performTransaction: func(msg *stun.Message, addr net.Addr, dontWait bool) (TransactionResult, error) {
+			performTransaction: func(msg *stun.Message, dontWait bool) (TransactionResult, error) {
 				switch msg.Type.Method {
 				case stun.MethodChannelBind:
 					if channelBindAttempts.Add(1) == 1 {
@@ -634,7 +624,6 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 			PerformTransaction: client.PerformTransaction,
 			OnDeallocated:      client.OnDeallocated,
 			RelayedAddr:        relayedAddr,
-			ServerAddr:         serverAddr,
 			Username:           stun.NewUsername("user"),
 			Realm:              stun.NewRealm("realm"),
 			Integrity:          stun.NewShortTermIntegrity("pass"),
@@ -672,12 +661,10 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 	t.Run("ChannelBind 400 after lost ready refresh keeps saved binding", func(t *testing.T) {
 		relayedAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 54321}
 		peerAddr := netip.MustParseAddrPort("127.0.0.1:1234")
-		serverAddr := &net.UDPAddr{IP: net.ParseIP("10.0.0.1"), Port: 3478}
-
 		var channelBindAttempts atomic.Int32
 
 		client := &mockClient{
-			performTransaction: func(msg *stun.Message, addr net.Addr, dontWait bool) (TransactionResult, error) {
+			performTransaction: func(msg *stun.Message, dontWait bool) (TransactionResult, error) {
 				switch msg.Type.Method {
 				case stun.MethodChannelBind:
 					if channelBindAttempts.Add(1) == 1 {
@@ -697,7 +684,6 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 			PerformTransaction: client.PerformTransaction,
 			OnDeallocated:      client.OnDeallocated,
 			RelayedAddr:        relayedAddr,
-			ServerAddr:         serverAddr,
 			Username:           stun.NewUsername("user"),
 			Realm:              stun.NewRealm("realm"),
 			Integrity:          stun.NewShortTermIntegrity("pass"),
@@ -732,7 +718,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		bound.setState(bindingStateReady)
 		bound.setRefreshedAt(staleRefreshedAt)
 		conn := makeConn(&mockClient{
-			performTransaction: func(msg *stun.Message, addr net.Addr, dontWait bool) (TransactionResult, error) {
+			performTransaction: func(msg *stun.Message, dontWait bool) (TransactionResult, error) {
 				channelBindAttempts.Add(1)
 
 				return TransactionResult{Msg: badRequestMsg()}, nil
@@ -753,10 +739,10 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 
 	t.Run("WriteTo()", func(t *testing.T) {
 		client := &mockClient{
-			performTransaction: func(*stun.Message, net.Addr, bool) (TransactionResult, error) {
+			performTransaction: func(*stun.Message, bool) (TransactionResult, error) {
 				return TransactionResult{}, errFake
 			},
-			writeTo: func(data []byte, _ net.Addr) (int, error) {
+			writeTo: func(data []byte) (int, error) {
 				return len(data), nil
 			},
 		}
@@ -788,8 +774,6 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 
 	t.Run("ChannelBind transaction failure retains channel number", func(t *testing.T) {
 		addr := netip.MustParseAddrPort("127.0.0.1:9999")
-		serverAddr := &net.UDPAddr{IP: net.ParseIP("10.0.0.1"), Port: 3478}
-
 		pm := newPermissionMap()
 		assert.True(t, pm.insert(addr, &permission{st: permStatePermitted}))
 
@@ -798,16 +782,15 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		originalCh := bound.number
 
 		client := &mockClient{
-			performTransaction: func(*stun.Message, net.Addr, bool) (TransactionResult, error) {
+			performTransaction: func(*stun.Message, bool) (TransactionResult, error) {
 				return TransactionResult{}, errFake
 			},
-			writeTo: func(data []byte, _ net.Addr) (int, error) {
+			writeTo: func(data []byte) (int, error) {
 				return len(data), nil
 			},
 		}
 
 		conn := UDPConn{
-			serverAddr: serverAddr,
 			permMap:    pm,
 			username:   stun.NewUsername("user"),
 			realm:      stun.NewRealm("realm"),
@@ -836,7 +819,7 @@ func TestCreatePermissions(t *testing.T) {
 	t.Run("CreatePermissions success", func(t *testing.T) {
 		called := false
 		client := &mockClient{
-			performTransaction: func(msg *stun.Message, addr net.Addr, _ bool) (TransactionResult, error) {
+			performTransaction: func(msg *stun.Message, _ bool) (TransactionResult, error) {
 				called = true
 				// Simulate a successful response
 				res := stun.New()
@@ -846,11 +829,10 @@ func TestCreatePermissions(t *testing.T) {
 			},
 		}
 		conn := &UDPConn{
-			serverAddr: &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 3478},
-			username:   stun.NewUsername("user"),
-			realm:      stun.NewRealm("realm"),
-			integrity:  stun.NewShortTermIntegrity("pass"),
-			_nonce:     stun.NewNonce("nonce"),
+			username:  stun.NewUsername("user"),
+			realm:     stun.NewRealm("realm"),
+			integrity: stun.NewShortTermIntegrity("pass"),
+			_nonce:    stun.NewNonce("nonce"),
 		}
 		client.configure(conn)
 		addr := netip.MustParseAddrPort("5.6.7.8:12345")
@@ -861,7 +843,7 @@ func TestCreatePermissions(t *testing.T) {
 
 	t.Run("CreatePermissions error", func(t *testing.T) {
 		client := &mockClient{
-			performTransaction: func(msg *stun.Message, addr net.Addr, _ bool) (TransactionResult, error) {
+			performTransaction: func(msg *stun.Message, _ bool) (TransactionResult, error) {
 				res := stun.New()
 				res.Type = stun.NewType(stun.MethodCreatePermission, stun.ClassErrorResponse)
 				code := stun.ErrorCodeAttribute{
@@ -874,11 +856,10 @@ func TestCreatePermissions(t *testing.T) {
 			},
 		}
 		conn := &UDPConn{
-			serverAddr: &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 3478},
-			username:   stun.NewUsername("user"),
-			realm:      stun.NewRealm("realm"),
-			integrity:  stun.NewShortTermIntegrity("pass"),
-			_nonce:     stun.NewNonce("nonce"),
+			username:  stun.NewUsername("user"),
+			realm:     stun.NewRealm("realm"),
+			integrity: stun.NewShortTermIntegrity("pass"),
+			_nonce:    stun.NewNonce("nonce"),
 		}
 		client.configure(conn)
 		addr := netip.MustParseAddrPort("5.6.7.8:12345")

@@ -42,7 +42,7 @@ func newRefreshFailureHarness(
 
 	harness := &refreshFailureHarness{waitedRefresh: waited, emitErr: emitErr}
 	mock := &mockClient{
-		performTransaction: func(msg *stun.Message, _ net.Addr, dontWait bool) (TransactionResult, error) {
+		performTransaction: func(msg *stun.Message, dontWait bool) (TransactionResult, error) {
 			switch msg.Type.Method {
 			case stun.MethodRefresh:
 				if dontWait {
@@ -68,7 +68,7 @@ func newRefreshFailureHarness(
 				return TransactionResult{}, errFake
 			}
 		},
-		writeTo: func(data []byte, _ net.Addr) (int, error) {
+		writeTo: func(data []byte) (int, error) {
 			return len(data), nil
 		},
 	}
@@ -78,7 +78,6 @@ func newRefreshFailureHarness(
 		PerformTransaction: mock.PerformTransaction,
 		OnDeallocated:      mock.OnDeallocated,
 		RelayedAddr:        &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 54321},
-		ServerAddr:         &net.UDPAddr{IP: net.ParseIP("10.0.0.1"), Port: 3478},
 		Username:           stun.NewUsername("user"),
 		Realm:              stun.NewRealm("realm"),
 		Integrity:          stun.NewShortTermIntegrity("pass"),
