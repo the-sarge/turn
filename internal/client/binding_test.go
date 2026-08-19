@@ -8,10 +8,230 @@ import (
 	"net/netip"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestBindingReadinessBeginsAndRetriesFreshAttempt(t *testing.T) {
+	t0 := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
+	bound := &binding{}
+
+	token1, class, started := bound.beginAttempt(t0, defaultBindingRefreshInterval)
+	require.True(t, started)
+	assert.Equal(t, bindingAttemptFresh, class)
+	final, err := bound.preparationAccess(t0)
+	assert.False(t, final)
+	assert.NoError(t, err)
+	assert.ErrorIs(t, bound.writeAccess(t0), ErrNotPrepared)
+
+	_, _, started = bound.beginAttempt(t0, defaultBindingRefreshInterval)
+	assert.False(t, started, "one readiness generation may be active at a time")
+
+	assert.True(t, bound.resolveAttempt(token1, bindingAttemptUncertain, nil, t0))
+	token2, class, started := bound.beginAttempt(t0, defaultBindingRefreshInterval)
+	require.True(t, started)
+	assert.NotEqual(t, token1, token2)
+	assert.Equal(t, bindingAttemptFresh, class)
+
+	assert.False(t, bound.resolveAttempt(token1, bindingAttemptConfirmed, nil, t0.Add(time.Minute)),
+		"a stale completion must not overwrite a newer attempt")
+}
+
+func TestBindingReadinessRejectsDuplicateResolution(t *testing.T) {
+	t0 := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
+	bound := &binding{}
+	token, _, started := bound.beginAttempt(t0, defaultBindingRefreshInterval)
+	require.True(t, started)
+	require.True(t, bound.resolveAttempt(token, bindingAttemptUncertain, nil, t0))
+
+	assert.False(t, bound.resolveAttempt(token, bindingAttemptConfirmed, nil, t0.Add(time.Minute)),
+		"one live token may resolve at most once")
+	nextToken, class, started := bound.beginAttempt(t0.Add(time.Minute), defaultBindingRefreshInterval)
+	require.True(t, started, "the first uncertainty outcome must remain retryable")
+	assert.NotEqual(t, token, nextToken)
+	assert.Equal(t, bindingAttemptFresh, class)
+}
+
+func TestBindingReadinessRefreshThresholdAndPreservedConfirmation(t *testing.T) {
+	t0 := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
+	bound := &binding{}
+	token, _, started := bound.beginAttempt(t0, defaultBindingRefreshInterval)
+	require.True(t, started)
+	require.True(t, bound.resolveAttempt(token, bindingAttemptConfirmed, nil, t0))
+
+	for _, now := range []time.Time{
+		t0.Add(defaultBindingRefreshInterval - time.Nanosecond),
+		t0.Add(defaultBindingRefreshInterval),
+	} {
+		_, _, started = bound.beginAttempt(now, defaultBindingRefreshInterval)
+		assert.False(t, started, "refresh eligibility is strictly after the interval")
+	}
+
+	refreshToken, class, started := bound.beginAttempt(
+		t0.Add(defaultBindingRefreshInterval+time.Nanosecond),
+		defaultBindingRefreshInterval,
+	)
+	require.True(t, started)
+	assert.Equal(t, bindingAttemptPreviouslyConfirmed, class)
+	require.True(t, bound.resolveAttempt(
+		refreshToken,
+		bindingAttemptPreserveConfirmation,
+		nil,
+		t0.Add(defaultBindingRefreshInterval+time.Minute),
+	))
+
+	final, err := bound.preparationAccess(t0.Add(channelBindingLifetime))
+	assert.True(t, final)
+	assert.ErrorIs(t, err, ErrChannelBindingExpired,
+		"preserving a prior confirmation must not advance its age")
+}
+
+func TestBindingReadinessPreparationAndWriteAccess(t *testing.T) {
+	t0 := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
+	bound := &binding{}
+
+	assert.ErrorIs(t, bound.writeAccess(t0), ErrNotPrepared)
+	token, _, started := bound.beginAttempt(t0, defaultBindingRefreshInterval)
+	require.True(t, started)
+	require.True(t, bound.resolveAttempt(token, bindingAttemptConfirmed, nil, t0))
+	assert.ErrorIs(t, bound.writeAccess(t0), ErrNotPrepared,
+		"server confirmation alone must not establish prepared history")
+
+	final, err := bound.preparationAccess(t0.Add(channelBindingLifetime - time.Nanosecond))
+	assert.True(t, final)
+	require.NoError(t, err)
+	require.NoError(t, bound.writeAccess(t0.Add(channelBindingLifetime-time.Nanosecond)))
+
+	assert.ErrorIs(t, bound.writeAccess(t0.Add(channelBindingLifetime)), ErrChannelBindingExpired)
+	assert.ErrorIs(t, bound.writeAccess(t0.Add(channelBindingLifetime+time.Second)), ErrChannelBindingExpired,
+		"expiry must retain its first durable cause")
+	assert.False(t, bound.resolveAttempt(token, bindingAttemptConfirmed, nil, t0.Add(time.Hour)),
+		"late completion must not resurrect terminal readiness")
+}
+
+func TestBindingReadinessPreparedPermissionLossOrdering(t *testing.T) {
+	t0 := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
+	permissionCause := fmt.Errorf("%w: permission transaction", ErrPermissionRefreshFailed)
+	otherCause := fmt.Errorf("%w: later failure", ErrPermissionRefreshFailed)
+
+	t.Run("loss before preparation does not terminalize", func(t *testing.T) {
+		bound := confirmedBinding(t, t0)
+		assert.False(t, bound.failPrepared(permissionCause))
+		final, err := bound.preparationAccess(t0)
+		assert.True(t, final)
+		assert.NoError(t, err)
+	})
+
+	t.Run("preparation before loss records the first cause", func(t *testing.T) {
+		bound := confirmedBinding(t, t0)
+		final, err := bound.preparationAccess(t0)
+		require.True(t, final)
+		require.NoError(t, err)
+
+		assert.True(t, bound.failPrepared(permissionCause))
+		assert.False(t, bound.failPrepared(otherCause))
+		assert.ErrorIs(t, bound.writeAccess(t0), permissionCause)
+		assert.NotErrorIs(t, bound.writeAccess(t0), otherCause)
+	})
+}
+
+func TestBindingReadinessPreviouslyConfirmedAttemptKeepsAccess(t *testing.T) {
+	t0 := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
+	bound := confirmedBinding(t, t0)
+	final, err := bound.preparationAccess(t0)
+	require.True(t, final)
+	require.NoError(t, err)
+
+	token, class, started := bound.beginAttempt(
+		t0.Add(defaultBindingRefreshInterval+time.Nanosecond),
+		defaultBindingRefreshInterval,
+	)
+	require.True(t, started)
+	assert.Equal(t, bindingAttemptPreviouslyConfirmed, class)
+	require.NoError(t, bound.writeAccess(t0.Add(defaultBindingRefreshInterval+time.Second)),
+		"a previously confirmed refresh in flight remains usable")
+
+	require.True(t, bound.resolveAttempt(token, bindingAttemptUncertain, nil, t0.Add(6*time.Minute)))
+	require.NoError(t, bound.writeAccess(t0.Add(6*time.Minute)),
+		"previously confirmed uncertainty preserves usable history")
+	_, class, started = bound.beginAttempt(t0.Add(6*time.Minute), defaultBindingRefreshInterval)
+	require.True(t, started, "uncertain confirmed readiness is immediately refresh eligible")
+	assert.Equal(t, bindingAttemptPreviouslyConfirmed, class)
+}
+
+func TestBindingReadinessPermanentFailureIsDurable(t *testing.T) {
+	t0 := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
+	bound := &binding{}
+	token, _, started := bound.beginAttempt(t0, defaultBindingRefreshInterval)
+	require.True(t, started)
+	cause := fmt.Errorf("permanent: %w", ErrChannelBindFailed)
+
+	require.True(t, bound.resolveAttempt(token, bindingAttemptPermanentFailure, cause, t0))
+	final, err := bound.preparationAccess(t0)
+	assert.True(t, final)
+	assert.ErrorIs(t, err, cause)
+	_, _, started = bound.beginAttempt(t0.Add(time.Minute), defaultBindingRefreshInterval)
+	assert.False(t, started)
+	assert.False(t, bound.resolveAttempt(token, bindingAttemptConfirmed, nil, t0.Add(time.Minute)))
+}
+
+func TestBindingReadinessPermanentOutcomeOrdersWithAccess(t *testing.T) {
+	t0 := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
+	bound := confirmedBinding(t, t0)
+	final, err := bound.preparationAccess(t0)
+	require.True(t, final)
+	require.NoError(t, err)
+	token, _, started := bound.beginAttempt(
+		t0.Add(defaultBindingRefreshInterval+time.Nanosecond),
+		defaultBindingRefreshInterval,
+	)
+	require.True(t, started)
+
+	require.NoError(t, bound.writeAccess(t0.Add(defaultBindingRefreshInterval+time.Second)),
+		"access linearized before the permanent outcome may observe prior usability")
+	cause := fmt.Errorf("permanent refresh: %w", ErrChannelBindFailed)
+	require.True(t, bound.resolveAttempt(token, bindingAttemptPermanentFailure, cause, t0.Add(6*time.Minute)))
+	assert.ErrorIs(t, bound.writeAccess(t0.Add(6*time.Minute)), cause,
+		"access linearized after the permanent outcome observes the durable cause")
+}
+
+func TestBindingReadinessExpiryRejectsInFlightCompletion(t *testing.T) {
+	t0 := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
+	bound := confirmedBinding(t, t0)
+	final, err := bound.preparationAccess(t0)
+	require.True(t, final)
+	require.NoError(t, err)
+
+	token, class, started := bound.beginAttempt(
+		t0.Add(defaultBindingRefreshInterval+time.Nanosecond),
+		defaultBindingRefreshInterval,
+	)
+	require.True(t, started)
+	assert.Equal(t, bindingAttemptPreviouslyConfirmed, class)
+	assert.ErrorIs(t, bound.writeAccess(t0.Add(channelBindingLifetime)), ErrChannelBindingExpired)
+	assert.False(t, bound.resolveAttempt(token, bindingAttemptConfirmed, nil, t0.Add(channelBindingLifetime)),
+		"an in-flight success must not resurrect terminal expiry")
+	assert.ErrorIs(t, bound.writeAccess(t0.Add(channelBindingLifetime)), ErrChannelBindingExpired)
+}
+
+func confirmedBinding(t *testing.T, confirmedAt time.Time) *binding {
+	t.Helper()
+
+	bound := &binding{}
+	confirmBindingAt(t, bound, confirmedAt)
+
+	return bound
+}
+
+func confirmBindingAt(t *testing.T, bound *binding, confirmedAt time.Time) {
+	t.Helper()
+
+	token, _, started := bound.beginAttempt(confirmedAt, defaultBindingRefreshInterval)
+	require.True(t, started)
+	require.True(t, bound.resolveAttempt(token, bindingAttemptConfirmed, nil, confirmedAt))
+}
 
 func TestBindingManagerCapacity(t *testing.T) {
 	const wantCapacity = 16_384

@@ -1,7 +1,7 @@
 # Channel-Binding Readiness Implementation Plan
 
 **Date:** 2026-08-19
-**Status:** Accepted; not yet implemented
+**Status:** Implemented by PR #76
 **Track:** 3 of 3 in the 2026-08-19 architecture deepening program
 **Depends on:** Nothing — parallel-safe with the other tracks
 **Related:** [Program index](2026-08-19-architecture-deepening-program.md), [Prepared-only writes ADR](2026-08-15-prepared-only-writes.md), [TURN consistency plan](2026-08-17-turn-consistency-plan.md), [Allocation lifecycle plan](2026-08-17-allocation-lifecycle-plan.md)
@@ -48,13 +48,15 @@ Every time-dependent readiness decision receives `time.Time` from the immediate 
 
 | Slice | Status/disposition | Delivers | Blocked by | Removes temporary seam |
 |---|---|---|---|---|
-| T3.S1 | New | One binding-local owner decides readiness transitions, preparation, write access, expiry, and terminality | None | Removes raw state/time/error/prepared access from `UDPConn` and tests in the same slice |
+| T3.S1 | Complete via PR #76 | One binding-local owner decides readiness transitions, preparation, write access, expiry, and terminality | None | Removed raw state/time/error/prepared access from `UDPConn` and tests in the same slice |
 
 ## Implementation Slices
 
 ### Slice T3.S1 — Make binding readiness the transition owner
 
 **What it delivers:** One PR introducing outcome-shaped binding-local decisions, migrating PreparePeer, scheduled refresh, ChannelBind completion/error disposition, prepared-only WriteTo, and permission-loss terminalization to them, deleting outward raw readiness mechanics, and replacing private-state-poking tests with a finite readiness table plus preserved Allocation-level behavior and race evidence.
+
+**Implementation:** PR #76 is the slice's one intended product PR.
 
 **Existing-work disposition:** New slice. There are no open issues, PRs, or implementation branches to retain or rebaseline as of 2026-08-19.
 
@@ -76,29 +78,29 @@ Every time-dependent readiness decision receives `time.Time` from the immediate 
 
 | Semantic class | Expected disposition | Enforcement owner | Evidence | Guard mutation when required | Status |
 |---|---|---|---|---|---|
-| Fresh or fresh-unknown, no attempt active | Initial attempt eligible | Binding readiness | Decision table | n/a | Planned |
-| Fresh initial attempt in flight | Preparation waits on the joined attempt; write remains `ErrNotPrepared` | Attempt coordination plus binding readiness | Controlled in-flight access case | n/a | Planned |
-| Confirmed, age at or below refresh interval | No refresh attempt | Binding readiness | Below/at threshold cases | n/a | Planned |
-| Confirmed, age strictly above refresh interval; or ready-uncertain | Refresh attempt eligible with prior-confirmation history | Binding readiness | Above-threshold and uncertain cases | n/a | Planned |
-| Previously confirmed refresh in flight | Preparation and already-prepared writes remain usable while unexpired | Binding readiness | Controlled in-flight refresh access case | n/a | Planned |
-| Ready-uncertain access | Preparation and prepared writes remain usable while refresh is eligible | Binding readiness | Outcome/access table | n/a | Planned |
-| Successful initial or refresh completion before terminality | Record confirmation time and usable readiness | Binding readiness | Completion table and PreparePeer flow | n/a | Planned |
-| Waiter selects cancellation or close before preparation access after confirmation | Do not establish prepared history; another caller may observe readiness | `UDPConn` waiter plus binding readiness | Deterministic cancellation-selected/second-caller case | n/a | Planned |
-| Waiter observes readiness before concurrently ready cancellation | Preparation may succeed; no new cancellation precedence is promised | `UDPConn` waiter plus binding readiness | Existing selection contract and focused success case | n/a | Planned |
-| Fresh transaction uncertainty | Preserve channel identity, become retryable unknown, and publish transient error only to joined attempt | Binding readiness plus attempt coordination | Outcome table and later retry flow | n/a | Planned |
-| Previously confirmed transaction uncertainty | Preserve usable ready history, make refresh eligible, and keep transient result attempt-local | Binding readiness plus attempt coordination | Outcome table and scheduled refresh | n/a | Planned |
-| Fresh 400 selected as failure by `UDPConn` | Terminal binding cause; `UDPConn` seals Allocation | Binding readiness and `UDPConn` seal owner | Existing fresh-400 lifecycle test | n/a | Planned |
-| Previously confirmed 400 selected as preservation by `UDPConn` | Keep mapping usable without advancing confirmation time | Binding readiness | Recovery table and timestamp assertion | n/a | Planned |
-| Exhausted 438, malformed error, or other permanent ChannelBind failure | Terminal binding with the unchanged specific cause and error chain; 438 remains untyped `errTryAgain` | Binding readiness after `UDPConn` classification | One representative per semantic error class | n/a | Planned |
-| Preparation observes confirmed age below lifetime | Mark prepared and return success | Binding readiness | PreparePeer behavior | n/a | Planned |
-| Write before preparation | `ErrNotPrepared`, zero network output | Binding readiness consumed by `UDPConn.WriteTo` | Prepared-only table | n/a | Planned |
-| Preparation or write at age greater than or equal to ten minutes | Terminalize once with `ErrChannelBindingExpired`, zero output | Binding readiness | Below/at/above lifetime cases | Delete terminal guard and observe non-resurrection test fail | Planned |
-| Permission loss linearizes before preparation marks history | No binding terminalization; later otherwise-valid preparation remains allowed | Binding readiness | Controlled loss-wins case | n/a | Planned |
-| Preparation marks history before permission loss | Terminalize with `ErrPermissionRefreshFailed`; Allocation remains live | Binding readiness plus permission refresh owner | Controlled preparation-wins and existing refresh-failure flow | n/a | Planned |
-| Outcome races preparation or write access | Operations linearize on readiness; access before a permanent outcome may observe prior usability, while access after it returns the durable cause with zero output | Binding readiness | Controlled outcome/access order cases | n/a | Planned |
-| Expiry races successful completion | First readiness operation governs; terminal expiry cannot be resurrected by later completion | Binding readiness | Controlled expiry/completion order cases | Covered by terminal-guard mutation | Planned |
-| Allocation closes before or during attempt | `UDPConn` returns closed/terminal cause; aborted transaction creates no new readiness outcome or binding terminality | `UDPConn` lifecycle and attempt coordination | Existing close/abort cases plus readiness assertion | n/a | Planned |
-| Duplicate, stale, or late token resolution | Ignore without changing current readiness or first terminal cause | Binding readiness | Token-generation table | Covered by terminal-guard mutation | Planned |
+| Fresh or fresh-unknown, no attempt active | Initial attempt eligible | Binding readiness | Decision table | n/a | Covered |
+| Fresh initial attempt in flight | Preparation waits on the joined attempt; write remains `ErrNotPrepared` | Attempt coordination plus binding readiness | Controlled in-flight access case | n/a | Covered |
+| Confirmed, age at or below refresh interval | No refresh attempt | Binding readiness | Below/at threshold cases | n/a | Covered |
+| Confirmed, age strictly above refresh interval; or ready-uncertain | Refresh attempt eligible with prior-confirmation history | Binding readiness | Above-threshold and uncertain cases | n/a | Covered |
+| Previously confirmed refresh in flight | Preparation and already-prepared writes remain usable while unexpired | Binding readiness | Controlled in-flight refresh access case | n/a | Covered |
+| Ready-uncertain access | Preparation and prepared writes remain usable while refresh is eligible | Binding readiness | Outcome/access table | n/a | Covered |
+| Successful initial or refresh completion before terminality | Record confirmation time and usable readiness | Binding readiness | Completion table and PreparePeer flow | n/a | Covered |
+| Waiter selects cancellation or close before preparation access after confirmation | Do not establish prepared history; another caller may observe readiness | `UDPConn` waiter plus binding readiness | Deterministic cancellation-selected/second-caller case | n/a | Covered |
+| Waiter observes readiness before concurrently ready cancellation | Preparation may succeed; no new cancellation precedence is promised | `UDPConn` waiter plus binding readiness | Existing selection contract and focused success case | n/a | Covered |
+| Fresh transaction uncertainty | Preserve channel identity, become retryable unknown, and publish transient error only to joined attempt | Binding readiness plus attempt coordination | Outcome table and later retry flow | n/a | Covered |
+| Previously confirmed transaction uncertainty | Preserve usable ready history, make refresh eligible, and keep transient result attempt-local | Binding readiness plus attempt coordination | Outcome table and scheduled refresh | n/a | Covered |
+| Fresh 400 selected as failure by `UDPConn` | Terminal binding cause; `UDPConn` seals Allocation | Binding readiness and `UDPConn` seal owner | Existing fresh-400 lifecycle test | n/a | Covered |
+| Previously confirmed 400 selected as preservation by `UDPConn` | Keep mapping usable without advancing confirmation time | Binding readiness | Recovery table and timestamp assertion | n/a | Covered |
+| Exhausted 438, malformed error, or other permanent ChannelBind failure | Terminal binding with the unchanged specific cause and error chain; 438 remains untyped `errTryAgain` | Binding readiness after `UDPConn` classification | One representative per semantic error class | n/a | Covered |
+| Preparation observes confirmed age below lifetime | Mark prepared and return success | Binding readiness | PreparePeer behavior | n/a | Covered |
+| Write before preparation | `ErrNotPrepared`, zero network output | Binding readiness consumed by `UDPConn.WriteTo` | Prepared-only table | n/a | Covered |
+| Preparation or write at age greater than or equal to ten minutes | Terminalize once with `ErrChannelBindingExpired`, zero output | Binding readiness | Below/at/above lifetime cases | Delete terminal guard and observe non-resurrection test fail | Covered |
+| Permission loss linearizes before preparation marks history | No binding terminalization; later otherwise-valid preparation remains allowed | Binding readiness | Controlled loss-wins case | n/a | Covered |
+| Preparation marks history before permission loss | Terminalize with `ErrPermissionRefreshFailed`; Allocation remains live | Binding readiness plus permission refresh owner | Controlled preparation-wins and existing refresh-failure flow | n/a | Covered |
+| Outcome races preparation or write access | Operations linearize on readiness; access before a permanent outcome may observe prior usability, while access after it returns the durable cause with zero output | Binding readiness | Controlled outcome/access order cases | n/a | Covered |
+| Expiry races successful completion | First readiness operation governs; terminal expiry cannot be resurrected by later completion | Binding readiness | Controlled expiry/completion order cases | Covered by terminal-guard mutation | Covered |
+| Allocation closes before or during attempt | `UDPConn` returns closed/terminal cause; aborted transaction creates no new readiness outcome or binding terminality | `UDPConn` lifecycle and attempt coordination | Existing close/abort cases plus readiness assertion | n/a | Covered |
+| Duplicate, stale, or late token resolution | Ignore without changing current readiness or first terminal cause | Binding readiness | Token-generation table | Covered by terminal-guard mutation | Covered |
 
 **Evidence budget:** The matrix rows are the complete semantic budget. Use explicit values from one nondecreasing `time.Time` timeline for refresh just below/at/above its strict boundary and lifetime just below/at/above its inclusive expiry boundary; one representative error per semantic failure class; controlled fresh/refresh in-flight access; deterministic cancellation-selected then second-caller observation; both permission-loss/preparation orders; both permanent-outcome/access orders; expiry/completion order; Allocation close without readiness mutation; token duplicate/stale/late rejection; existing end-to-end fresh/ready 400, permission-refresh, prepared-only write, request-byte, and close tests; and `go test -race ./...`. Require one discriminating mutation: bypass terminal collapse and demonstrate that the late-resolution/non-resurrection test fails. No fake clock, repeated sleeps, fuzzing, exhaustive scheduler matrix, new platform cells, generic harness, or recursive mutation. Termination = every matrix row covered/rejected as stated, the required mutation, full gates, one fresh review, at most one replacement, and no `stop-for-decision` finding.
 
@@ -112,13 +114,13 @@ Every time-dependent readiness decision receives `time.Time` from the immediate 
 
 ## Acceptance Criteria
 
-- [ ] Every binding readiness fact and transition in the supported finite domain has one owner in `binding`; representation owner, universal guarantee, matrix, and terminating evidence are defined in T3.S1.
-- [ ] `UDPConn` retains TURN classification, 400 disposition, attempt coordination, worker accounting, Permission orchestration, and Allocation seal/release/join without reading or writing raw binding state.
-- [ ] Preparation establishes prepared history only when a waiter invokes preparation access and observes confirmed unexpired readiness; cancellation/close selection remains waiter-local without new precedence, and writes remain prepared-only with zero output after expiry or terminal failure.
-- [ ] Attempt coordination alone owns each joined attempt's transient result; readiness alone owns a durable terminal cause; later retry after fresh uncertainty and all existing error chains preserve the declared matrix.
-- [ ] Refresh eligibility, ten-minute expiry, in-flight access, fresh/ready uncertainty, fresh/ready 400 behavior, permission-loss ordering, close behavior, token validity, specific failure causes, and terminal non-resurrection preserve the declared matrix.
-- [ ] The complete mutation seam is begin/resolve attempt, preparation/write access, and tokenless prepared-permission failure; no raw readiness getter/setter, direct terminal mutation, duplicate expiry calculation, second prepared marker, generic state engine, broad clock, prepared-peer module, or attempt-coalescing abstraction remains or is introduced.
-- [ ] New bindings begin with no confirmation time, and channel identity/capacity, exact wire bytes, retry counts, intervals, public API, caller cancellation, and Allocation lifecycle remain unchanged.
+- [x] Every binding readiness fact and transition in the supported finite domain has one owner in `binding`; representation owner, universal guarantee, matrix, and terminating evidence are defined in T3.S1.
+- [x] `UDPConn` retains TURN classification, 400 disposition, attempt coordination, worker accounting, Permission orchestration, and Allocation seal/release/join without reading or writing raw binding state.
+- [x] Preparation establishes prepared history only when a waiter invokes preparation access and observes confirmed unexpired readiness; cancellation/close selection remains waiter-local without new precedence, and writes remain prepared-only with zero output after expiry or terminal failure.
+- [x] Attempt coordination alone owns each joined attempt's transient result; readiness alone owns a durable terminal cause; later retry after fresh uncertainty and all existing error chains preserve the declared matrix.
+- [x] Refresh eligibility, ten-minute expiry, in-flight access, fresh/ready uncertainty, fresh/ready 400 behavior, permission-loss ordering, close behavior, token validity, specific failure causes, and terminal non-resurrection preserve the declared matrix.
+- [x] The complete mutation seam is begin/resolve attempt, preparation/write access, and tokenless prepared-permission failure; no raw readiness getter/setter, direct terminal mutation, duplicate expiry calculation, second prepared marker, generic state engine, broad clock, prepared-peer module, or attempt-coalescing abstraction remains or is introduced.
+- [x] New bindings begin with no confirmation time, and channel identity/capacity, exact wire bytes, retry counts, intervals, public API, caller cancellation, and Allocation lifecycle remain unchanged.
 
 ## Validation Gates
 

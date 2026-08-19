@@ -40,6 +40,15 @@ type inboundData struct {
 	from netip.AddrPort
 }
 
+// bindingAttempt is UDPConn-owned coordination for one ChannelBind generation.
+// Readiness owns only the token and durable result of resolving that generation.
+type bindingAttempt struct {
+	done   chan struct{}
+	token  bindingAttemptToken
+	class  bindingAttemptClass
+	result error
+}
+
 // UDPConn is one live UDP relay allocation. Peer addresses cross its methods
 // as canonical netip.AddrPort values; the root package owns canonicalization
 // and validation, so every peer reaching this type is already canonical.
@@ -300,20 +309,20 @@ func (c *UDPConn) ensurePermissionAttempt(perm *permission, peer netip.AddrPort)
 // binding fails, or ctx is canceled.
 func (c *UDPConn) awaitBinding(ctx context.Context, bound *binding) error { //nolint:cyclop
 	for {
-		if final, err := bindingResult(bound); final {
+		if final, err := bound.preparationAccess(time.Now()); final {
 			return err
 		}
 
 		bound.muBind.Lock()
-		done := bound.attemptDone
-		if done == nil {
-			done = c.startBindAttemptLocked(bound)
+		attempt := bound.attempt
+		if attempt == nil {
+			attempt = c.startBindAttemptLocked(bound, time.Now())
 		}
 		bound.muBind.Unlock()
 
-		if done == nil {
+		if attempt == nil {
 			// No attempt is needed (state already decisive) or none can start (closing).
-			if final, err := bindingResult(bound); final {
+			if final, err := bound.preparationAccess(time.Now()); final {
 				return err
 			}
 			if c.isClosed() {
@@ -324,76 +333,57 @@ func (c *UDPConn) awaitBinding(ctx context.Context, bound *binding) error { //no
 		}
 
 		select {
-		case <-done:
+		case <-attempt.done:
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-c.closeCh:
 			return c.closedErr()
 		}
 
-		if final, err := bindingResult(bound); final {
+		if final, err := bound.preparationAccess(time.Now()); final {
 			return err
 		}
 		// The joined attempt ended without confirming; surface its error rather
 		// than retrying forever on the caller's behalf.
-		if err := bound.bindErr(); err != nil {
-			return err
+		if attempt.result != nil {
+			return attempt.result
 		}
 	}
-}
-
-// bindingResult reports whether the binding reached a decisive state for a
-// preparing caller: (true, nil) once the server has confirmed the channel
-// mapping, (true, err) once the binding failed or its confirmation expired.
-func bindingResult(bound *binding) (bool, error) {
-	if bound.ok() {
-		if time.Since(bound.refreshedAt()) >= channelBindingLifetime {
-			bound.terminalize(ErrChannelBindingExpired)
-
-			return true, ErrChannelBindingExpired
-		}
-		bound.prepared.Store(true)
-
-		return true, nil
-	}
-	if bound.state() == bindingStateFailed {
-		if err := bound.bindErr(); err != nil {
-			return true, err
-		}
-
-		return true, ErrChannelBindFailed
-	}
-
-	return false, nil
 }
 
 // startBindAttemptLocked starts a tracked bind attempt if the binding state
 // calls for one. It requires bound.muBind to be held and returns the channel
 // that closes when the attempt completes, or nil if no attempt was started.
-func (c *UDPConn) startBindAttemptLocked(bound *binding) chan struct{} {
+func (c *UDPConn) startBindAttemptLocked(bound *binding, now time.Time) *bindingAttempt {
 	if !c.addWorker() {
 		return nil
 	}
-	startState, ok := c.startBinding(bound)
-	if !ok {
+	token, class, started := bound.beginAttempt(now, c.bindingRefreshInterval)
+	if !started {
 		c.workerWG.Done()
 
 		return nil
 	}
 
-	done := make(chan struct{})
-	bound.attemptDone = done
+	attempt := &bindingAttempt{
+		done:  make(chan struct{}),
+		token: token,
+		class: class,
+	}
+	bound.attempt = attempt
 	go func() {
 		defer c.workerWG.Done()
-		err := c.bindChannel(bound, startState)
-		bound.setBindErr(err)
+		err := c.bindChannel(bound, token, class)
 		bound.muBind.Lock()
-		bound.attemptDone = nil
+		attempt.result = err
+		if bound.attempt == attempt {
+			bound.attempt = nil
+		}
 		bound.muBind.Unlock()
-		close(done)
+		close(attempt.done)
 	}()
 
-	return done
+	return attempt
 }
 
 // addWorker registers an allocation-owned goroutine with the close join.
@@ -414,10 +404,9 @@ func (c *UDPConn) addWorker() bool {
 // prepared, losing its permission must fail its writes with the recorded
 // cause; there is no other write path to fall back to.
 func (c *UDPConn) failPreparedBindings(err error) {
+	cause := fmt.Errorf("%w: %w", ErrPermissionRefreshFailed, err)
 	for _, bound := range c.bindingMgr.all() {
-		if bound.prepared.Load() {
-			bound.terminalize(fmt.Errorf("%w: %w", ErrPermissionRefreshFailed, err))
-		}
+		bound.failPrepared(cause)
 	}
 }
 
@@ -435,19 +424,12 @@ func (c *UDPConn) WriteTo(payload []byte, addr netip.AddrPort) (int, error) {
 	}
 
 	bound, ok := c.bindingMgr.findByAddr(addr)
-	if !ok || !bound.prepared.Load() {
+	if !ok {
 		return 0, ErrNotPrepared
 	}
 
-	if bound.ok() && time.Since(bound.refreshedAt()) >= channelBindingLifetime {
-		bound.terminalize(ErrChannelBindingExpired)
-	}
-	if !bound.ok() {
-		if bindErr := bound.bindErr(); bindErr != nil {
-			return 0, bindErr
-		}
-
-		return 0, ErrChannelBindFailed
+	if err := bound.writeAccess(time.Now()); err != nil {
+		return 0, err
 	}
 
 	return c.sendChannelData(payload, bound.number)
@@ -548,9 +530,13 @@ func (c *UDPConn) startCloseLocked(cause error) (bool, error) {
 // wrapped with the recorded terminal cause when the allocation sealed itself.
 func (c *UDPConn) closedErr() error {
 	c.closeMutex.Lock()
-	cause := c.terminalCause
-	c.closeMutex.Unlock()
+	defer c.closeMutex.Unlock()
 
+	return c.closedErrLocked()
+}
+
+func (c *UDPConn) closedErrLocked() error {
+	cause := c.terminalCause
 	if cause != nil {
 		return fmt.Errorf("%w: %w", net.ErrClosed, cause)
 	}
@@ -685,31 +671,19 @@ func (c *UDPConn) maybeBind(bound *binding) {
 	bound.muBind.Lock()
 	defer bound.muBind.Unlock()
 
-	if bound.attemptDone == nil {
+	if bound.attempt == nil {
 		// Establish binding with the server if the state machine allows it.
-		c.startBindAttemptLocked(bound)
+		c.startBindAttemptLocked(bound, time.Now())
 	}
-}
-
-func (c *UDPConn) startBinding(bound *binding) (bindingState, bool) {
-	startState := bound.state()
-	switch {
-	case startState == bindingStateIdle || startState == bindingStateUnknown:
-		bound.setState(bindingStateRequest)
-	case startState == bindingStateReadyUnknown:
-		bound.setState(bindingStateRefresh)
-	case startState == bindingStateReady && time.Since(bound.refreshedAt()) > c.bindingRefreshInterval:
-		bound.setState(bindingStateRefresh)
-	default:
-		return startState, false
-	}
-
-	return startState, true
 }
 
 // bindChannel performs one ChannelBind attempt. It returns nil when the
 // binding was confirmed or recovered, and the attempt's error otherwise.
-func (c *UDPConn) bindChannel(bound *binding, startState bindingState) error {
+func (c *UDPConn) bindChannel(
+	bound *binding,
+	token bindingAttemptToken,
+	class bindingAttemptClass,
+) error {
 	var err error
 	for range maxRetryAttempts {
 		if c.isClosed() {
@@ -723,68 +697,84 @@ func (c *UDPConn) bindChannel(bound *binding, startState bindingState) error {
 		}
 	}
 	if err != nil {
-		if c.isClosed() {
-			// Closing: the binding state no longer matters, and an aborted
-			// transaction must not count as a bind failure.
-			return err
+		return c.resolveBindError(bound, token, class, err)
+	}
+
+	_, completionErr := c.completeBindingAttempt(bound, token, bindingAttemptConfirmed, nil, time.Now())
+
+	return completionErr
+}
+
+// completeBindingAttempt orders readiness publication with Allocation seal.
+// The close lock is never held across TURN I/O; the only nested order is
+// closeMutex then one binding's readiness lock.
+func (c *UDPConn) completeBindingAttempt(
+	bound *binding,
+	token bindingAttemptToken,
+	outcome bindingAttemptOutcome,
+	cause error,
+	now time.Time,
+) (bool, error) {
+	c.closeMutex.Lock()
+	defer c.closeMutex.Unlock()
+
+	if c.isClosed() {
+		return false, c.closedErrLocked()
+	}
+
+	return bound.resolveAttempt(token, outcome, cause, now), nil
+}
+
+func (c *UDPConn) resolveBindError(
+	bound *binding,
+	token bindingAttemptToken,
+	class bindingAttemptClass,
+	err error,
+) error {
+	if errors.Is(err, errChannelBindBadRequest) && class == bindingAttemptPreviouslyConfirmed {
+		_, completionErr := c.completeBindingAttempt(
+			bound,
+			token,
+			bindingAttemptPreserveConfirmation,
+			nil,
+			time.Now(),
+		)
+
+		return completionErr
+	}
+	if errors.Is(err, errChannelBindTransactionFailed) {
+		applied, completionErr := c.completeBindingAttempt(
+			bound,
+			token,
+			bindingAttemptUncertain,
+			nil,
+			time.Now(),
+		)
+		if completionErr != nil {
+			return completionErr
 		}
-		if c.handleBindChannelError(bound, startState, err) {
+		if !applied {
 			return nil
 		}
 
 		return err
 	}
 
-	bound.setRefreshedAt(time.Now())
-	bound.setState(bindingStateReady)
-
-	return nil
-}
-
-// handleBindChannelError reports whether the binding recovered (kept usable).
-func (c *UDPConn) handleBindChannelError(bound *binding, startState bindingState, err error) bool {
-	if c.recoverChannelBindBadRequest(bound, startState, err) {
-		return true
+	applied, completionErr := c.completeBindingAttempt(
+		bound,
+		token,
+		bindingAttemptPermanentFailure,
+		err,
+		time.Now(),
+	)
+	if completionErr != nil {
+		return completionErr
 	}
-
-	if errors.Is(err, errChannelBindTransactionFailed) {
-		if bindingStateWasReady(startState) {
-			bound.setState(bindingStateReadyUnknown)
-		} else {
-			bound.setState(bindingStateUnknown)
-		}
-
-		return false
-	}
-
-	bound.setState(bindingStateFailed)
-	if errors.Is(err, errChannelBindBadRequest) {
+	if applied && errors.Is(err, errChannelBindBadRequest) {
 		c.closeAfterChannelBindBadRequest(err)
 	}
 
-	return false
-}
-
-func (c *UDPConn) recoverChannelBindBadRequest(bound *binding, startState bindingState, err error) bool {
-	if !errors.Is(err, errChannelBindBadRequest) {
-		return false
-	}
-	if !bindingStateWasReady(startState) {
-		return false
-	}
-
-	// If this binding was previously confirmed, a refresh transaction failure or
-	// unexpected 400 does not prove that the saved channel mapping is wrong. The
-	// server may still have the old binding, and switching channels would be
-	// worse because it can trigger "same peer with different channel number" (like what we get from Coturn).
-	// This Keep the saved mapping usable and retry refresh later.
-	bound.setState(bindingStateReady)
-
-	return true
-}
-
-func bindingStateWasReady(state bindingState) bool {
-	return state == bindingStateReady || state == bindingStateReadyUnknown
+	return nil
 }
 
 // closeAfterChannelBindBadRequest terminalizes the whole allocation after a
