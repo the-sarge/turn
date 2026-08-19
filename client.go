@@ -425,7 +425,7 @@ func (c *Client) handleSTUNMessage(data []byte) error { //nolint:cyclop
 			if relayedConn == nil {
 				return nil // Silently discard
 			}
-			relayedConn.HandleInbound(data, source)
+			relayedConn.HandleDataIndication(data, source)
 		default:
 			// Unsupported indication methods are silently discarded.
 		}
@@ -457,12 +457,9 @@ func (c *Client) handleChannelData(data []byte) error {
 		return nil // Silently discard
 	}
 
-	addr, ok := relayedConn.FindAddrByChannelNumber(uint16(chData.Number))
-	if !ok {
+	if !relayedConn.HandleChannelData(chData.Data, uint16(chData.Number)) {
 		return fmt.Errorf("%w: %d", errChannelBindNotFound, int(chData.Number))
 	}
-
-	relayedConn.HandleInbound(chData.Data, addr)
 
 	return nil
 }

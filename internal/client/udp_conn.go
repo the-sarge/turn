@@ -66,6 +66,7 @@ type UDPConn struct {
 	checkBindingsTimer     *PeriodicTimer
 	readCh                 chan *inboundData
 	closeCh                chan struct{}
+	deliveryMutex          sync.RWMutex   // Linearizes decoded delivery with the closeCh transition
 	closeMutex             sync.Mutex     // Also gates workerWG.Add vs close
 	workerWG               sync.WaitGroup // Joins bind/permission workers on Close
 	bindingRefreshInterval time.Duration  // Read-only
@@ -513,12 +514,16 @@ func (c *UDPConn) startCloseLocked(cause error) (bool, error) {
 	c.refreshPermsTimer.Stop()
 	c.checkBindingsTimer.Stop()
 
+	c.deliveryMutex.Lock()
 	select {
 	case <-c.closeCh:
+		c.deliveryMutex.Unlock()
+
 		return false, nil
 	default:
 		close(c.closeCh)
 	}
+	c.deliveryMutex.Unlock()
 
 	// Wake workers blocked on in-flight transaction waits so Close does not
 	// wait out the retransmission budget against an unresponsive server.
@@ -629,10 +634,10 @@ func (c *UDPConn) CreatePermissions(addrs ...netip.AddrPort) error {
 	return nil
 }
 
-// HandleInbound passes one relayed datagram to the allocation. from is the
-// canonical source peer label, stored as-is and returned by ReadFrom.
-func (c *UDPConn) HandleInbound(data []byte, from netip.AddrPort) {
-	// Copy data
+// enqueueInbound copies one relayed datagram into the bounded read queue. The
+// caller holds deliveryMutex for reading and has already established that the
+// allocation is live.
+func (c *UDPConn) enqueueInbound(data []byte, from netip.AddrPort) {
 	copied := make([]byte, len(data))
 	copy(copied, data)
 
@@ -644,15 +649,34 @@ func (c *UDPConn) HandleInbound(data []byte, from netip.AddrPort) {
 	}
 }
 
-// FindAddrByChannelNumber returns the canonical peer address associated with
-// the channel number on this UDPConn.
-func (c *UDPConn) FindAddrByChannelNumber(chNum uint16) (netip.AddrPort, bool) {
-	b, ok := c.bindingMgr.findByNumber(chNum)
-	if !ok {
-		return netip.AddrPort{}, false
+// HandleDataIndication delivers one decoded Data indication from peer.
+func (c *UDPConn) HandleDataIndication(data []byte, peer netip.AddrPort) {
+	c.deliveryMutex.RLock()
+	defer c.deliveryMutex.RUnlock()
+	if c.isClosed() {
+		return
 	}
 
-	return b.addr, true
+	c.enqueueInbound(data, peer)
+}
+
+// HandleChannelData delivers one decoded ChannelData payload. It reports
+// false only when the live allocation has no binding for channel.
+func (c *UDPConn) HandleChannelData(data []byte, channel uint16) bool {
+	c.deliveryMutex.RLock()
+	defer c.deliveryMutex.RUnlock()
+	if c.isClosed() {
+		return true
+	}
+
+	bound, ok := c.bindingMgr.findByNumber(channel)
+	if !ok {
+		return false
+	}
+
+	c.enqueueInbound(data, bound.addr)
+
+	return true
 }
 
 func (c *UDPConn) maybeBind(bound *binding) {

@@ -5,6 +5,7 @@ package client
 
 import (
 	"errors"
+	"io"
 	"net"
 	"net/netip"
 	"sync/atomic"
@@ -66,6 +67,126 @@ func TestNewUDPConnRejectsMissingAbortBeforeStartingWork(t *testing.T) {
 	if conn != nil {
 		_ = conn.Close()
 	}
+}
+
+func TestUDPConnHandleDataIndicationOwnsQueuedPayload(t *testing.T) {
+	conn := UDPConn{
+		readCh:  make(chan *inboundData, 1),
+		closeCh: make(chan struct{}),
+	}
+	peer := netip.MustParseAddrPort("192.0.2.10:5000")
+	payload := []byte("hello")
+
+	conn.HandleDataIndication(payload, peer)
+	payload[0] = 'j'
+
+	buf := make([]byte, len(payload))
+	n, from, err := conn.ReadFrom(buf)
+	require.NoError(t, err)
+	assert.Equal(t, len(payload), n)
+	assert.Equal(t, peer, from)
+	assert.Equal(t, []byte("hello"), buf)
+}
+
+func TestUDPConnHandleDataIndicationSilentlyDiscardsAfterSeal(t *testing.T) {
+	conn := UDPConn{
+		readCh:  make(chan *inboundData, 1),
+		closeCh: make(chan struct{}),
+	}
+	close(conn.closeCh)
+
+	conn.HandleDataIndication([]byte("late"), netip.MustParseAddrPort("192.0.2.10:5000"))
+
+	assert.Empty(t, conn.readCh)
+}
+
+func TestUDPConnHandleChannelDataDeliversAssignedUnpreparedBinding(t *testing.T) {
+	peer := netip.MustParseAddrPort("192.0.2.20:6000")
+	bindingMgr := newBindingManager()
+	bound := requireBinding(t, bindingMgr, peer)
+	conn := UDPConn{
+		bindingMgr: bindingMgr,
+		readCh:     make(chan *inboundData, 1),
+		closeCh:    make(chan struct{}),
+	}
+	payload := []byte("bound")
+
+	handled := conn.HandleChannelData(payload, bound.number)
+	payload[0] = 'x'
+
+	assert.True(t, handled)
+	assert.False(t, bound.prepared.Load(), "inbound ChannelData must not require a prepared binding")
+	buf := make([]byte, len(payload))
+	n, from, err := conn.ReadFrom(buf)
+	require.NoError(t, err)
+	assert.Equal(t, len(payload), n)
+	assert.Equal(t, peer, from)
+	assert.Equal(t, []byte("bound"), buf)
+}
+
+func newInboundDeliveryConn(t *testing.T) *UDPConn {
+	t.Helper()
+
+	conn := NewUDPConn(&AllocationConfig{
+		WriteTo: func(data []byte) (int, error) {
+			return len(data), nil
+		},
+		PerformTransaction: func(*stun.Message, bool) (TransactionResult, error) {
+			return TransactionResult{}, nil
+		},
+		OnDeallocated: func(net.Addr) {},
+		RelayedAddr:   &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 54321},
+		Username:      stun.NewUsername("user"),
+		Realm:         stun.NewRealm("realm"),
+		Integrity:     stun.NewShortTermIntegrity("pass"),
+		Nonce:         stun.NewNonce("nonce"),
+		Lifetime:      time.Hour,
+	}, func() {})
+	t.Cleanup(func() { _ = conn.Close() })
+
+	return conn
+}
+
+func TestUDPConnDecodedDeliveryQueueAndSealDispositions(t *testing.T) {
+	peer := netip.MustParseAddrPort("192.0.2.30:7000")
+	conn := newInboundDeliveryConn(t)
+	bound := requireBinding(t, conn.bindingMgr, peer)
+
+	conn.HandleDataIndication([]byte("before seal"), peer)
+	require.Len(t, conn.readCh, 1)
+	require.NoError(t, conn.Close())
+	assert.Len(t, conn.readCh, 1, "seal must preserve data queued before its linearization point")
+
+	conn.HandleDataIndication([]byte("late indication"), peer)
+	assert.True(t, conn.HandleChannelData([]byte("late known channel"), bound.number))
+	assert.True(t, conn.HandleChannelData([]byte("late unknown channel"), bound.number+1))
+	assert.Len(t, conn.readCh, 1, "delivery after seal must not queue data")
+}
+
+func TestUDPConnDecodedDeliveryDropsWhenQueueIsFull(t *testing.T) {
+	peer := netip.MustParseAddrPort("192.0.2.40:8000")
+	conn := newInboundDeliveryConn(t)
+	bound := requireBinding(t, conn.bindingMgr, peer)
+	for range cap(conn.readCh) {
+		conn.readCh <- &inboundData{data: []byte("existing"), from: peer}
+	}
+
+	conn.HandleDataIndication([]byte("dropped indication"), peer)
+	assert.True(t, conn.HandleChannelData([]byte("dropped known channel"), bound.number),
+		"a known channel remains handled when its payload is dropped")
+	assert.False(t, conn.HandleChannelData([]byte("unknown channel"), bound.number+1))
+	assert.Len(t, conn.readCh, cap(conn.readCh))
+}
+
+func TestUDPConnDecodedDeliveryPreservesShortBufferError(t *testing.T) {
+	conn := newInboundDeliveryConn(t)
+	conn.HandleDataIndication([]byte("payload"), netip.MustParseAddrPort("192.0.2.50:9000"))
+
+	n, from, err := conn.ReadFrom(make([]byte, 3))
+
+	assert.ErrorIs(t, err, io.ErrShortBuffer)
+	assert.Zero(t, n)
+	assert.Equal(t, netip.AddrPort{}, from)
 }
 
 func assertRequestShape(
