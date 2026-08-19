@@ -62,6 +62,8 @@ var (
 	errNilConn       = errors.New("turn: conn cannot not be nil")
 	errInvalidServer = errors.New(
 		"turn: Server must be a canonical netip.AddrPort (unicast, unmapped, zone-free, nonzero port)")
+	errInvalidPermissionRefreshInterval = errors.New(
+		"turn: PermissionRefreshInterval must be zero or a positive duration less than 5 minutes")
 	errNilContext                   = errors.New("turn: context must not be nil")
 	errChannelBindNotFound          = errors.New("no binding found for channel")
 	errOneAllocateOnly              = errors.New("only one Allocate() caller is allowed")
