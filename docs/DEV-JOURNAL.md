@@ -653,3 +653,36 @@ PR [#96](https://github.com/the-sarge/turn/pull/96) landed Track 1 Slice T1.S1 a
 **Next**
 
 - T1.S2 ([#90](https://github.com/the-sarge/turn/issues/90)) is the remaining Track 1 slice and stays independently ready; the live cross-track frontier is [tracking issue #95](https://github.com/the-sarge/turn/issues/95). No deferred review finding or untraced construction effect remains.
+
+---
+
+## Named transaction crossings landed - 2026-08-19 18:48 EDT
+
+**Main:** `2a93ce92890d`
+**Actor:** Codex
+
+**Summary**
+
+PR [#98](https://github.com/the-sarge/turn/pull/98) landed Track 1 Slice T1.S2 as `2a93ce9` and closed [#90](https://github.com/the-sarge/turn/issues/90). The Client-to-Allocation transaction crossing now exposes named waited and fire-and-forget operations, and lifetime-zero Release has a named emitter while preserving its byte shape and lifecycle ordering.
+
+**Completed**
+
+- Replaced `PerformTransaction(msg, dontWait) (TransactionResult, error)` with `PerformTransaction(msg) (*stun.Message, error)` and `StartTransaction(msg) error`, wired root `Client.Allocate` directly to registry method values, and removed `Client.performTransaction` plus the exported-internal result bag and mode flags.
+- Added one shared Refresh request builder, kept waited Refresh response parsing on `PerformTransaction`, and routed the one lifetime-zero Release path through `UDPConn.emitRelease` and `StartTransaction` at the existing `startCloseLocked` point.
+- Rephrased internal and root scripted adapters around the two named operations while preserving registry one-winner behavior, retransmission bytes and policy, nonce retry, abort-before-deallocation-before-Release ordering, exactly-one Release, release-error joining, and public API.
+- Marked T1.S2 and Track 1 complete in the normative plan and program index; the remaining program frontier starts with T2.S1.
+
+**Decisions**
+
+- `TransactionRegistry` remains the sole owner of waited-versus-fire-and-forget mechanics, `UDPConn` owns which named operation each Allocation consumer uses, `UDPConn.emitRelease` is the one Release emitter, and `startCloseLocked` remains the ordering owner. The finite representation domain, ceilings, and non-goals remain in the [UDPConn construction and transaction crossing plan](adr/2026-08-19-udpconn-construction-crossing-plan.md).
+
+**Validation**
+
+- Red-first coverage exposed the missing `StartTransaction` configuration seam and the old two-argument waited crossing; the focused Release byte-shape, waited Refresh, nonce, lifecycle, close-ordering, and registry tests passed afterward, followed by `task check` and `task race`.
+- Initial RAS review `20260819T223135-47e12f9b4cb886042f08fb38` found no `Fix First`, follow-up, rejected, or stop-for-decision cluster, so no verification or replacement review was required.
+- Exact-head `task preflight` certified `6b5963ae3f7df91d1e915a8e3ad079ebb317a291` against base `a2637743db688bee8d6cda17c172f90ee2238104`, including format, vet, tests, lint, docs, race, dependency/vulnerability, Darwin/Windows build, workflow, and secret gates. Post-ready hosted run [32310219338](https://github.com/the-sarge/turn/actions/runs/32310219338) passed `ci-required` on that exact head before guarded squash merge.
+
+**Next**
+
+- Track 1 has no successor slice. The remaining independently green program slices are [#91](https://github.com/the-sarge/turn/issues/91) through [#94](https://github.com/the-sarge/turn/issues/94), with T2.S1 recommended next; [tracking issue #95](https://github.com/the-sarge/turn/issues/95) is the live cross-track view and will be reconciled during post-merge closure.
+- No deferred review finding survived for a follow-up issue, and no untraced transaction-crossing or Release effect remains.
