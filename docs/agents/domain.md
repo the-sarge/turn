@@ -15,7 +15,7 @@ If any of these files don't exist, **proceed silently**. Don't flag their absenc
 
 ```
 /
-├── CONTEXT.md                 ← not yet created; /domain-modeling creates it lazily
+├── CONTEXT.md                 ← the glossary (created 2026-08-19; /domain-modeling maintains it)
 ├── docs/adr/
 │   ├── 2026-08-14-owned-library-fork.md
 │   ├── 2026-08-15-prepared-only-writes.md
