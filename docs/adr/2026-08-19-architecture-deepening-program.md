@@ -1,6 +1,6 @@
 # TURN Architecture Deepening Program — 2026-08-19
 
-**Status:** Accepted; tracks not yet implemented
+**Status:** In progress; Track 1 implemented by PR #72
 
 ## What this is
 
@@ -18,9 +18,9 @@ This program packages the 2026-08-19 architecture review and delegated grill of 
 
 | # | Track | Plan | Parent issue | Blocked by | Slices | Status |
 |---|---|---|---|---|---|---|
-| 1 | Server-bound outbound transport | [plan](2026-08-19-server-bound-transport-plan.md) | pending | None | 1 | FRONTIER after publication |
-| 2 | Inbound Allocation delivery | [plan](2026-08-19-inbound-allocation-delivery-plan.md) | pending | None | 1 | FRONTIER after publication |
-| 3 | Channel-binding readiness | [plan](2026-08-19-channel-binding-readiness-plan.md) | pending | None | 1 | FRONTIER after publication |
+| 1 | Server-bound outbound transport | [plan](2026-08-19-server-bound-transport-plan.md) | #65 | None | 1 | Complete via PR #72 |
+| 2 | Inbound Allocation delivery | [plan](2026-08-19-inbound-allocation-delivery-plan.md) | #66 | None | 1 | FRONTIER |
+| 3 | Channel-binding readiness | [plan](2026-08-19-channel-binding-readiness-plan.md) | #67 | None | 1 | FRONTIER |
 
 There are no genuine slice-level blocking edges. The tracks touch nearby root/internal seams but own independent behavior: outbound destination authority, inbound delivery, and binding readiness. Likely text conflicts require an ordinary rebase, not an architectural blocker. Recommended dispatch order is Track 1, Track 2, then Track 3 because it advances from the smallest broad seam contraction to the bounded inbound move and finally the most concurrency-sensitive state deepening; an operator may run the frontier in parallel if separate agents and worktrees can absorb rebases.
 
