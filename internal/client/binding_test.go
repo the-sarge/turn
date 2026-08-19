@@ -21,6 +21,10 @@ func TestBindingReadinessBeginsAndRetriesFreshAttempt(t *testing.T) {
 	token1, class, started := bound.beginAttempt(t0, defaultBindingRefreshInterval)
 	require.True(t, started)
 	assert.Equal(t, bindingAttemptFresh, class)
+	final, err := bound.preparationAccess(t0)
+	assert.False(t, final)
+	assert.NoError(t, err)
+	assert.ErrorIs(t, bound.writeAccess(t0), ErrNotPrepared)
 
 	_, _, started = bound.beginAttempt(t0, defaultBindingRefreshInterval)
 	assert.False(t, started, "one readiness generation may be active at a time")
@@ -156,6 +160,26 @@ func TestBindingReadinessPermanentFailureIsDurable(t *testing.T) {
 	_, _, started = bound.beginAttempt(t0.Add(time.Minute), defaultBindingRefreshInterval)
 	assert.False(t, started)
 	assert.False(t, bound.resolveAttempt(token, bindingAttemptConfirmed, nil, t0.Add(time.Minute)))
+}
+
+func TestBindingReadinessPermanentOutcomeOrdersWithAccess(t *testing.T) {
+	t0 := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
+	bound := confirmedBinding(t, t0)
+	final, err := bound.preparationAccess(t0)
+	require.True(t, final)
+	require.NoError(t, err)
+	token, _, started := bound.beginAttempt(
+		t0.Add(defaultBindingRefreshInterval+time.Nanosecond),
+		defaultBindingRefreshInterval,
+	)
+	require.True(t, started)
+
+	require.NoError(t, bound.writeAccess(t0.Add(defaultBindingRefreshInterval+time.Second)),
+		"access linearized before the permanent outcome may observe prior usability")
+	cause := fmt.Errorf("permanent refresh: %w", ErrChannelBindFailed)
+	require.True(t, bound.resolveAttempt(token, bindingAttemptPermanentFailure, cause, t0.Add(6*time.Minute)))
+	assert.ErrorIs(t, bound.writeAccess(t0.Add(6*time.Minute)), cause,
+		"access linearized after the permanent outcome observes the durable cause")
 }
 
 func TestBindingReadinessExpiryRejectsInFlightCompletion(t *testing.T) {

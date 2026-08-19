@@ -600,6 +600,11 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 		case <-time.After(5 * time.Second):
 			assert.Fail(t, "Close did not return after the bind worker finished")
 		}
+		bound, ok := harness.conn.bindingMgr.findByAddr(harness.peer)
+		require.True(t, ok)
+		final, readinessErr := bound.preparationAccess(time.Now())
+		assert.False(t, final, "an attempt completing after Allocation close creates no readiness outcome")
+		assert.NoError(t, readinessErr)
 	})
 
 	t.Run("attempt in flight during self-seal records the terminal cause", func(t *testing.T) {

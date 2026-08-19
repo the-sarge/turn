@@ -692,13 +692,14 @@ func (c *UDPConn) bindChannel(
 			break
 		}
 	}
-	if err != nil {
-		if c.isClosed() {
-			// Closing: the binding state no longer matters, and an aborted
-			// transaction must not count as a bind failure.
+	if c.isClosed() {
+		if err != nil {
 			return err
 		}
 
+		return c.closedErr()
+	}
+	if err != nil {
 		return c.resolveBindError(bound, token, class, err)
 	}
 
