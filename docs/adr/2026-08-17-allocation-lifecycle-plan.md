@@ -109,8 +109,8 @@ Keep Allocation, permission, and binding timer cadence unchanged. Ordinary Refre
 
 ## Validation Gates
 
-Run constructor/abort-order, ordinary Refresh/438, terminal-state, permission-refresh, fresh/ready ChannelBind-400, invalid-relayed-address, and close-race tests first; then `go test ./...`, `go test -race ./...`, and `task preflight` against the exact candidate head/base. Request `ci-certify` only after local certification and verify the resulting same-head `ci-required` status before merge.
+Run constructor/abort-order, ordinary Refresh/438, terminal-state, permission-refresh, fresh/ready ChannelBind-400, invalid-relayed-address, and close-race tests first; then `go test ./...`, `go test -race ./...`, and `task preflight` against the exact candidate head/base. Keep the PR in draft through review and local certification, mark it ready afterward, and verify the latest post-ready `ci` run reports `ci-required` success for the same live head before merge.
 
 ## Operating Discipline
 
-Follow the shared review-loop and contract-closure baselines supplied by `$implement-architecture-slice`, composed with the repository-specific CI-label override in the program index: this repository uses `ci-certify`, not the shared default `ci:certify`. Preserve caller-owned socket, one-seal/one-release, worker-safe seal/caller join, prepared-only writes, fixed supported timer cadence, and exact-wire invariants. Diagnose failures before reruns. Stop rather than widening into adaptive scheduling, nonconforming-server behavior, a generic time module, prepared-peer extraction, Client terminality, or authenticated exchange.
+Follow the shared review-loop and contract-closure baselines supplied by `$implement-architecture-slice`. Preserve caller-owned socket, one-seal/one-release, worker-safe seal/caller join, prepared-only writes, fixed supported timer cadence, and exact-wire invariants. Diagnose failures before reruns. Stop rather than widening into adaptive scheduling, nonconforming-server behavior, a generic time module, prepared-peer extraction, Client terminality, or authenticated exchange.

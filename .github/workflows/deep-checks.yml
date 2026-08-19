@@ -1,0 +1,135 @@
+name: Deep checks
+
+on:
+  schedule:
+    - cron: '37 4 * * 3'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deep-checks-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up validation toolchain
+        uses: ./.github/actions/setup-validation
+        with:
+          install-task: true
+
+      - name: Run full portable validation
+        run: |
+          task check
+          task docs-check
+          task race
+          task dependency-gate
+          task platform-check
+          task workflow-check
+
+  floor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up validation toolchain
+        uses: ./.github/actions/setup-validation
+
+      - name: Resolve the consumer Go floor
+        id: go_floor
+        shell: bash
+        run: |
+          set -euo pipefail
+          floor_version="$(go list -m -f '{{.GoVersion}}')"
+          if [[ ! "$floor_version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+            echo "::error::Unexpected go.mod Go version: $floor_version"
+            exit 1
+          fi
+          IFS=. read -r floor_major floor_minor _ <<< "$floor_version"
+          printf 'version=%s.%s\n' "$floor_major" "$floor_minor" >> "$GITHUB_OUTPUT"
+
+      - name: Set up latest patch of the consumer Go floor
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ steps.go_floor.outputs.version }}
+          check-latest: true
+          cache: false
+
+      - name: Test with the consumer Go floor
+        run: |
+          go version
+          GOTOOLCHAIN=local go test ./...
+
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up validation toolchain
+        uses: ./.github/actions/setup-validation
+        with:
+          install-task: true
+
+      - name: Run bounded proto fuzz targets
+        run: task fuzz
+
+  codeql:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up validation toolchain
+        uses: ./.github/actions/setup-validation
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+        with:
+          languages: go
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+        with:
+          upload: never
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up validation toolchain
+        uses: ./.github/actions/setup-validation
+        with:
+          install-task: true
+
+      - name: Scan repository history for secrets
+        run: task secret-scan

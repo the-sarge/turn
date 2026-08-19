@@ -127,8 +127,8 @@ T3.S1 and T3.S2 are parallel-safe in behavior and have no genuine blocking edge.
 
 ## Validation Gates
 
-For T3.S1 run the ChannelBind response table, fresh/ready 400 lifecycle tests, request-byte capture, full race, and repository preflight. For T3.S2 run range/bijection/exhaustion tests, PreparePeer no-ChannelBind exhaustion, prepared WriteTo/inbound preservation, full race, and preflight. For each PR request `ci-certify` only after exact-head local certification and verify the resulting same-head `ci-required` status before merge.
+For T3.S1 run the ChannelBind response table, fresh/ready 400 lifecycle tests, request-byte capture, full race, and repository preflight. For T3.S2 run range/bijection/exhaustion tests, PreparePeer no-ChannelBind exhaustion, prepared WriteTo/inbound preservation, full race, and preflight. Keep each PR in draft through review and exact-head local certification, mark it ready afterward, and verify the latest post-ready `ci` run reports `ci-required` success for the same live head before merge.
 
 ## Operating Discipline
 
-Follow the shared review-loop and contract-closure baselines supplied by `$implement-architecture-slice` for every slice/PR, composed with the repository-specific CI-label override in the program index: this repository uses `ci-certify`, not the shared default `ci:certify`. Keep authenticated method policy local, preserve the prepared-only structural invariant and the distinct Permission/channel-binding identities, and diagnose failures before reruns. Stop rather than extracting a generic exchange, prepared-peer module, channel lease/reclamation policy, or broader cleanup batch.
+Follow the shared review-loop and contract-closure baselines supplied by `$implement-architecture-slice` for every slice/PR. Keep authenticated method policy local, preserve the prepared-only structural invariant and the distinct Permission/channel-binding identities, and diagnose failures before reruns. Stop rather than extracting a generic exchange, prepared-peer module, channel lease/reclamation policy, or broader cleanup batch.

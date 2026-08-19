@@ -114,8 +114,8 @@ Root `Client` owns the caller's `net.PacketConn` and adapts only its write capab
 
 ## Validation Gates
 
-Run focused transaction, inbound, cancellation, late-response, blocked-retransmit, and Allocation-close tests first; then `go test ./...`, `go test -race ./...`, and repository `task preflight` against the exact candidate head/base. Request the repository's one-shot `ci-certify` PR label only after local certification and verify the resulting `pull_request`/`labeled` run reports `ci-required` for the same head before merge.
+Run focused transaction, inbound, cancellation, late-response, blocked-retransmit, and Allocation-close tests first; then `go test ./...`, `go test -race ./...`, and repository `task preflight` against the exact candidate head/base. Keep the PR in draft through review and local certification, mark it ready afterward, and verify the latest post-ready `ci` run reports `ci-required` success for the same live head before merge.
 
 ## Operating Discipline
 
-Follow the shared review-loop and contract-closure baselines supplied by `$implement-architecture-slice` for this PR, composed with the repository-specific CI-label override in the program index: this repository uses `ci-certify`, not the shared default `ci:certify`. Preserve the caller-owned socket, prepared-only write, exact-wire, one-winner, and Allocation-before-Client lifecycle invariants. Diagnose any race or hosted-CI failure before rerunning. Stop rather than widening into Client terminality, retransmission policy, authenticated exchange, or Allocation lifecycle implementation.
+Follow the shared review-loop and contract-closure baselines supplied by `$implement-architecture-slice` for this PR. Preserve the caller-owned socket, prepared-only write, exact-wire, one-winner, and Allocation-before-Client lifecycle invariants. Diagnose any race or hosted-CI failure before rerunning. Stop rather than widening into Client terminality, retransmission policy, authenticated exchange, or Allocation lifecycle implementation.
