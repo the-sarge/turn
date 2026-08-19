@@ -686,3 +686,37 @@ PR [#98](https://github.com/the-sarge/turn/pull/98) landed Track 1 Slice T1.S2 a
 
 - Track 1 has no successor slice. The remaining independently green program slices are [#91](https://github.com/the-sarge/turn/issues/91) through [#94](https://github.com/the-sarge/turn/issues/94), with T2.S1 recommended next; [tracking issue #95](https://github.com/the-sarge/turn/issues/95) is the live cross-track view and will be reconciled during post-merge closure.
 - No deferred review finding survived for a follow-up issue, and no untraced transaction-crossing or Release effect remains.
+
+---
+
+## Allocation admission landed - 2026-08-19 19:44 EDT
+
+**Main:** `4a25a8e0b939`
+**Actor:** Codex
+
+**Summary**
+
+PR [#100](https://github.com/the-sarge/turn/pull/100) landed Track 2 Slice T2.S1 as `4a25a8e` and closed [#91](https://github.com/the-sarge/turn/issues/91). `Client.Allocate` now owns one mutex-protected admission claim for both in-flight and live Allocations, and the relayed address crosses into the public Allocation only after canonical validation.
+
+**Completed**
+
+- Replaced `TryLock` plus the live-pointer check with one guarded claim returning `ErrAlreadyAllocated` with no network output for both rejected states, and released that claim on every admitted failure, close, and successful publication path.
+- Published the live `UDPConn` only after canonical relayed-address validation while preserving construct-then-close rejection, exactly one lifetime-zero Release, Client abort-only close semantics, and later re-Allocate behavior.
+- Removed `TryLock`, its private errors and tests, `AllocationConfig.RelayedAddr`, `UDPConn.relayedAddr`, `UDPConn.LocalAddr`, and the unused address parameter from `OnDeallocated`; root `Allocation` remains the sole relayed-address holder.
+- Marked T2.S1 complete in the normative plan and advanced the program frontier to independently ready T2.S2.
+
+**Decisions**
+
+- `Client.Allocate` under `Client.mutex` is the single admission and publication owner; `UDPConn` retains Allocation lifecycle, seal, Release, and join ownership; root `Allocation` retains the canonical `netip.AddrPort`. The finite admission domain, closure matrix, evidence ceiling, and non-goals remain in the [Allocate admission and public error vocabulary plan](adr/2026-08-19-allocate-admission-errors-plan.md).
+
+**Validation**
+
+- Red-first public tests exposed the private concurrent try-lock error and the address-bearing live-Allocation error. Focused admission, re-Allocate, invalid-relayed, inbound-discard, close, lifecycle, ordinary, and race tests passed after centralization and seam deletion.
+- Deleting the in-flight admission branch made `TestAllocateRejectsConcurrentCallerWithoutNetworkOutput` fail; restoring the guard returned it to green.
+- Initial RAS review `20260819T232434-d8f78d2e0deac99e6ace1aeb` produced no `Fix First` or stop-for-decision finding. A credible pre-existing start-before-publish lifecycle race was deferred for merged-head revalidation outside T2.S1; two verification-aid observations were rejected; the inaccurate sentinel prose remains owned by T2.S2, so no verification or replacement review was required.
+- Exact-head `task preflight` certified `4b1d6b5fe5ee4be9f5f1362101c8c5a21ce6cc4d` against base `12b4233078fa88e6ba54317b57e62e95a5b8e892`, including format, vet, tests, lint, docs, race, dependency/vulnerability, Darwin/Windows build, workflow, and secret gates. Post-ready hosted run [32314346217](https://github.com/the-sarge/turn/actions/runs/32314346217) passed `ci-required` on that exact head before guarded squash merge.
+
+**Next**
+
+- T2.S2 ([#92](https://github.com/the-sarge/turn/issues/92)) remains independently ready and is the recommended next slice; [tracking issue #95](https://github.com/the-sarge/turn/issues/95) is the live cross-track frontier.
+- Revalidate the deferred pre-existing start-before-publish lifecycle observation against merged `4a25a8e` before deciding whether it merits a separate architecture-review issue; no accepted T2.S1 effect remains untraced.
