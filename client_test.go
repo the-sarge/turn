@@ -152,6 +152,200 @@ func TestHandleInboundAdmitsOnlyServer(t *testing.T) {
 	})
 }
 
+type inboundDeliveryHarness struct {
+	client     *Client
+	allocation *Allocation
+	conn       *client.UDPConn
+	server     netip.AddrPort
+	peer       netip.AddrPort
+	channel    proto.ChannelNumber
+}
+
+func newInboundDeliveryHarness(t *testing.T) *inboundDeliveryHarness {
+	t.Helper()
+
+	harness := &inboundDeliveryHarness{
+		server: netip.MustParseAddrPort("192.0.2.1:3478"),
+		peer:   netip.MustParseAddrPort("198.51.100.10:5000"),
+	}
+	harness.client = &Client{server: harness.server}
+	harness.conn = client.NewUDPConn(&client.AllocationConfig{
+		WriteTo: func(data []byte) (int, error) {
+			return len(data), nil
+		},
+		PerformTransaction: func(msg *stun.Message, _ bool) (client.TransactionResult, error) {
+			switch msg.Type.Method {
+			case stun.MethodCreatePermission:
+				return client.TransactionResult{Msg: stun.MustBuild(
+					stun.NewType(stun.MethodCreatePermission, stun.ClassSuccessResponse),
+				)}, nil
+			case stun.MethodChannelBind:
+				require.NoError(t, harness.channel.GetFrom(msg))
+
+				return client.TransactionResult{Msg: stun.MustBuild(
+					stun.NewType(stun.MethodChannelBind, stun.ClassSuccessResponse),
+				)}, nil
+			default:
+				return client.TransactionResult{}, nil
+			}
+		},
+		OnDeallocated: func(net.Addr) {
+			harness.client.setRelayedUDPConn(nil)
+		},
+		RelayedAddr: &net.UDPAddr{IP: net.ParseIP("203.0.113.1"), Port: 54321},
+		Username:    stun.NewUsername("user"),
+		Realm:       stun.NewRealm("realm"),
+		Integrity:   stun.NewShortTermIntegrity("pass"),
+		Nonce:       stun.NewNonce("nonce"),
+		Lifetime:    time.Hour,
+	}, func() {})
+	harness.client.setRelayedUDPConn(harness.conn)
+	harness.allocation = newAllocation(harness.conn, netip.MustParseAddrPort("203.0.113.1:54321"))
+	t.Cleanup(func() { _ = harness.conn.Close() })
+
+	return harness
+}
+
+func buildDataIndication(t *testing.T, payload []byte, peer netip.AddrPort) []byte {
+	t.Helper()
+
+	msg, err := stun.Build(
+		stun.TransactionID,
+		stun.NewType(stun.MethodData, stun.ClassIndication),
+		proto.PeerAddress{IP: net.IP(peer.Addr().AsSlice()), Port: int(peer.Port())},
+		proto.Data(payload),
+	)
+	require.NoError(t, err)
+
+	return msg.Raw
+}
+
+func buildChannelData(payload []byte, channel proto.ChannelNumber) []byte {
+	msg := &proto.ChannelData{Data: payload, Number: channel}
+	msg.Encode()
+
+	return msg.Raw
+}
+
+type allocationReadResult struct {
+	n    int
+	from netip.AddrPort
+	err  error
+	data []byte
+}
+
+func readAllocation(t *testing.T, allocation *Allocation, size int) allocationReadResult {
+	t.Helper()
+
+	resultCh := make(chan allocationReadResult, 1)
+	go func() {
+		buf := make([]byte, size)
+		n, from, err := allocation.ReadFrom(buf)
+		resultCh <- allocationReadResult{n: n, from: from, err: err, data: buf[:n]}
+	}()
+
+	select {
+	case result := <-resultCh:
+		return result
+	case <-time.After(time.Second):
+		require.Fail(t, "Allocation.ReadFrom did not observe decoded peer data")
+
+		return allocationReadResult{}
+	}
+}
+
+func TestHandleInboundDeliversDecodedPeerDataThroughAllocation(t *testing.T) {
+	t.Run("Data indication", func(t *testing.T) {
+		harness := newInboundDeliveryHarness(t)
+		payload := []byte("indication payload")
+		raw := buildDataIndication(t, payload, harness.peer)
+
+		require.NoError(t, harness.client.HandleInbound(raw, net.UDPAddrFromAddrPort(harness.server)))
+		for i := range raw {
+			raw[i] = 0
+		}
+
+		result := readAllocation(t, harness.allocation, len(payload))
+		require.NoError(t, result.err)
+		assert.Equal(t, len(payload), result.n)
+		assert.Equal(t, harness.peer, result.from)
+		assert.Equal(t, []byte("indication payload"), result.data)
+	})
+
+	t.Run("ChannelData", func(t *testing.T) {
+		harness := newInboundDeliveryHarness(t)
+		require.NoError(t, harness.allocation.PreparePeer(context.Background(), harness.peer))
+		payload := []byte("channel payload")
+		raw := buildChannelData(payload, harness.channel)
+
+		require.NoError(t, harness.client.HandleInbound(raw, net.UDPAddrFromAddrPort(harness.server)))
+		for i := range raw {
+			raw[i] = 0
+		}
+
+		result := readAllocation(t, harness.allocation, len(payload))
+		require.NoError(t, result.err)
+		assert.Equal(t, len(payload), result.n)
+		assert.Equal(t, harness.peer, result.from)
+		assert.Equal(t, []byte("channel payload"), result.data)
+	})
+}
+
+func TestHandleInboundLiveUnknownChannelReturnsExistingErrorWithoutDelivery(t *testing.T) {
+	harness := newInboundDeliveryHarness(t)
+	unknown := proto.ChannelNumber(proto.MinChannelNumber)
+
+	err := harness.client.HandleInbound(
+		buildChannelData([]byte("unknown"), unknown),
+		net.UDPAddrFromAddrPort(harness.server),
+	)
+
+	assert.ErrorIs(t, err, errChannelBindNotFound)
+	assert.EqualError(t, err, "no binding found for channel: 16384")
+	require.NoError(t, harness.client.HandleInbound(
+		buildDataIndication(t, []byte("marker"), harness.peer),
+		net.UDPAddrFromAddrPort(harness.server),
+	))
+	result := readAllocation(t, harness.allocation, len("marker"))
+	require.NoError(t, result.err)
+	assert.Equal(t, []byte("marker"), result.data, "an unknown channel must not add a queue entry")
+}
+
+func TestHandleInboundSilentlyDiscardsDecodedPeerDataWithoutLiveAllocation(t *testing.T) {
+	server := netip.MustParseAddrPort("192.0.2.1:3478")
+	peer := netip.MustParseAddrPort("198.51.100.10:5000")
+	turnClient := &Client{server: server}
+
+	assert.NoError(t, turnClient.HandleInbound(
+		buildDataIndication(t, []byte("indication"), peer),
+		net.UDPAddrFromAddrPort(server),
+	))
+	assert.NoError(t, turnClient.HandleInbound(
+		buildChannelData([]byte("channel"), proto.ChannelNumber(proto.MinChannelNumber)),
+		net.UDPAddrFromAddrPort(server),
+	))
+}
+
+func TestHandleInboundSilentlyDiscardsDecodedPeerDataThroughStaleSealedAllocation(t *testing.T) {
+	harness := newInboundDeliveryHarness(t)
+	require.NoError(t, harness.allocation.PreparePeer(context.Background(), harness.peer))
+	require.NoError(t, harness.conn.Close())
+	harness.client.setRelayedUDPConn(harness.conn)
+
+	assert.NoError(t, harness.client.HandleInbound(
+		buildDataIndication(t, []byte("indication"), harness.peer),
+		net.UDPAddrFromAddrPort(harness.server),
+	))
+	assert.NoError(t, harness.client.HandleInbound(
+		buildChannelData([]byte("known channel"), harness.channel),
+		net.UDPAddrFromAddrPort(harness.server),
+	))
+	assert.NoError(t, harness.client.HandleInbound(
+		buildChannelData([]byte("unknown channel"), harness.channel+1),
+		net.UDPAddrFromAddrPort(harness.server),
+	))
+}
+
 func TestClientCloseIsAnAbortCutNotATerminalState(t *testing.T) {
 	conn := newObserverConn()
 	cl := newObservedClient(t, conn)
