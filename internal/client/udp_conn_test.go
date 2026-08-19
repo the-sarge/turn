@@ -656,9 +656,8 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 	})
 
 	t.Run("ChannelBind 400 closes allocation", func(t *testing.T) {
-		relayedAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 54321}
 		peerAddr := netip.MustParseAddrPort("127.0.0.1:50000")
-		deallocatedCh := make(chan net.Addr, 1)
+		deallocatedCh := make(chan struct{}, 1)
 		refreshLifetimeCh := make(chan time.Duration, 1)
 		refreshErrCh := make(chan error, 1)
 
@@ -689,8 +688,8 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 
 				return nil
 			},
-			onDeallocated: func(addr net.Addr) {
-				deallocatedCh <- addr
+			onDeallocated: func() {
+				deallocatedCh <- struct{}{}
 			},
 		}
 
@@ -709,8 +708,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		default:
 		}
 		select {
-		case deallocatedAddr := <-deallocatedCh:
-			assert.Equal(t, relayedAddr, deallocatedAddr)
+		case <-deallocatedCh:
 		case <-time.After(5 * time.Second):
 			assert.Fail(t, "timed out waiting for deallocation callback")
 		}
@@ -734,10 +732,9 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 	})
 
 	t.Run("ChannelBind 400 after unknown binding closes allocation", func(t *testing.T) {
-		relayedAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 54321}
 		peerAddr := netip.MustParseAddrPort("127.0.0.1:1234")
 		var channelBindAttempts atomic.Int32
-		deallocatedCh := make(chan net.Addr, 1)
+		deallocatedCh := make(chan struct{}, 1)
 
 		script := &testConnScript{
 			performTransaction: func(msg *stun.Message) (*stun.Message, error) {
@@ -752,8 +749,8 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 					return nil, errFake
 				}
 			},
-			onDeallocated: func(addr net.Addr) {
-				deallocatedCh <- addr
+			onDeallocated: func() {
+				deallocatedCh <- struct{}{}
 			},
 		}
 		conn := newTestConn(t, script)
@@ -775,8 +772,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		assert.Equal(t, int32(2), channelBindAttempts.Load())
 
 		select {
-		case deallocatedAddr := <-deallocatedCh:
-			assert.Equal(t, relayedAddr, deallocatedAddr)
+		case <-deallocatedCh:
 		case <-time.After(5 * time.Second):
 			assert.Fail(t, "timed out waiting for deallocation callback")
 		}

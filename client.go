@@ -67,7 +67,7 @@ type Client struct {
 	integrity    stun.MessageIntegrity       // Read-only
 	transactions *client.TransactionRegistry // Thread-safe
 	relayedConn  *client.UDPConn             // Protected by mutex ***
-	allocTryLock client.TryLock              // Thread-safe
+	allocating   bool                        // Protected by mutex
 	mutex        sync.RWMutex                // Thread-safe
 
 	// REQUESTED-ADDRESS-FAMILY attribute for allocations (RFC 6156)
@@ -289,32 +289,26 @@ func (c *Client) Allocate(ctx context.Context) (*Allocation, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, context.Cause(ctx)
 	}
-	if err := c.allocTryLock.Lock(); err != nil {
-		return nil, fmt.Errorf("%w: %w", errOneAllocateOnly, err)
+	if !c.claimAllocation() {
+		return nil, ErrAlreadyAllocated
 	}
-	defer c.allocTryLock.Unlock()
-
-	relayedConn := c.relayedUDPConn()
-	if relayedConn != nil {
-		return nil, fmt.Errorf("%w: %s", ErrAlreadyAllocated, relayedConn.LocalAddr().String())
-	}
+	claimHeld := true
+	defer func() {
+		if claimHeld {
+			c.releaseAllocationClaim()
+		}
+	}()
 
 	relayed, lifetime, nonce, err := c.sendAllocateRequest(ctx, proto.ProtoUDP)
 	if err != nil {
 		return nil, err
 	}
 
-	relayedAddr := &net.UDPAddr{
-		IP:   relayed.IP,
-		Port: relayed.Port,
-	}
-
-	relayedConn = client.NewUDPConn(&client.AllocationConfig{
+	relayedConn := client.NewUDPConn(&client.AllocationConfig{
 		WriteTo:                   c.sendToServer,
 		PerformTransaction:        c.transactions.Perform,
 		StartTransaction:          c.transactions.Start,
 		OnDeallocated:             c.onDeallocated,
-		RelayedAddr:               relayedAddr,
 		Realm:                     c.realm,
 		Username:                  c.username,
 		Integrity:                 c.integrity,
@@ -324,16 +318,18 @@ func (c *Client) Allocate(ctx context.Context) (*Allocation, error) {
 		BindingRefreshInterval:    c.bindingRefreshInterval,
 		BindingCheckInterval:      c.bindingCheckInterval,
 	}, c.transactions.AbortCurrent)
-	c.setRelayedUDPConn(relayedConn)
 
 	canonicalRelayed, ok := canonicalWireAddr(relayed.IP, relayed.Port)
 	if !ok {
-		// Release the server-side allocation (lifetime-0 Refresh) and clear
-		// the client's pointer via OnDeallocated before rejecting.
+		// Release the server-side allocation (lifetime-0 Refresh) without
+		// publishing the doomed connection to the inbound path.
 		_ = relayedConn.Close()
 
-		return nil, fmt.Errorf("%w: %s", ErrInvalidRelayedAddress, relayedAddr)
+		return nil, fmt.Errorf("%w: %s", ErrInvalidRelayedAddress, relayed)
 	}
+
+	c.publishRelayedUDPConn(relayedConn)
+	claimHeld = false
 
 	return newAllocation(relayedConn, canonicalRelayed), nil
 }
@@ -348,7 +344,7 @@ func (c *Client) performAllocateTransaction(ctx context.Context, msg *stun.Messa
 
 // onDeallocated is called when de-allocation of relay address has been complete.
 // (Called by UDPConn).
-func (c *Client) onDeallocated(net.Addr) {
+func (c *Client) onDeallocated() {
 	c.setRelayedUDPConn(nil)
 }
 
@@ -462,6 +458,33 @@ func (c *Client) setRelayedUDPConn(conn *client.UDPConn) {
 	defer c.mutex.Unlock()
 
 	c.relayedConn = conn
+}
+
+func (c *Client) claimAllocation() bool {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	if c.allocating || c.relayedConn != nil {
+		return false
+	}
+	c.allocating = true
+
+	return true
+}
+
+func (c *Client) releaseAllocationClaim() {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	c.allocating = false
+}
+
+func (c *Client) publishRelayedUDPConn(conn *client.UDPConn) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	c.relayedConn = conn
+	c.allocating = false
 }
 
 func (c *Client) relayedUDPConn() *client.UDPConn {

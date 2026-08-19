@@ -274,7 +274,7 @@ func TestHandleInboundDeliversDecodedPeerDataThroughAllocation(t *testing.T) {
 		peer := netip.MustParseAddrPort("198.51.100.10:5000")
 		turnClient := &Client{server: server}
 		script := &scriptedAllocationScript{
-			onDeallocated: func(net.Addr) { turnClient.setRelayedUDPConn(nil) },
+			onDeallocated: func() { turnClient.setRelayedUDPConn(nil) },
 		}
 		allocation, conn := newScriptedAllocation(t, script)
 		turnClient.setRelayedUDPConn(conn)
@@ -299,7 +299,7 @@ func TestHandleInboundDeliversDecodedPeerDataThroughAllocation(t *testing.T) {
 		turnClient := &Client{server: server}
 		var channel proto.ChannelNumber
 		script := &scriptedAllocationScript{
-			onDeallocated: func(net.Addr) { turnClient.setRelayedUDPConn(nil) },
+			onDeallocated: func() { turnClient.setRelayedUDPConn(nil) },
 			onChannelBind: func(msg *stun.Message) { require.NoError(t, channel.GetFrom(msg)) },
 		}
 		allocation, conn := newScriptedAllocation(t, script)
@@ -326,7 +326,7 @@ func TestHandleInboundLiveUnknownChannelReturnsExistingErrorWithoutDelivery(t *t
 	peer := netip.MustParseAddrPort("198.51.100.10:5000")
 	turnClient := &Client{server: server}
 	script := &scriptedAllocationScript{
-		onDeallocated: func(net.Addr) { turnClient.setRelayedUDPConn(nil) },
+		onDeallocated: func() { turnClient.setRelayedUDPConn(nil) },
 	}
 	allocation, conn := newScriptedAllocation(t, script)
 	turnClient.setRelayedUDPConn(conn)
@@ -369,7 +369,7 @@ func TestHandleInboundSilentlyDiscardsDecodedPeerDataThroughStaleSealedAllocatio
 	turnClient := &Client{server: server}
 	var channel proto.ChannelNumber
 	script := &scriptedAllocationScript{
-		onDeallocated: func(net.Addr) { turnClient.setRelayedUDPConn(nil) },
+		onDeallocated: func() { turnClient.setRelayedUDPConn(nil) },
 		onChannelBind: func(msg *stun.Message) { require.NoError(t, channel.GetFrom(msg)) },
 	}
 	allocation, conn := newScriptedAllocation(t, script)

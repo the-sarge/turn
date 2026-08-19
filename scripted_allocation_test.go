@@ -6,7 +6,6 @@
 package turn
 
 import (
-	"net"
 	"net/netip"
 	"sync"
 	"sync/atomic"
@@ -20,7 +19,7 @@ import (
 type scriptedAllocationScript struct {
 	performTransaction func(msg *stun.Message) (*stun.Message, error)
 	startTransaction   func(msg *stun.Message) error
-	onDeallocated      func(relayedAddr net.Addr)
+	onDeallocated      func()
 	onChannelBind      func(msg *stun.Message)
 	permissionCount    atomic.Int32
 	bindingCount       atomic.Int32
@@ -75,9 +74,9 @@ func (s *scriptedAllocationScript) start(msg *stun.Message) error {
 	return nil
 }
 
-func (s *scriptedAllocationScript) deallocated(relayedAddr net.Addr) {
+func (s *scriptedAllocationScript) deallocated() {
 	if s.onDeallocated != nil {
-		s.onDeallocated(relayedAddr)
+		s.onDeallocated()
 	}
 }
 
@@ -103,7 +102,6 @@ func newScriptedAllocation(
 		PerformTransaction: script.transact,
 		StartTransaction:   script.start,
 		OnDeallocated:      script.deallocated,
-		RelayedAddr:        net.UDPAddrFromAddrPort(relayed),
 		Username:           stun.NewUsername("user"),
 		Realm:              stun.NewRealm("realm"),
 		Integrity:          stun.NewShortTermIntegrity("pass"),
