@@ -63,8 +63,6 @@ type Client struct {
 
 	username     stun.Username               // Read-only
 	password     string                      // Read-only
-	realm        stun.Realm                  // Read-only
-	integrity    stun.MessageIntegrity       // Read-only
 	transactions *client.TransactionRegistry // Thread-safe
 	relayedConn  *client.UDPConn             // Protected by mutex ***
 	allocating   bool                        // Protected by mutex
@@ -78,55 +76,18 @@ type Client struct {
 	bindingCheckInterval      time.Duration
 }
 
-// inferAddressFamilyFromConn attempts to determine the address
-// family (IPv4 or IPv6) from a PacketConn's local address.
-// Returns an error if the address type is not IP-based.
-func inferAddressFamilyFromConn(
-	conn net.PacketConn,
-) (proto.RequestedAddressFamily, error) {
-	addr := conn.LocalAddr()
-
-	switch a := addr.(type) {
-	case *net.UDPAddr:
-		if a.IP.To4() != nil {
-			return proto.RequestedFamilyIPv4, nil
+// requestedAddressFamily infers the family from a UDP local address and falls
+// back to the RFC 6156 IPv4 default for other address types.
+func requestedAddressFamily(conn net.PacketConn) proto.RequestedAddressFamily {
+	if addr, ok := conn.LocalAddr().(*net.UDPAddr); ok {
+		if addr.IP.To4() != nil {
+			return proto.RequestedFamilyIPv4
 		}
 
-		return proto.RequestedFamilyIPv6, nil
-	default:
-		return 0, fmt.Errorf("cannot infer address family from %T", addr) //nolint:err113
-	}
-}
-
-// getRequestedAddressFamily determines the address family to use
-// for TURN allocations. It follows this priority:
-//  1. Try to infer from the PacketConn's local address
-//  2. Fall back to IPv4 default per RFC 6156
-func getRequestedAddressFamily(conn net.PacketConn) proto.RequestedAddressFamily {
-	if inferred, err := inferAddressFamilyFromConn(conn); err == nil {
-		return inferred
+		return proto.RequestedFamilyIPv6
 	}
 
-	// Default to IPv4 per RFC 6156
 	return proto.RequestedFamilyIPv4
-}
-
-// appendRequestedAddressFamily adds REQUESTED-ADDRESS-FAMILY to the provided
-// setters slice. The attribute is only included when IPv6 is desired.
-func appendRequestedAddressFamily(
-	setters []stun.Setter,
-	requestedFamily proto.RequestedAddressFamily,
-) []stun.Setter {
-	// Only include the attribute when IPv6 is explicitly requested.
-	// This indirectly implied by the specification:
-	// If the REQUESTED-ADDRESS-FAMILY attribute is absent, the server MUST
-	// allocate an IPv4-relayed transport address for the TURN client.
-	// https://www.rfc-editor.org/rfc/rfc6156#section-4.2
-	if requestedFamily == proto.RequestedFamilyIPv6 {
-		return append(setters, requestedFamily)
-	}
-
-	return setters
 }
 
 // NewClient returns a new Client instance bound to config.Conn and
@@ -156,7 +117,7 @@ func NewClient(config *ClientConfig) (*Client, error) {
 		serverAddr:                net.UDPAddrFromAddrPort(server),
 		username:                  stun.NewUsername(config.Username),
 		password:                  config.Password,
-		requestedAddressFamily:    getRequestedAddressFamily(config.Conn),
+		requestedAddressFamily:    requestedAddressFamily(config.Conn),
 		permissionRefreshInterval: config.PermissionRefreshInterval,
 		bindingRefreshInterval:    config.bindingRefreshInterval,
 		bindingCheckInterval:      config.bindingCheckInterval,
@@ -178,68 +139,83 @@ func (c *Client) Close() {
 	c.transactions.AbortCurrent()
 }
 
-func (c *Client) sendAllocateRequest(ctx context.Context, protocol proto.Protocol) ( //nolint:cyclop
-	relayed proto.RelayedAddress,
-	lifetime proto.Lifetime,
-	nonce stun.Nonce,
-	err error,
-) {
+type allocateCredentials struct {
+	realm     stun.Realm
+	nonce     stun.Nonce
+	integrity stun.MessageIntegrity
+}
+
+type allocateExchange struct {
+	relayed   proto.RelayedAddress
+	lifetime  proto.Lifetime
+	realm     stun.Realm
+	nonce     stun.Nonce
+	integrity stun.MessageIntegrity
+}
+
+func (c *Client) buildAllocateRequest(
+	protocol proto.Protocol,
+	credentials *allocateCredentials,
+) (*stun.Message, error) {
 	allocationSetters := []stun.Setter{
 		stun.TransactionID,
 		stun.NewType(stun.MethodAllocate, stun.ClassRequest),
 		proto.RequestedTransport{Protocol: protocol},
 	}
+	if credentials != nil {
+		allocationSetters = append(allocationSetters,
+			&c.username,
+			&credentials.realm,
+			&credentials.nonce,
+			&credentials.integrity,
+		)
+	}
 
-	allocationSetters = appendRequestedAddressFamily(allocationSetters, c.requestedAddressFamily)
+	if c.requestedAddressFamily == proto.RequestedFamilyIPv6 {
+		allocationSetters = append(allocationSetters, c.requestedAddressFamily)
+	}
 
 	// FINGERPRINT must be the last attribute per RFC 5389
 	allocationSetters = append(allocationSetters, stun.Fingerprint)
 
-	msg, err := stun.Build(allocationSetters...)
+	return stun.Build(allocationSetters...)
+}
+
+func (c *Client) sendAllocateRequest(ctx context.Context, protocol proto.Protocol) ( //nolint:cyclop
+	exchange allocateExchange,
+	err error,
+) {
+	msg, err := c.buildAllocateRequest(protocol, nil)
 	if err != nil {
-		return relayed, lifetime, nonce, err
+		return exchange, err
 	}
 
 	res, err := c.performAllocateTransaction(ctx, msg)
 	if err != nil {
-		return relayed, lifetime, nonce, err
+		return exchange, err
 	}
 
 	// Anonymous allocate failed, trying to authenticate.
-	if err = nonce.GetFrom(res); err != nil {
-		return relayed, lifetime, nonce, err
+	credentials := allocateCredentials{}
+	if err = credentials.nonce.GetFrom(res); err != nil {
+		return exchange, err
 	}
-	if err = c.realm.GetFrom(res); err != nil {
-		return relayed, lifetime, nonce, err
+	if err = credentials.realm.GetFrom(res); err != nil {
+		return exchange, err
 	}
-	c.realm = append([]byte(nil), c.realm...)
-	c.integrity = stun.NewLongTermIntegrity(
-		c.username.String(), c.realm.String(), c.password,
+	credentials.realm = append([]byte(nil), credentials.realm...)
+	credentials.integrity = stun.NewLongTermIntegrity(
+		c.username.String(), credentials.realm.String(), c.password,
 	)
-	// Trying to authorize.
-	allocationSetters = []stun.Setter{
-		stun.TransactionID,
-		stun.NewType(stun.MethodAllocate, stun.ClassRequest),
-		proto.RequestedTransport{Protocol: protocol},
-		&c.username,
-		&c.realm,
-		&nonce,
-		&c.integrity,
-	}
 
-	allocationSetters = appendRequestedAddressFamily(allocationSetters, c.requestedAddressFamily)
-
-	// FINGERPRINT must be the last attribute per RFC 5389
-	allocationSetters = append(allocationSetters, stun.Fingerprint)
-
-	msg, err = stun.Build(allocationSetters...)
+	msg, err = c.buildAllocateRequest(protocol, &credentials)
 	if err != nil {
-		return relayed, lifetime, nonce, err
+		return exchange, err
 	}
 
 	res, err = c.performAllocateTransaction(ctx, msg)
 	if err != nil {
-		return relayed, lifetime, nonce, err
+		return exchange, err
 	}
 
 	if res.Type.Class == stun.ClassErrorResponse {
@@ -250,23 +226,27 @@ func (c *Client) sendAllocateRequest(ctx context.Context, protocol proto.Protoco
 				ErrorCodeAttr:   code,
 			}
 
-			return relayed, lifetime, nonce, turnError
+			return exchange, turnError
 		}
 
-		return relayed, lifetime, nonce, fmt.Errorf("%s", res.Type) //nolint:err113
+		return exchange, fmt.Errorf("%s", res.Type) //nolint:err113
 	}
 
 	// Getting relayed addresses from response.
-	if err := relayed.GetFrom(res); err != nil {
-		return relayed, lifetime, nonce, err
+	if err := exchange.relayed.GetFrom(res); err != nil {
+		return exchange, err
 	}
 
 	// Getting lifetime from response
-	if err := lifetime.GetFrom(res); err != nil {
-		return relayed, lifetime, nonce, err
+	if err := exchange.lifetime.GetFrom(res); err != nil {
+		return exchange, err
 	}
 
-	return relayed, lifetime, nonce, nil
+	exchange.realm = credentials.realm
+	exchange.nonce = credentials.nonce
+	exchange.integrity = credentials.integrity
+
+	return exchange, nil
 }
 
 // Allocate requests a UDP relay allocation from the configured server and
@@ -299,7 +279,7 @@ func (c *Client) Allocate(ctx context.Context) (*Allocation, error) {
 		}
 	}()
 
-	relayed, lifetime, nonce, err := c.sendAllocateRequest(ctx, proto.ProtoUDP)
+	exchange, err := c.sendAllocateRequest(ctx, proto.ProtoUDP)
 	if err != nil {
 		return nil, err
 	}
@@ -309,23 +289,23 @@ func (c *Client) Allocate(ctx context.Context) (*Allocation, error) {
 		PerformTransaction:        c.transactions.Perform,
 		StartTransaction:          c.transactions.Start,
 		OnDeallocated:             c.onDeallocated,
-		Realm:                     c.realm,
+		Realm:                     exchange.realm,
 		Username:                  c.username,
-		Integrity:                 c.integrity,
-		Nonce:                     nonce,
-		Lifetime:                  lifetime.Duration,
+		Integrity:                 exchange.integrity,
+		Nonce:                     exchange.nonce,
+		Lifetime:                  exchange.lifetime.Duration,
 		PermissionRefreshInterval: c.permissionRefreshInterval,
 		BindingRefreshInterval:    c.bindingRefreshInterval,
 		BindingCheckInterval:      c.bindingCheckInterval,
 	}, c.transactions.AbortCurrent)
 
-	canonicalRelayed, ok := canonicalWireAddr(relayed.IP, relayed.Port)
+	canonicalRelayed, ok := canonicalWireAddr(exchange.relayed.IP, exchange.relayed.Port)
 	if !ok {
 		// Release the server-side allocation (lifetime-0 Refresh) without
 		// publishing the doomed connection to the inbound path.
 		_ = relayedConn.Close()
 
-		return nil, fmt.Errorf("%w: %s", ErrInvalidRelayedAddress, relayed)
+		return nil, fmt.Errorf("%w: %s", ErrInvalidRelayedAddress, exchange.relayed)
 	}
 
 	c.publishRelayedUDPConn(relayedConn)

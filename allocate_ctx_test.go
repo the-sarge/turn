@@ -31,6 +31,7 @@ type observerConn struct {
 	deadlineCalls atomic.Int32
 	closeCalls    atomic.Int32
 	writeCount    atomic.Int32
+	localAddr     net.Addr
 	blockFrom     int32         // 1-based write ordinal at which writes block; 0 = never
 	gate          chan struct{} // Closed to release blocked writes
 	blocked       chan struct{} // Signaled once a write is blocked on the gate
@@ -42,8 +43,9 @@ type observerConn struct {
 
 func newObserverConn() *observerConn {
 	return &observerConn{
-		gate:    make(chan struct{}),
-		blocked: make(chan struct{}, 8),
+		localAddr: &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 5555},
+		gate:      make(chan struct{}),
+		blocked:   make(chan struct{}, 8),
 	}
 }
 
@@ -92,7 +94,7 @@ func (o *observerConn) Close() error {
 }
 
 func (o *observerConn) LocalAddr() net.Addr {
-	return &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 5555}
+	return o.localAddr
 }
 
 func (o *observerConn) SetDeadline(time.Time) error {
@@ -289,6 +291,153 @@ func completeObservedAllocate(
 		require.Fail(t, "Allocate did not return after the success response")
 
 		return nil
+	}
+}
+
+type fallbackLocalAddr string
+
+func (a fallbackLocalAddr) Network() string { return "fallback" }
+
+func (a fallbackLocalAddr) String() string { return string(a) }
+
+func assertAllocateRequestShape(
+	t *testing.T,
+	raw []byte,
+	wantAttrs []stun.AttrType,
+	setters ...stun.Setter,
+) {
+	t.Helper()
+
+	actual := &stun.Message{Raw: append([]byte(nil), raw...)}
+	require.NoError(t, actual.Decode())
+
+	gotAttrs := make([]stun.AttrType, 0, len(actual.Attributes))
+	for _, attr := range actual.Attributes {
+		gotAttrs = append(gotAttrs, attr.Type)
+	}
+	assert.Equal(t, wantAttrs, gotAttrs, "Allocate request attribute order")
+
+	expectedSetters := make([]stun.Setter, 0, len(setters)+1)
+	expectedSetters = append(expectedSetters, stun.NewTransactionIDSetter(actual.TransactionID))
+	expectedSetters = append(expectedSetters, setters...)
+	expected := stun.MustBuild(expectedSetters...)
+	assert.Equal(t, expected.Raw, actual.Raw, "Allocate request normalized to the observed transaction ID")
+}
+
+func TestAllocateRequestWireShape(t *testing.T) {
+	tests := []struct {
+		name        string
+		localAddr   net.Addr
+		requestIPv6 bool
+	}{
+		{
+			name:      "IPv4 UDP socket",
+			localAddr: &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 5555},
+		},
+		{
+			name:        "IPv6 UDP socket",
+			localAddr:   &net.UDPAddr{IP: net.ParseIP("::"), Port: 5555},
+			requestIPv6: true,
+		},
+		{
+			name:      "non-UDP local address fallback",
+			localAddr: fallbackLocalAddr("fallback"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conn := newObserverConn()
+			conn.localAddr = tt.localAddr
+			cl := newObservedClient(t, conn)
+			result := startObservedAllocate(cl, context.Background())
+
+			anonymous := awaitWrite(t, conn, 1)
+			anonymousAttrs := []stun.AttrType{stun.AttrRequestedTransport}
+			anonymousSetters := []stun.Setter{
+				stun.NewType(stun.MethodAllocate, stun.ClassRequest),
+				proto.RequestedTransport{Protocol: proto.ProtoUDP},
+			}
+			if tt.requestIPv6 {
+				anonymousAttrs = append(anonymousAttrs, stun.AttrRequestedAddressFamily)
+				anonymousSetters = append(anonymousSetters, proto.RequestedFamilyIPv6)
+			}
+			anonymousAttrs = append(anonymousAttrs, stun.AttrFingerprint)
+			anonymousSetters = append(anonymousSetters, stun.Fingerprint)
+			assertAllocateRequestShape(t, anonymous, anonymousAttrs, anonymousSetters...)
+
+			realm := stun.NewRealm("test-realm")
+			nonce := stun.NewNonce("test-nonce")
+			username := stun.NewUsername("user")
+			integrity := stun.NewLongTermIntegrity("user", "test-realm", "secret")
+			require.NoError(t, cl.HandleInbound(unauthorizedResponse(t, anonymous), testServerNetAddr()))
+			authenticated := awaitRequestAfter(t, conn, 1, transactionID(t, anonymous))
+			authenticatedAttrs := []stun.AttrType{
+				stun.AttrRequestedTransport,
+				stun.AttrUsername,
+				stun.AttrRealm,
+				stun.AttrNonce,
+				stun.AttrMessageIntegrity,
+			}
+			authenticatedSetters := []stun.Setter{
+				stun.NewType(stun.MethodAllocate, stun.ClassRequest),
+				proto.RequestedTransport{Protocol: proto.ProtoUDP},
+				&username,
+				&realm,
+				&nonce,
+				&integrity,
+			}
+			if tt.requestIPv6 {
+				authenticatedAttrs = append(authenticatedAttrs, stun.AttrRequestedAddressFamily)
+				authenticatedSetters = append(authenticatedSetters, proto.RequestedFamilyIPv6)
+			}
+			authenticatedAttrs = append(authenticatedAttrs, stun.AttrFingerprint)
+			authenticatedSetters = append(authenticatedSetters, stun.Fingerprint)
+			assertAllocateRequestShape(t, authenticated, authenticatedAttrs, authenticatedSetters...)
+
+			require.NoError(t, cl.HandleInbound(allocateSuccessResponse(t, authenticated), testServerNetAddr()))
+			select {
+			case outcome := <-result:
+				require.NoError(t, outcome.err)
+				require.NotNil(t, outcome.alloc)
+				require.NoError(t, outcome.alloc.Close())
+			case <-time.After(2 * time.Second):
+				require.Fail(t, "Allocate did not return after the success response")
+			}
+		})
+	}
+}
+
+func TestSendAllocateRequestReturnsAllocationInputs(t *testing.T) {
+	conn := newObserverConn()
+	cl := newObservedClient(t, conn)
+
+	type outcome struct {
+		exchange allocateExchange
+		err      error
+	}
+	result := make(chan outcome, 1)
+	go func() {
+		exchange, err := cl.sendAllocateRequest(context.Background(), proto.ProtoUDP)
+		result <- outcome{exchange: exchange, err: err}
+	}()
+
+	anonymous := awaitWrite(t, conn, 1)
+	require.NoError(t, cl.HandleInbound(unauthorizedResponse(t, anonymous), testServerNetAddr()))
+	authenticated := awaitRequestAfter(t, conn, 1, transactionID(t, anonymous))
+	require.NoError(t, cl.HandleInbound(allocateSuccessResponse(t, authenticated), testServerNetAddr()))
+
+	select {
+	case got := <-result:
+		require.NoError(t, got.err)
+		assert.True(t, got.exchange.relayed.IP.Equal(net.ParseIP("127.0.0.1")))
+		assert.Equal(t, 40000, got.exchange.relayed.Port)
+		assert.Equal(t, 10*time.Minute, got.exchange.lifetime.Duration)
+		assert.Equal(t, stun.NewRealm("test-realm"), got.exchange.realm)
+		assert.Equal(t, stun.NewNonce("test-nonce"), got.exchange.nonce)
+		assert.Equal(t, stun.NewLongTermIntegrity("user", "test-realm", "secret"), got.exchange.integrity)
+	case <-time.After(2 * time.Second):
+		require.Fail(t, "Allocate exchange did not return after the success response")
 	}
 }
 
