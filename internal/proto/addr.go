@@ -10,7 +10,7 @@ import (
 )
 
 // Addr is ip:port.
-type Addr struct {
+type Addr struct { //nolint:recvcheck // Addr is passed around as a net.Addr value; only FromUDPAddr mutates and takes a pointer.
 	IP   net.IP
 	Port int
 }

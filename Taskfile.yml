@@ -8,6 +8,9 @@ dotenv: ['scripts/tool-versions.env']
 vars:
   GO: GOTOOLCHAIN=local go
   GOLANGCI_LINT_PKG: github.com/golangci/golangci-lint/v2/cmd/golangci-lint
+  # Portfolio Go lint standard v1.0.0. .golangci.yml is a byte-identical copy of
+  # the canonical file; bump this digest and the config together, never alone.
+  LINT_STANDARD_SHA256: a18cfc4fcdbc03b2c2e40c658f3b1cf27066b8ff62816786283663226d910dc8
   GOVULNCHECK_PKG: golang.org/x/vuln/cmd/govulncheck
   GITLEAKS_PKG: github.com/zricethezav/gitleaks/v8
   ACTIONLINT_PKG: github.com/rhysd/actionlint/cmd/actionlint
@@ -83,8 +86,21 @@ tasks:
     cmds:
       - '{{.GO}} test -race ./...'
 
+  lint-config-check:
+    desc: Verify .golangci.yml matches the portfolio lint standard.
+    run: once
+    cmds:
+      - |
+        got="$(shasum -a 256 .golangci.yml | awk '{print $1}')"
+        if [ "$got" != "{{.LINT_STANDARD_SHA256}}" ]; then
+          echo "lint config drift: .golangci.yml sha256 $got does not match portfolio standard {{.LINT_STANDARD_SHA256}}" >&2
+          echo "canonical copy: the-sarge/infra config/golangci/.golangci.yml" >&2
+          exit 1
+        fi
+
   lint:
     desc: Run the pinned golangci-lint.
+    deps: [lint-config-check]
     cmds:
       - '{{.GO}} run {{.GOLANGCI_LINT_PKG}}@{{.GOLANGCI_LINT_VERSION}} run --timeout 5m'
 

@@ -8,6 +8,7 @@ import (
 
 	"github.com/pion/stun/v3"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestReservationToken(t *testing.T) {
@@ -17,7 +18,7 @@ func TestReservationToken(t *testing.T) {
 		allocated := wasAllocs(func() {
 			// On stack.
 			tk := ReservationToken(tok)
-			assert.NoError(t, tk.AddTo(stunMsg))
+			require.NoError(t, tk.AddTo(stunMsg))
 			stunMsg.Reset()
 		})
 		assert.False(t, allocated)
@@ -25,7 +26,7 @@ func TestReservationToken(t *testing.T) {
 		tk := make(ReservationToken, 8)
 		allocated = wasAllocs(func() {
 			// On heap.
-			assert.NoError(t, tk.AddTo(stunMsg))
+			require.NoError(t, tk.AddTo(stunMsg))
 			stunMsg.Reset()
 		})
 		assert.False(t, allocated)
@@ -35,7 +36,7 @@ func TestReservationToken(t *testing.T) {
 		tk := make(ReservationToken, 8)
 		tk[2] = 33
 		tk[7] = 1
-		assert.NoError(t, tk.AddTo(stunMsg))
+		require.NoError(t, tk.AddTo(stunMsg))
 
 		stunMsg.WriteHeader()
 		t.Run("HandleErr", func(t *testing.T) {
@@ -58,7 +59,7 @@ func TestReservationToken(t *testing.T) {
 			t.Run("HandleErr", func(t *testing.T) {
 				m := new(stun.Message)
 				var handle ReservationToken
-				assert.ErrorIs(t, handle.GetFrom(m), stun.ErrAttributeNotFound)
+				require.ErrorIs(t, handle.GetFrom(m), stun.ErrAttributeNotFound)
 
 				m.Add(stun.AttrReservationToken, []byte{1, 2, 3})
 				assert.True(t, stun.IsAttrSizeInvalid(handle.GetFrom(m)))

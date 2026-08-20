@@ -16,7 +16,9 @@ import (
 // The CHANNEL-NUMBER attribute contains the number of the channel.
 //
 // RFC 5766 Section 14.1.
-type ChannelNumber uint16 // Encoded as uint16
+//
+// Encoded as uint16.
+type ChannelNumber uint16 //nolint:recvcheck // pion/stun contract: AddTo needs a value receiver so unaddressable values satisfy stun.Setter, GetFrom needs a pointer receiver to decode into.
 
 func (n ChannelNumber) String() string { return strconv.Itoa(int(n)) }
 

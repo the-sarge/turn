@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/pion/stun/v3"
+
 	"github.com/the-sarge/turn/v5/internal/client"
 	"github.com/the-sarge/turn/v5/internal/proto"
 )
@@ -41,7 +42,7 @@ type ClientConfig struct {
 	// performs no name resolution.
 	Server   netip.AddrPort
 	Username string
-	Password string //nolint:gosec // runtime credential, not hardcoded.
+	Password string
 	RTO      time.Duration
 	Conn     net.PacketConn // Caller-owned socket; the caller runs the read pump.
 
@@ -183,7 +184,7 @@ func (c *Client) buildAllocateRequest(
 	return stun.Build(allocationSetters...)
 }
 
-func (c *Client) sendAllocateRequest(ctx context.Context, protocol proto.Protocol) ( //nolint:cyclop
+func (c *Client) sendAllocateRequest(ctx context.Context, protocol proto.Protocol) (
 	exchange allocateExchange,
 	err error,
 ) {
@@ -231,7 +232,7 @@ func (c *Client) sendAllocateRequest(ctx context.Context, protocol proto.Protoco
 			return exchange, turnError
 		}
 
-		return exchange, fmt.Errorf("%s", res.Type) //nolint:err113
+		return exchange, fmt.Errorf("%s", res.Type)
 	}
 
 	// Getting relayed addresses from response.
@@ -368,7 +369,7 @@ func (c *Client) HandleInbound(data []byte, from net.Addr) error {
 	}
 }
 
-func (c *Client) handleSTUNMessage(data []byte) error { //nolint:cyclop
+func (c *Client) handleSTUNMessage(data []byte) error {
 	raw := make([]byte, len(data))
 	copy(raw, data)
 
@@ -381,7 +382,7 @@ func (c *Client) handleSTUNMessage(data []byte) error { //nolint:cyclop
 		return fmt.Errorf("%w : %s", errUnexpectedSTUNRequestMessage, msg.String())
 	}
 
-	if msg.Type.Class == stun.ClassIndication { // nolint:nestif
+	if msg.Type.Class == stun.ClassIndication {
 		switch msg.Type.Method {
 		case stun.MethodData:
 			var peerAddr proto.PeerAddress

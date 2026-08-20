@@ -16,6 +16,7 @@ import (
 	"github.com/pion/stun/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	"github.com/the-sarge/turn/v5/internal/proto"
 	"github.com/the-sarge/turn/v5/turntest"
 )
@@ -28,9 +29,9 @@ func TestNewClientRejectsNilConn(t *testing.T) {
 }
 
 func TestNewClientRejectsNonCanonicalServer(t *testing.T) {
-	conn, err := net.ListenPacket("udp4", "127.0.0.1:0") // nolint: noctx
+	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	require.NoError(t, err)
-	defer conn.Close() //nolint:errcheck
+	defer conn.Close()
 
 	mapped := netip.AddrPortFrom(netip.AddrFrom16([16]byte{10: 0xff, 11: 0xff, 12: 192, 13: 0, 14: 2, 15: 1}), 3478)
 	for name, server := range map[string]netip.AddrPort{
@@ -54,9 +55,9 @@ func TestNewClientRejectsNonCanonicalServer(t *testing.T) {
 }
 
 func TestNewClientValidatesPermissionRefreshInterval(t *testing.T) {
-	conn, err := net.ListenPacket("udp4", "127.0.0.1:0") // nolint: noctx
+	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	require.NoError(t, err)
-	defer conn.Close() //nolint:errcheck
+	defer conn.Close()
 
 	server := netip.MustParseAddrPort("192.0.2.1:3478")
 
@@ -108,13 +109,13 @@ func TestNewClientValidatesPermissionRefreshInterval(t *testing.T) {
 				PermissionRefreshInterval: tt.interval,
 			})
 			if tt.wantErr != nil {
-				assert.ErrorIs(t, newErr, tt.wantErr)
+				require.ErrorIs(t, newErr, tt.wantErr)
 				assert.Nil(t, client)
 
 				return
 			}
 			if tt.wantText != "" {
-				assert.EqualError(t, newErr, tt.wantText)
+				require.EqualError(t, newErr, tt.wantText)
 				assert.Nil(t, client)
 
 				return
@@ -188,7 +189,7 @@ func TestHandleInboundAdmitsOnlyServer(t *testing.T) {
 	t.Run("server source is delivered", func(t *testing.T) {
 		c, conn := newClient(t)
 		raw, waited := pendingResponse(t, c, conn)
-		assert.NoError(t, c.HandleInbound(raw, net.UDPAddrFromAddrPort(server)))
+		require.NoError(t, c.HandleInbound(raw, net.UDPAddrFromAddrPort(server)))
 		expectDelivered(t, waited)
 	})
 
@@ -197,7 +198,7 @@ func TestHandleInboundAdmitsOnlyServer(t *testing.T) {
 		raw, waited := pendingResponse(t, c, conn)
 		from := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 3478} // 16-byte mapped form, as a dual-stack socket reports it
 		require.Len(t, from.IP, net.IPv6len)
-		assert.NoError(t, c.HandleInbound(raw, from))
+		require.NoError(t, c.HandleInbound(raw, from))
 		expectDelivered(t, waited)
 	})
 
@@ -220,7 +221,7 @@ func TestHandleInboundAdmitsOnlyServer(t *testing.T) {
 	t.Run("non-protocol datagram: error from server, ignored from others", func(t *testing.T) {
 		c, _ := newClient(t)
 		junk := []byte("not stun, not channeldata")
-		assert.ErrorIs(t, c.HandleInbound(junk, net.UDPAddrFromAddrPort(server)), errUnexpectedServerDatagram)
+		require.ErrorIs(t, c.HandleInbound(junk, net.UDPAddrFromAddrPort(server)), errUnexpectedServerDatagram)
 		assert.NoError(t, c.HandleInbound(junk, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 3478}))
 	})
 }
@@ -342,8 +343,8 @@ func TestHandleInboundLiveUnknownChannelReturnsExistingErrorWithoutDelivery(t *t
 		net.UDPAddrFromAddrPort(server),
 	)
 
-	assert.ErrorIs(t, err, errChannelBindNotFound)
-	assert.EqualError(t, err, "turn: no binding found for channel: 16384")
+	require.ErrorIs(t, err, errChannelBindNotFound)
+	require.EqualError(t, err, "turn: no binding found for channel: 16384")
 	require.NoError(t, turnClient.HandleInbound(
 		buildDataIndication(t, []byte("marker"), peer),
 		net.UDPAddrFromAddrPort(server),
@@ -421,7 +422,7 @@ func TestClientCloseIsAnAbortCutNotATerminalState(t *testing.T) {
 
 	select {
 	case got := <-resultCh:
-		assert.NoError(t, got.err)
+		require.NoError(t, got.err)
 		assert.NotNil(t, got.result)
 	case <-time.After(time.Second):
 		assert.Fail(t, "transaction begun after Client.Close did not complete")
@@ -449,7 +450,7 @@ func TestClientCloseWinsBlockedInitialSendWithoutRearm(t *testing.T) {
 
 	select {
 	case err := <-resultCh:
-		assert.ErrorIs(t, err, net.ErrClosed)
+		require.ErrorIs(t, err, net.ErrClosed)
 	case <-time.After(time.Second):
 		assert.Fail(t, "Client.Close did not wake the blocked begin caller")
 	}
@@ -469,8 +470,8 @@ func TestClientNonceExpiration(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	conn, err := net.ListenPacket("udp4", "0.0.0.0:0") // nolint: noctx
-	assert.NoError(t, err)
+	conn, err := net.ListenPacket("udp4", "0.0.0.0:0")
+	require.NoError(t, err)
 
 	client, err := NewClient(&ClientConfig{
 		Conn:     conn,
@@ -478,16 +479,16 @@ func TestClientNonceExpiration(t *testing.T) {
 		Username: testUsername,
 		Password: testPassword,
 	})
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	startTestPump(t, client, conn)
 
 	allocation, err := client.Allocate(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	server.InjectStaleNonce()
 
 	peer := netip.MustParseAddrPort("127.0.0.1:8080")
-	assert.NoError(t, allocation.PreparePeer(context.Background(), peer))
+	require.NoError(t, allocation.PreparePeer(context.Background(), peer))
 	_, err = allocation.WriteTo([]byte{0x00}, peer)
 	assert.NoError(t, err)
 
@@ -512,8 +513,8 @@ func TestClientE2E(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	stunClientConn, err := net.ListenPacket("udp4", "0.0.0.0:0") // nolint: noctx
-	assert.NoError(t, err)
+	stunClientConn, err := net.ListenPacket("udp4", "0.0.0.0:0")
+	require.NoError(t, err)
 
 	client, err := NewClient(&ClientConfig{
 		Conn:                      stunClientConn,
@@ -524,14 +525,14 @@ func TestClientE2E(t *testing.T) {
 		bindingRefreshInterval:    time.Millisecond * 50,
 		bindingCheckInterval:      time.Millisecond * 50,
 	})
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	startTestPump(t, client, stunClientConn)
 
 	allocation, err := client.Allocate(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
-	remotePeerConn, err := net.ListenPacket("udp4", "0.0.0.0:0") // nolint: noctx
-	assert.NoError(t, err)
+	remotePeerConn, err := net.ListenPacket("udp4", "0.0.0.0:0")
+	require.NoError(t, err)
 
 	remotePeerAddr, ok := remotePeerConn.LocalAddr().(*net.UDPAddr)
 	assert.True(t, ok)
@@ -554,7 +555,7 @@ func TestClientE2E(t *testing.T) {
 			}
 		}()
 		for pktCount.Load() < expectedPktCount {
-			assert.NoError(t, write(expectedPacket))
+			require.NoError(t, write(expectedPacket))
 
 			time.Sleep(time.Millisecond * 25)
 		}

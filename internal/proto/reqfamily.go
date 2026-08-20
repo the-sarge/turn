@@ -11,7 +11,7 @@ import (
 
 // RequestedAddressFamily represents the REQUESTED-ADDRESS-FAMILY Attribute as
 // defined in RFC 6156 Section 4.1.1.
-type RequestedAddressFamily byte
+type RequestedAddressFamily byte //nolint:recvcheck // pion/stun contract: AddTo needs a value receiver so unaddressable values satisfy stun.Setter, GetFrom needs a pointer receiver to decode into.
 
 const requestedFamilySize = 4
 

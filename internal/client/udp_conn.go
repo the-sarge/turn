@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/pion/stun/v3"
+
 	"github.com/the-sarge/turn/v5/internal/proto"
 )
 
@@ -346,7 +347,7 @@ func (c *UDPConn) startPermissionAttempt(perm *permission, peer netip.AddrPort) 
 
 // awaitBinding blocks until the server confirms the channel binding, the
 // binding fails, or ctx is canceled.
-func (c *UDPConn) awaitBinding(ctx context.Context, bound *binding) error { //nolint:cyclop
+func (c *UDPConn) awaitBinding(ctx context.Context, bound *binding) error {
 	for {
 		if final, err := bound.preparationAccess(time.Now()); final {
 			return err
@@ -646,7 +647,7 @@ func (c *UDPConn) CreatePermissions(addrs ...netip.AddrPort) error {
 			return turnError
 		}
 
-		return fmt.Errorf("%s", res.Type) //nolint // dynamic errors
+		return fmt.Errorf("%s", res.Type)
 	}
 
 	return nil
@@ -851,7 +852,7 @@ func (c *UDPConn) bind(bound *binding) error {
 func (c *UDPConn) handleChannelBindErrorResponse(res *stun.Message) error {
 	var code stun.ErrorCodeAttribute
 	if err := code.GetFrom(res); err != nil {
-		return fmt.Errorf("%w: unexpected response type %s", errCannotBindChannel, res.Type) // nolint:err113
+		return fmt.Errorf("%w: unexpected response type %s", errCannotBindChannel, res.Type)
 	}
 
 	if code.Code == stun.CodeStaleNonce {
@@ -875,7 +876,7 @@ func (c *UDPConn) handleChannelBindErrorResponse(res *stun.Message) error {
 		)
 	}
 
-	return fmt.Errorf("%w: received error %d: %w", errCannotBindChannel, code.Code, turnError) // nolint:err113
+	return fmt.Errorf("%w: received error %d: %w", errCannotBindChannel, code.Code, turnError)
 }
 
 func (c *UDPConn) sendChannelData(data []byte, chNum uint16) (int, error) {

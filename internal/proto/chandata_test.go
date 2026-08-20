@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestChannelData_Encode(t *testing.T) {
@@ -21,7 +22,7 @@ func TestChannelData_Encode(t *testing.T) {
 	chanData.Encode()
 	b := &ChannelData{}
 	b.Raw = append(b.Raw, chanData.Raw...)
-	assert.NoError(t, b.Decode())
+	require.NoError(t, b.Decode())
 	assert.True(t, b.Equal(chanData))
 	assert.True(t, IsChannelData(b.Raw) && IsChannelData(chanData.Raw))
 }
@@ -168,7 +169,7 @@ func BenchmarkIsChannelData(b *testing.B) {
 	buf := []byte{64, 0, 0, 0, 0, 4, 0, 0, 1, 2, 3}
 	b.ReportAllocs()
 	b.SetBytes(int64(len(buf)))
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		IsChannelData(buf)
 	}
 }
@@ -180,7 +181,7 @@ func BenchmarkChannelData_Encode(b *testing.B) {
 	}
 	b.ReportAllocs()
 	b.SetBytes(4 + channelDataHeaderSize)
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		d.Encode()
 	}
 }
@@ -195,7 +196,7 @@ func BenchmarkChannelData_Decode(b *testing.B) {
 	copy(buf, d.Raw)
 	b.ReportAllocs()
 	b.SetBytes(4 + channelDataHeaderSize)
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		d.Reset()
 		d.Raw = buf
 		assert.NoError(b, d.Decode())
@@ -213,7 +214,7 @@ func TestChromeChannelData(t *testing.T) {
 	// Decoding hex data into binary.
 	for s.Scan() {
 		b, err := hex.DecodeString(s.Text())
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		data = append(data, b)
 	}
 	// All hex streams decoded to raw binary format and stored in data slice.
@@ -221,7 +222,7 @@ func TestChromeChannelData(t *testing.T) {
 	for i, packet := range data {
 		chanData := new(ChannelData)
 		chanData.Raw = packet
-		assert.NoError(t, chanData.Decode(), "Packet %d errored", i)
+		require.NoError(t, chanData.Decode(), "Packet %d errored", i)
 
 		encoded := &ChannelData{
 			Data:   chanData.Data,
@@ -230,10 +231,10 @@ func TestChromeChannelData(t *testing.T) {
 		encoded.Encode()
 		decoded := new(ChannelData)
 		decoded.Raw = encoded.Raw
-		assert.NoError(t, decoded.Decode())
+		require.NoError(t, decoded.Decode())
 		assert.True(t, decoded.Equal(chanData))
 
 		messages = append(messages, chanData)
 	}
-	assert.Equal(t, 2, len(messages), "unexpected number of messages")
+	assert.Len(t, messages, 2, "unexpected number of messages")
 }

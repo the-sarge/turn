@@ -153,38 +153,38 @@ func TestRefreshFailureTerminalizes(t *testing.T) {
 
 			select {
 			case err := <-readResult:
-				assert.ErrorIs(t, err, net.ErrClosed, "post-seal ReadFrom must wrap net.ErrClosed")
-				assert.ErrorIs(t, err, ErrAllocationRefreshFailed, "post-seal ReadFrom must carry the terminal cause")
+				require.ErrorIs(t, err, net.ErrClosed, "post-seal ReadFrom must wrap net.ErrClosed")
+				require.ErrorIs(t, err, ErrAllocationRefreshFailed, "post-seal ReadFrom must carry the terminal cause")
 			case <-time.After(2 * time.Second):
 				assert.Fail(t, "blocked ReadFrom did not wake on the refresh-failure seal")
 			}
 
 			_, err := conn.WriteTo([]byte("data"), peer)
-			assert.ErrorIs(t, err, net.ErrClosed)
-			assert.ErrorIs(t, err, ErrAllocationRefreshFailed)
+			require.ErrorIs(t, err, net.ErrClosed)
+			require.ErrorIs(t, err, ErrAllocationRefreshFailed)
 
 			err = conn.PreparePeer(context.Background(), peer)
-			assert.ErrorIs(t, err, net.ErrClosed)
-			assert.ErrorIs(t, err, ErrAllocationRefreshFailed)
+			require.ErrorIs(t, err, net.ErrClosed)
+			require.ErrorIs(t, err, ErrAllocationRefreshFailed)
 
 			// The caller's Close joins and returns the recorded terminal cause,
 			// wrapping only the underlying failure — never a synthetic
 			// net.ErrClosed.
 			closeErr := conn.Close()
 			require.Error(t, closeErr)
-			assert.ErrorIs(t, closeErr, ErrAllocationRefreshFailed)
-			assert.NotErrorIs(t, closeErr, net.ErrClosed,
+			require.ErrorIs(t, closeErr, ErrAllocationRefreshFailed)
+			require.NotErrorIs(t, closeErr, net.ErrClosed,
 				"the terminal cause must wrap the underlying failure, not a synthetic net.ErrClosed")
 			if tt.underlying != nil {
-				assert.ErrorIs(t, closeErr, tt.underlying)
+				require.ErrorIs(t, closeErr, tt.underlying)
 			}
 			if tt.wantTurnError {
 				var turnErr *stun.TurnError
-				assert.ErrorAs(t, closeErr, &turnErr,
+				require.ErrorAs(t, closeErr, &turnErr,
 					"a well-formed error response must surface as a typed *stun.TurnError")
 			}
 
-			assert.ErrorIs(t, conn.Close(), net.ErrClosed,
+			require.ErrorIs(t, conn.Close(), net.ErrClosed,
 				"a repeated caller Close returns net.ErrClosed")
 
 			assert.Equal(t, int32(1), harness.emitCount.Load(),
@@ -278,7 +278,7 @@ func TestSelfSealEmissionFailureJoinsCause(t *testing.T) {
 
 	closeErr := conn.Close()
 	require.Error(t, closeErr)
-	assert.ErrorIs(t, closeErr, ErrAllocationRefreshFailed,
+	require.ErrorIs(t, closeErr, ErrAllocationRefreshFailed,
 		"the caller's Close must observe the refresh-failure cause")
 	assert.ErrorIs(t, closeErr, emitErr,
 		"a failed self-seal emission must be joined into the terminal cause")

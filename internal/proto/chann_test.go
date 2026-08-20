@@ -8,22 +8,23 @@ import (
 
 	"github.com/pion/stun/v3"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func BenchmarkChannelNumber(b *testing.B) {
 	b.Run("AddTo", func(b *testing.B) {
 		b.ReportAllocs()
 		m := new(stun.Message)
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			n := ChannelNumber(12)
-			assert.NoError(b, n.AddTo(m))
+			require.NoError(b, n.AddTo(m))
 			m.Reset()
 		}
 	})
 	b.Run("GetFrom", func(b *testing.B) {
 		m := new(stun.Message)
-		assert.NoError(b, ChannelNumber(12).AddTo(m))
-		for i := 0; i < b.N; i++ {
+		require.NoError(b, ChannelNumber(12).AddTo(m))
+		for range b.N {
 			var n ChannelNumber
 			assert.NoError(b, n.GetFrom(m))
 		}
@@ -40,7 +41,7 @@ func TestChannelNumber(t *testing.T) {
 		allocated := wasAllocs(func() {
 			// Case with ChannelNumber on stack.
 			n := ChannelNumber(6)
-			assert.NoError(t, n.AddTo(stunMsg))
+			require.NoError(t, n.AddTo(stunMsg))
 			stunMsg.Reset()
 		})
 		assert.False(t, allocated)
@@ -49,7 +50,7 @@ func TestChannelNumber(t *testing.T) {
 		nP := &n
 		allocated = wasAllocs(func() {
 			// On heap.
-			assert.NoError(t, nP.AddTo(stunMsg))
+			require.NoError(t, nP.AddTo(stunMsg))
 			stunMsg.Reset()
 		})
 		assert.False(t, allocated)
@@ -57,17 +58,17 @@ func TestChannelNumber(t *testing.T) {
 	t.Run("AddTo", func(t *testing.T) {
 		stunMsg := new(stun.Message)
 		chanNumber := ChannelNumber(6)
-		assert.NoError(t, chanNumber.AddTo(stunMsg))
+		require.NoError(t, chanNumber.AddTo(stunMsg))
 
 		stunMsg.WriteHeader()
 		t.Run("GetFrom", func(t *testing.T) {
 			decoded := new(stun.Message)
 			_, err := decoded.Write(stunMsg.Raw)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 
 			var numDecoded ChannelNumber
 			err = numDecoded.GetFrom(decoded)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			assert.Equal(t, chanNumber, numDecoded)
 
 			allocated := wasAllocs(func() {
@@ -79,7 +80,7 @@ func TestChannelNumber(t *testing.T) {
 			t.Run("HandleErr", func(t *testing.T) {
 				m := new(stun.Message)
 				nHandle := new(ChannelNumber)
-				assert.ErrorIs(t, nHandle.GetFrom(m), stun.ErrAttributeNotFound)
+				require.ErrorIs(t, nHandle.GetFrom(m), stun.ErrAttributeNotFound)
 
 				m.Add(stun.AttrChannelNumber, []byte{1, 2, 3})
 				assert.True(t, stun.IsAttrSizeInvalid(nHandle.GetFrom(m)))

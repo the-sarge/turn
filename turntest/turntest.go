@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/pion/stun/v3"
+
 	"github.com/the-sarge/turn/v5/internal/proto"
 )
 
@@ -41,7 +42,7 @@ const (
 type Options struct {
 	Realm    string
 	Username string
-	Password string //nolint:gosec // runtime test credential, not hardcoded.
+	Password string
 
 	// IPv6 listens and relays on [::1] instead of 127.0.0.1.
 	IPv6 bool

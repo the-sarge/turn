@@ -16,6 +16,7 @@ import (
 	"github.com/pion/stun/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	"github.com/the-sarge/turn/v5/internal/proto"
 )
 
@@ -69,7 +70,7 @@ func awaitNewRefresh(
 
 	var raw []byte
 	require.Eventually(t, func() bool {
-		for i := int32(0); i < conn.writeCount.Load(); i++ {
+		for i := range conn.writeCount.Load() {
 			candidate := conn.write(int(i))
 			if candidate == nil {
 				continue
@@ -100,7 +101,7 @@ func scanMethodTransactions(
 ) (map[[stun.TransactionIDSize]byte]struct{}, bool) {
 	transactions := make(map[[stun.TransactionIDSize]byte]struct{})
 	malformed := false
-	for i := int32(0); i < conn.writeCount.Load(); i++ {
+	for i := range conn.writeCount.Load() {
 		raw := conn.write(int(i))
 		if raw == nil {
 			continue
@@ -304,9 +305,9 @@ func TestZeroLifetimeRefreshSuccessTerminalizesPublishedAllocation(t *testing.T)
 	requireRefreshLifetime(t, release, 0)
 
 	_, err = allocation.WriteTo([]byte("data"), netip.MustParseAddrPort("127.0.0.1:5000"))
-	assert.ErrorIs(t, err, net.ErrClosed)
-	assert.ErrorIs(t, err, ErrAllocationRefreshFailed)
-	assert.ErrorIs(t, allocation.Close(), ErrAllocationRefreshFailed)
+	require.ErrorIs(t, err, net.ErrClosed)
+	require.ErrorIs(t, err, ErrAllocationRefreshFailed)
+	require.ErrorIs(t, allocation.Close(), ErrAllocationRefreshFailed)
 
 	requireLaterAllocateReachesWire(t, cl, conn)
 
@@ -370,7 +371,7 @@ func TestFirstRefreshFailureObservesPublishedAllocation(t *testing.T) {
 		transactionID(t, firstRefresh): {},
 	})
 	requireRefreshLifetime(t, release, 0)
-	assert.ErrorIs(t, allocation.Close(), ErrAllocationRefreshFailed)
+	require.ErrorIs(t, allocation.Close(), ErrAllocationRefreshFailed)
 	requireLaterAllocateReachesWire(t, cl, conn.observerConn)
 
 	cl.Close()

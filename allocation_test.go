@@ -16,6 +16,7 @@ import (
 	"github.com/pion/stun/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	"github.com/the-sarge/turn/v5/internal/client"
 	"github.com/the-sarge/turn/v5/internal/proto"
 )
@@ -41,8 +42,8 @@ func TestAllocationPreparePeerRejectsNilContextFirst(t *testing.T) {
 	//nolint:staticcheck // Nil is the programmer-error input under test.
 	err := allocation.PreparePeer(nil, netip.AddrPort{})
 
-	assert.ErrorIs(t, err, errNilContext)
-	assert.NotErrorIs(t, err, ErrInvalidPeer)
+	require.ErrorIs(t, err, errNilContext)
+	require.NotErrorIs(t, err, ErrInvalidPeer)
 	assert.Equal(t, int32(0), script.permissionCount.Load())
 	assert.Equal(t, int32(0), script.bindingCount.Load())
 }
@@ -83,12 +84,12 @@ func TestAllocationPeerAliasCanonicalizes(t *testing.T) {
 		netip.AddrFrom16([16]byte{10: 0xff, 11: 0xff, 12: 127, 13: 0, 14: 0, 15: 1}), 1234)
 	require.True(t, mapped.Addr().Is4In6(), "test input must be the mapped spelling")
 
-	assert.NoError(t, allocation.PreparePeer(context.Background(), mapped))
+	require.NoError(t, allocation.PreparePeer(context.Background(), mapped))
 	assert.Equal(t, int32(1), script.permissionCount.Load())
 	assert.Equal(t, int32(1), script.bindingCount.Load())
 
 	n, err := allocation.WriteTo([]byte("hello"), netip.MustParseAddrPort("127.0.0.1:1234"))
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, 5, n)
 	assert.True(t, proto.IsChannelData(script.lastWrite()),
 		"write to the unmapped spelling of a prepared mapped peer must be ChannelData")
@@ -146,12 +147,12 @@ func scriptInvalidRelayedServer(serverSock net.PacketConn, refreshLifetime chan<
 // the server-side allocation with a lifetime-0 Refresh, clear the client's
 // allocation pointer, and return ErrInvalidRelayedAddress.
 func TestAllocateRejectsInvalidRelayedAddress(t *testing.T) {
-	serverSock, err := net.ListenPacket("udp4", "127.0.0.1:0") // nolint: noctx
+	serverSock, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	require.NoError(t, err)
-	defer serverSock.Close()                                   //nolint:errcheck
-	clientSock, err := net.ListenPacket("udp4", "127.0.0.1:0") // nolint: noctx
+	defer serverSock.Close()
+	clientSock, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	require.NoError(t, err)
-	defer clientSock.Close() //nolint:errcheck
+	defer clientSock.Close()
 
 	refreshLifetime := make(chan time.Duration, 4)
 
@@ -168,7 +169,7 @@ func TestAllocateRejectsInvalidRelayedAddress(t *testing.T) {
 	defer turnClient.Close()
 
 	alloc, err := turnClient.Allocate(context.Background())
-	assert.ErrorIs(t, err, ErrInvalidRelayedAddress)
+	require.ErrorIs(t, err, ErrInvalidRelayedAddress)
 	assert.Nil(t, alloc)
 
 	select {

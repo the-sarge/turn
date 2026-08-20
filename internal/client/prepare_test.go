@@ -16,6 +16,7 @@ import (
 	"github.com/pion/stun/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	"github.com/the-sarge/turn/v5/internal/proto"
 )
 
@@ -102,22 +103,22 @@ func fillBindingManager(t *testing.T, mgr *bindingManager) {
 
 	peerAddr := netip.MustParseAddr("192.0.2.1")
 	for i := range maxChannelBindings {
-		peer := netip.AddrPortFrom(peerAddr, uint16(i+1)) //nolint:gosec // Bounded by channel capacity.
+		peer := netip.AddrPortFrom(peerAddr, uint16(i+1))
 		_, ok := mgr.getOrCreate(peer)
 		require.True(t, ok)
 	}
 }
 
-func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
+func TestPreparePeer(t *testing.T) {
 	t.Run("readiness success then ChannelData writes", func(t *testing.T) {
 		harness := newPrepareHarness(t, false)
 
-		assert.NoError(t, harness.conn.PreparePeer(context.Background(), harness.peer))
+		require.NoError(t, harness.conn.PreparePeer(context.Background(), harness.peer))
 		assert.Equal(t, int32(1), harness.permCount.Load())
 		assert.Equal(t, int32(1), harness.bindCount.Load())
 
 		n, err := harness.conn.WriteTo([]byte("hello"), harness.peer)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, 5, n)
 		assert.True(t, proto.IsChannelData(harness.lastWrite()),
 			"write after successful PreparePeer must be ChannelData, not Send indication")
@@ -144,7 +145,7 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 			return performTransaction(msg)
 		}
 
-		assert.NoError(t, harness.conn.PreparePeer(context.Background(), harness.peer))
+		require.NoError(t, harness.conn.PreparePeer(context.Background(), harness.peer))
 		assert.Zero(t, unexpectedAttempts.Load(), "successful resolution must prevent another permission attempt")
 		rejectUnexpectedAttempt.Store(false)
 		assert.Equal(t, int32(2), harness.permCount.Load(), "CreatePermission retries once after stale nonce")
@@ -215,13 +216,13 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 
 		bindingsBefore := harness.conn.bindingMgr.all()
 		err := harness.conn.PreparePeer(context.Background(), harness.peer)
-		assert.ErrorIs(t, err, ErrChannelBindFailed)
+		require.ErrorIs(t, err, ErrChannelBindFailed)
 		assert.Equal(t, int32(1), harness.permCount.Load(), "permission phase remains first")
 		assert.Equal(t, int32(0), harness.bindCount.Load(), "exhaustion must not start ChannelBind")
 		assert.Len(t, harness.conn.bindingMgr.all(), len(bindingsBefore))
 		_, found := harness.conn.bindingMgr.findByAddr(harness.peer)
 		assert.False(t, found)
-		assert.ErrorIs(t, harness.conn.PreparePeer(context.Background(), harness.peer), ErrChannelBindFailed)
+		require.ErrorIs(t, harness.conn.PreparePeer(context.Background(), harness.peer), ErrChannelBindFailed)
 		assert.Equal(t, int32(1), harness.permCount.Load(), "confirmed permission is reused after capacity exhaustion")
 
 		harness.failPerms.Store(true)
@@ -230,7 +231,7 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 		var turnErr *stun.TurnError
 		require.ErrorAs(t, err, &turnErr)
 		assert.Equal(t, stun.CodeForbidden, turnErr.ErrorCodeAttr.Code)
-		assert.NotErrorIs(t, err, ErrChannelBindFailed, "permission rejection retains its earlier outcome")
+		require.NotErrorIs(t, err, ErrChannelBindFailed, "permission rejection retains its earlier outcome")
 		assert.Equal(t, int32(0), harness.bindCount.Load(), "permission rejection must stop before binding")
 		_, found = harness.conn.bindingMgr.findByAddr(rejectedPeer)
 		assert.False(t, found)
@@ -260,7 +261,7 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 		harness.conn.bindingMgr.mutex.Unlock()
 		managerLocked = false
 
-		assert.ErrorIs(t, <-result, cause)
+		require.ErrorIs(t, <-result, cause)
 		assert.Equal(t, int32(0), harness.bindCount.Load())
 		assert.Len(t, harness.conn.bindingMgr.all(), maxChannelBindings)
 		_, found := harness.conn.bindingMgr.findByAddr(harness.peer)
@@ -289,7 +290,7 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 		harness.conn.bindingMgr.mutex.Unlock()
 		managerLocked = false
 
-		assert.ErrorIs(t, <-result, net.ErrClosed)
+		require.ErrorIs(t, <-result, net.ErrClosed)
 		assert.Equal(t, int32(0), harness.bindCount.Load())
 		assert.Len(t, harness.conn.bindingMgr.all(), maxChannelBindings)
 		_, found := harness.conn.bindingMgr.findByAddr(harness.peer)
@@ -304,7 +305,7 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 			cancel(cause)
 
 			err := harness.conn.PreparePeer(ctx, harness.peer)
-			assert.ErrorIs(t, err, cause)
+			require.ErrorIs(t, err, cause)
 			assert.Equal(t, int32(0), harness.permCount.Load())
 			assert.Equal(t, int32(0), harness.bindCount.Load())
 		})
@@ -314,7 +315,7 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 			require.NoError(t, harness.conn.Close())
 
 			err := harness.conn.PreparePeer(context.Background(), harness.peer)
-			assert.ErrorIs(t, err, net.ErrClosed)
+			require.ErrorIs(t, err, net.ErrClosed)
 			assert.Equal(t, int32(0), harness.permCount.Load())
 			assert.Equal(t, int32(0), harness.bindCount.Load())
 		})
@@ -373,7 +374,7 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 		for range waiters {
 			select {
 			case err := <-results:
-				assert.NoError(t, err)
+				require.NoError(t, err)
 			case <-time.After(5 * time.Second):
 				assert.Fail(t, "timed out waiting for PreparePeer")
 			}
@@ -401,7 +402,7 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 		cancelA(causeA)
 		select {
 		case err := <-resultA:
-			assert.ErrorIs(t, err, causeA, "canceled waiter must observe its cause")
+			require.ErrorIs(t, err, causeA, "canceled waiter must observe its cause")
 		case <-time.After(2 * time.Second):
 			assert.Fail(t, "canceled waiter did not wake promptly")
 		}
@@ -416,7 +417,7 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 		close(harness.bindGate)
 		select {
 		case err := <-resultB:
-			assert.NoError(t, err, "surviving waiter should complete via the shared bind")
+			require.NoError(t, err, "surviving waiter should complete via the shared bind")
 		case <-time.After(5 * time.Second):
 			assert.Fail(t, "timed out waiting for surviving waiter")
 		}
@@ -434,7 +435,7 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 			return harness.bindCount.Load() == 1
 		}, 5*time.Second, 10*time.Millisecond)
 		cancel(cause)
-		assert.ErrorIs(t, <-result, cause)
+		require.ErrorIs(t, <-result, cause)
 
 		close(harness.bindGate)
 		bound, ok := harness.conn.bindingMgr.findByAddr(harness.peer)
@@ -447,8 +448,8 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 		}, 5*time.Second, 10*time.Millisecond)
 
 		_, err := harness.conn.WriteTo([]byte("still unprepared"), harness.peer)
-		assert.ErrorIs(t, err, ErrNotPrepared)
-		assert.NoError(t, harness.conn.PreparePeer(context.Background(), harness.peer))
+		require.ErrorIs(t, err, ErrNotPrepared)
+		require.NoError(t, harness.conn.PreparePeer(context.Background(), harness.peer))
 		assert.Equal(t, int32(1), harness.bindCount.Load(), "the second waiter observes existing readiness")
 	})
 
@@ -476,7 +477,7 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 		cancelB(cause)
 		select {
 		case err := <-resultB:
-			assert.ErrorIs(t, err, cause,
+			require.ErrorIs(t, err, cause,
 				"waiter must be cancelable while the permission transaction is in flight")
 		case <-time.After(2 * time.Second):
 			assert.Fail(t, "canceled waiter did not wake during in-flight permission transaction")
@@ -485,7 +486,7 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 		close(harness.permGate)
 		select {
 		case err := <-resultA:
-			assert.NoError(t, err)
+			require.NoError(t, err)
 		case <-time.After(5 * time.Second):
 			assert.Fail(t, "timed out waiting for first caller")
 		}
@@ -495,7 +496,7 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 	t.Run("permission refresh failure fails writes, never Send indication", func(t *testing.T) {
 		harness := newPrepareHarness(t, false)
 
-		assert.NoError(t, harness.conn.PreparePeer(context.Background(), harness.peer))
+		require.NoError(t, harness.conn.PreparePeer(context.Background(), harness.peer))
 
 		// Simulate the permission-refresh timer firing against a server that
 		// now rejects the refresh.
@@ -504,7 +505,7 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 
 		writesBefore := harness.writeCount()
 		_, err := harness.conn.WriteTo([]byte("data"), harness.peer)
-		assert.ErrorIs(t, err, ErrPermissionRefreshFailed)
+		require.ErrorIs(t, err, ErrPermissionRefreshFailed)
 		assert.Equal(t, writesBefore, harness.writeCount(),
 			"failed write for a prepared peer must not emit anything (no Send indication fallback)")
 
@@ -515,7 +516,7 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 	t.Run("permission refresh success keeps prepared binding usable", func(t *testing.T) {
 		harness := newPrepareHarness(t, false)
 
-		assert.NoError(t, harness.conn.PreparePeer(context.Background(), harness.peer))
+		require.NoError(t, harness.conn.PreparePeer(context.Background(), harness.peer))
 		assert.Equal(t, int32(1), harness.permCount.Load())
 
 		harness.conn.onRefreshTimers(timerIDRefreshPerms)
@@ -523,7 +524,7 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 			"the consolidated receiver must refresh the existing permission")
 
 		n, err := harness.conn.WriteTo([]byte("still ready"), harness.peer)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, len("still ready"), n)
 		assert.True(t, proto.IsChannelData(harness.lastWrite()))
 	})
@@ -545,11 +546,11 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 		}
 
 		err := harness.conn.PreparePeer(context.Background(), harness.peer)
-		assert.ErrorIs(t, err, errChannelBindTransactionFailed)
+		require.ErrorIs(t, err, errChannelBindTransactionFailed)
 		assert.False(t, harness.conn.isClosed())
 
 		mock.performTransaction = inner
-		assert.NoError(t, harness.conn.PreparePeer(context.Background(), harness.peer),
+		require.NoError(t, harness.conn.PreparePeer(context.Background(), harness.peer),
 			"a fresh transaction failure is attempt-local and a later caller may retry")
 		assert.Equal(t, int32(2), harness.bindCount.Load())
 	})
@@ -578,12 +579,12 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 		close(gate)
 
 		for range 2 {
-			assert.ErrorIs(t, <-results, errChannelBindTransactionFailed)
+			require.ErrorIs(t, <-results, errChannelBindTransactionFailed)
 		}
 		assert.Equal(t, int32(1), harness.bindCount.Load())
 
 		mock.performTransaction = inner
-		assert.NoError(t, harness.conn.PreparePeer(context.Background(), harness.peer))
+		require.NoError(t, harness.conn.PreparePeer(context.Background(), harness.peer))
 		assert.Equal(t, int32(2), harness.bindCount.Load())
 	})
 
@@ -610,7 +611,7 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 		if assert.ErrorAs(t, err, &turnErr) {
 			assert.Equal(t, stun.CodeForbidden, turnErr.ErrorCodeAttr.Code)
 		}
-		assert.ErrorIs(t, err, errCannotBindChannel)
+		require.ErrorIs(t, err, errCannotBindChannel)
 		assert.False(t, harness.conn.isClosed())
 	})
 
@@ -630,7 +631,7 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 		// The waiter unblocks promptly; Close must keep waiting for the worker.
 		select {
 		case err := <-prepareResult:
-			assert.ErrorIs(t, err, net.ErrClosed)
+			require.ErrorIs(t, err, net.ErrClosed)
 		case <-time.After(2 * time.Second):
 			assert.Fail(t, "PreparePeer waiter did not unblock on close")
 		}
@@ -643,7 +644,7 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 		close(harness.bindGate)
 		select {
 		case err := <-closeResult:
-			assert.NoError(t, err)
+			require.NoError(t, err)
 		case <-time.After(5 * time.Second):
 			assert.Fail(t, "Close did not return after the bind worker finished")
 		}
@@ -682,8 +683,8 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 
 		permitted, err := perm.readiness()
 		assert.False(t, permitted)
-		assert.ErrorIs(t, err, net.ErrClosed)
-		assert.ErrorIs(t, err, errFake,
+		require.ErrorIs(t, err, net.ErrClosed)
+		require.ErrorIs(t, err, errFake,
 			"an in-flight attempt finishing after the seal must record the terminal cause")
 		assert.Equal(t, []netip.AddrPort{harness.peer}, harness.conn.permMap.addrs(),
 			"seal precedence retains permission membership")
@@ -739,7 +740,7 @@ func TestWriteToPreparedOnly(t *testing.T) {
 			name: "prepared then terminal",
 			arrange: func(t *testing.T, harness *prepareHarness) {
 				t.Helper()
-				assert.NoError(t, harness.conn.PreparePeer(context.Background(), harness.peer))
+				require.NoError(t, harness.conn.PreparePeer(context.Background(), harness.peer))
 				harness.failPerms.Store(true)
 				harness.conn.onRefreshTimers(timerIDRefreshPerms)
 			},
@@ -783,10 +784,10 @@ func TestWriteToPreparedOnly(t *testing.T) {
 			writes := harness.writeCount() - writesBefore
 
 			if tt.wantErr == nil {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				assert.Equal(t, len("payload"), n)
 			} else {
-				assert.ErrorIs(t, err, tt.wantErr)
+				require.ErrorIs(t, err, tt.wantErr)
 				assert.Equal(t, 0, n, "a failed write reports zero bytes")
 			}
 			assert.Equal(t, tt.wantWrites, writes, "network output count")

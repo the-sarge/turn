@@ -57,7 +57,7 @@ func TestPermissionAttemptLifecycle(t *testing.T) {
 
 			permitted, err := perm.readiness()
 			assert.Equal(t, tt.wantPermitted, permitted)
-			assert.ErrorIs(t, err, tt.wantErr)
+			require.ErrorIs(t, err, tt.wantErr)
 			if tt.wantPermitted {
 				attempt, fresh = perm.beginOrJoin()
 				assert.Nil(t, attempt, "a permitted permission does not start another attempt")
@@ -76,7 +76,7 @@ func TestPermissionAttemptLifecycle(t *testing.T) {
 		require.True(t, fresh)
 		permitted, err := perm.readiness()
 		assert.False(t, permitted)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		perm.resolve(nil)
 		<-attempt.done
