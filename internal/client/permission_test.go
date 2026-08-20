@@ -17,12 +17,12 @@ func TestPermissionAttemptLifecycle(t *testing.T) {
 	t.Run("first caller starts and second caller joins one attempt", func(t *testing.T) {
 		perm := &permission{}
 
-		done, fresh := perm.beginOrJoin()
-		require.NotNil(t, done)
+		attempt, fresh := perm.beginOrJoin()
+		require.NotNil(t, attempt)
 		assert.True(t, fresh)
 
 		joined, fresh := perm.beginOrJoin()
-		assert.Equal(t, done, joined)
+		assert.Equal(t, attempt, joined)
 		assert.False(t, fresh)
 	})
 
@@ -45,12 +45,12 @@ func TestPermissionAttemptLifecycle(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			perm := &permission{}
-			done, fresh := perm.beginOrJoin()
+			attempt, fresh := perm.beginOrJoin()
 			require.True(t, fresh)
 
 			perm.resolve(tt.result)
 			select {
-			case <-done:
+			case <-attempt.done:
 			default:
 				assert.Fail(t, "resolve did not wake attempt waiters")
 			}
@@ -59,8 +59,8 @@ func TestPermissionAttemptLifecycle(t *testing.T) {
 			assert.Equal(t, tt.wantPermitted, permitted)
 			assert.ErrorIs(t, err, tt.wantErr)
 			if tt.wantPermitted {
-				done, fresh = perm.beginOrJoin()
-				assert.Nil(t, done, "a permitted permission does not start another attempt")
+				attempt, fresh = perm.beginOrJoin()
+				assert.Nil(t, attempt, "a permitted permission does not start another attempt")
 				assert.False(t, fresh)
 			}
 		})
@@ -72,17 +72,34 @@ func TestPermissionAttemptLifecycle(t *testing.T) {
 		require.True(t, fresh)
 		perm.resolve(errFake)
 
-		done, fresh := perm.beginOrJoin()
+		attempt, fresh := perm.beginOrJoin()
 		require.True(t, fresh)
 		permitted, err := perm.readiness()
 		assert.False(t, permitted)
 		assert.NoError(t, err)
 
 		perm.resolve(nil)
-		<-done
+		<-attempt.done
 		permitted, err = perm.readiness()
 		assert.True(t, permitted)
 		assert.NoError(t, err)
+	})
+
+	t.Run("joined attempt result remains stable when a stale caller starts another attempt", func(t *testing.T) {
+		perm := &permission{}
+		attemptA, fresh := perm.beginOrJoin()
+		require.True(t, fresh)
+		joinedA, fresh := perm.beginOrJoin()
+		assert.Equal(t, attemptA, joinedA)
+		assert.False(t, fresh)
+
+		perm.resolve(errFake)
+		attemptB, fresh := perm.beginOrJoin()
+		require.True(t, fresh)
+		assert.ErrorIs(t, joinedA.result(), errFake)
+
+		perm.resolve(nil)
+		<-attemptB.done
 	})
 }
 
@@ -125,12 +142,12 @@ func TestPermissionMap(t *testing.T) {
 		pm := newPermissionMap()
 		addr := netip.MustParseAddrPort("1.2.3.4:5000")
 		perm := pm.getOrCreate(addr)
-		done, fresh := perm.beginOrJoin()
+		attempt, fresh := perm.beginOrJoin()
 		require.True(t, fresh)
 
 		pm.delete(addr)
 		perm.resolve(errFake)
-		<-done
+		<-attempt.done
 
 		assert.Empty(t, pm.addrs())
 		assert.NotSame(t, perm, pm.getOrCreate(addr))

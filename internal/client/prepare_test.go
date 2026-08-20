@@ -168,6 +168,7 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 		require.Eventually(t, func() bool {
 			return harness.permCount.Load() == 1
 		}, 5*time.Second, 10*time.Millisecond)
+		failedPerm := harness.conn.permMap.getOrCreate(harness.peer)
 		go func() { results <- harness.conn.PreparePeer(context.Background(), harness.peer) }()
 		time.Sleep(100 * time.Millisecond)
 		close(harness.permGate)
@@ -178,6 +179,9 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 			assert.Equal(t, stun.CodeForbidden, turnErr.ErrorCodeAttr.Code)
 		}
 		assert.Equal(t, int32(1), harness.permCount.Load(), "failed attempt is shared")
+		assert.Empty(t, harness.conn.permMap.addrs(), "final failure deletes membership before waking waiters")
+		nextPerm := harness.conn.permMap.getOrCreate(harness.peer)
+		assert.NotSame(t, failedPerm, nextPerm, "the next attempt has fresh permission identity")
 
 		harness.failPerms.Store(false)
 		require.NoError(t, harness.conn.PreparePeer(context.Background(), harness.peer))
@@ -187,17 +191,16 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 	t.Run("closing before worker registration resolves joined waiters", func(t *testing.T) {
 		harness := newPrepareHarness(t, false)
 		perm := harness.conn.permMap.getOrCreate(harness.peer)
-		done, fresh := perm.beginOrJoin()
+		attempt, fresh := perm.beginOrJoin()
 		require.True(t, fresh)
 		joined, fresh := perm.beginOrJoin()
-		assert.Equal(t, done, joined)
+		assert.Equal(t, attempt, joined)
 		assert.False(t, fresh)
 
 		require.NoError(t, harness.conn.Close())
-		assert.False(t, harness.conn.startPermissionAttempt(perm, harness.peer))
-		perm.resolve(harness.conn.closedErr())
+		harness.conn.runPermissionAttempt(perm, harness.peer)
 		select {
-		case <-done:
+		case <-attempt.done:
 		case <-time.After(2 * time.Second):
 			assert.Fail(t, "joined permission waiters did not wake after registration failed")
 		}
@@ -662,7 +665,7 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 		// joined the attempt must carry the recorded terminal cause, not bare
 		// net.ErrClosed.
 		perm := harness.conn.permMap.getOrCreate(harness.peer)
-		done, fresh := perm.beginOrJoin()
+		attempt, fresh := perm.beginOrJoin()
 		require.True(t, fresh)
 		require.True(t, harness.conn.startPermissionAttempt(perm, harness.peer))
 		assert.Eventually(t, func() bool {
@@ -672,7 +675,7 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 		harness.conn.startClose(errFake)
 		close(harness.permGate)
 		select {
-		case <-done:
+		case <-attempt.done:
 		case <-time.After(5 * time.Second):
 			assert.Fail(t, "permission attempt did not finish after the seal")
 		}
@@ -682,6 +685,8 @@ func TestPreparePeer(t *testing.T) { //nolint:maintidx,cyclop,gocyclo
 		assert.ErrorIs(t, err, net.ErrClosed)
 		assert.ErrorIs(t, err, errFake,
 			"an in-flight attempt finishing after the seal must record the terminal cause")
+		assert.Equal(t, []netip.AddrPort{harness.peer}, harness.conn.permMap.addrs(),
+			"seal precedence retains permission membership")
 	})
 
 	t.Run("re-entry after binding expiry is terminal", func(t *testing.T) {

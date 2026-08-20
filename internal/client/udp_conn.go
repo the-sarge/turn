@@ -234,8 +234,8 @@ func (c *UDPConn) awaitPermission(ctx context.Context, peer netip.AddrPort) erro
 			return nil
 		}
 
-		done, fresh := perm.beginOrJoin()
-		if done == nil {
+		attempt, fresh := perm.beginOrJoin()
+		if attempt == nil {
 			continue
 		}
 		if fresh {
@@ -243,17 +243,18 @@ func (c *UDPConn) awaitPermission(ctx context.Context, peer netip.AddrPort) erro
 		}
 
 		select {
-		case <-done:
+		case <-attempt.done:
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-c.closeCh:
 			return c.closedErr()
 		}
 
-		permitted, err := perm.readiness()
+		permitted, _ = perm.readiness()
 		if permitted {
 			return nil
 		}
+		err := attempt.result()
 		if err != nil {
 			return err
 		}

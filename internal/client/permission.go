@@ -12,14 +12,25 @@ type permission struct {
 	addr      netip.AddrPort
 	mu        sync.Mutex
 	permitted bool
-	attempt   chan struct{}
+	attempt   *permissionAttempt
 	result    error
 }
 
-// beginOrJoin returns the current attempt's completion signal. The caller that
-// receives fresh=true owns running and resolving the attempt. A nil signal
-// means the permission became ready before this caller could start work.
-func (p *permission) beginOrJoin() (done chan struct{}, fresh bool) {
+// permissionAttempt owns one generation's immutable completion result. A read
+// after done closes observes the result published by resolve.
+type permissionAttempt struct {
+	done chan struct{}
+	err  error
+}
+
+func (a *permissionAttempt) result() error {
+	return a.err
+}
+
+// beginOrJoin returns the current attempt handle. The caller that receives
+// fresh=true owns running and resolving the attempt. A nil handle means the
+// permission became ready before this caller could start work.
+func (p *permission) beginOrJoin() (attempt *permissionAttempt, fresh bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -30,7 +41,7 @@ func (p *permission) beginOrJoin() (done chan struct{}, fresh bool) {
 		return p.attempt, false
 	}
 
-	p.attempt = make(chan struct{})
+	p.attempt = &permissionAttempt{done: make(chan struct{})}
 	p.result = nil
 
 	return p.attempt, true
@@ -44,11 +55,12 @@ func (p *permission) resolve(err error) {
 	if p.attempt == nil {
 		return
 	}
-	done := p.attempt
+	attempt := p.attempt
 	p.attempt = nil
 	p.result = err
 	p.permitted = err == nil
-	close(done)
+	attempt.err = err
+	close(attempt.done)
 }
 
 // readiness reports the durable permitted fact and the last attempt result.
