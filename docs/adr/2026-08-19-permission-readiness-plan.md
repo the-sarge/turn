@@ -1,7 +1,7 @@
 # Permission Readiness Implementation Plan
 
 **Date:** 2026-08-19
-**Status:** Accepted; not yet implemented
+**Status:** Complete via PR #105
 **Track:** 3 of 4 in the 2026-08-19 seam deepening program
 **Depends on:** Nothing — parallel-safe; T1.S1 first is recommended to avoid `prepare_test.go` conflicts but is not a blocker
 **Related:** [Program index](2026-08-19-seam-deepening-program.md), [Channel-binding readiness plan](2026-08-19-channel-binding-readiness-plan.md), [Prepared-only writes ADR](2026-08-15-prepared-only-writes.md), [Permission owns its attempt ADR](2026-08-19-permission-owns-its-attempt.md), [Allocation lifecycle plan](2026-08-17-allocation-lifecycle-plan.md)
@@ -40,13 +40,15 @@ Tests probe readiness by `permMap.find(peer).state() == permStatePermitted` (`pr
 
 | Slice | Status/disposition | Delivers | Blocked by | Removes temporary seam |
 |---|---|---|---|---|
-| T3.S1 | New | `permission` owns begin/join/resolve and the permitted fact behind three operations; `UDPConn` drives no permission lock or raw field; vestigial lock, enum, atomics, `insert`/`find` gone | None | Raw permission state protocol in `UDPConn` |
+| T3.S1 | Complete via PR #105 | `permission` owns begin/join/resolve and the permitted fact behind three operations; `UDPConn` drives no permission lock or raw field; vestigial lock, enum, atomics, `insert`/`find` gone | None | Raw permission state protocol in `UDPConn` |
 
 ## Implementation Slices
 
 ### Slice T3.S1 — Permission owns its attempt and readiness
 
 **What it delivers:** One PR introducing the three permission operations, migrating `awaitPermission`/`ensurePermissionAttempt`/`createPermission` to them, deleting the raw accessors, enum, atomics, `perm.mutex`, `insert`, `find`, and the dead `pm.insert` test setup, and replacing accessor/CRUD tests with a table over begin/join/resolve plus preserved PreparePeer behavior.
+
+**Implementation:** PR #105 is this slice's one product PR.
 
 **Existing-work disposition:** New slice.
 

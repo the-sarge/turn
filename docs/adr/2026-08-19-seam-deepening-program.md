@@ -1,6 +1,6 @@
 # TURN Seam Deepening Program — 2026-08-19
 
-**Status:** Accepted; Tracks 1 and 2 implemented by PRs #96, #98, #100, and #103; remaining slices pending
+**Status:** Accepted; Tracks 1, 2, and 3 implemented by PRs #96, #98, #100, #103, and #105; Track 4 pending
 
 ## What this is
 
@@ -25,10 +25,10 @@ Audit receipt: all six slices were independently slice-audited against `dad68d48
 |---|---|---|---|---|---|---|
 | 1 | UDPConn construction and transaction crossing | [plan](2026-08-19-udpconn-construction-crossing-plan.md) | [#85](https://github.com/the-sarge/turn/issues/85) | None | 2 | Complete via PRs #96 and #98 |
 | 2 | Allocate admission and public error vocabulary | [plan](2026-08-19-allocate-admission-errors-plan.md) | [#86](https://github.com/the-sarge/turn/issues/86) | None | 2 | Complete via PRs #100 and #103 |
-| 3 | Permission readiness | [plan](2026-08-19-permission-readiness-plan.md) | pending | None | 1 | FRONTIER (T3.S1) |
+| 3 | Permission readiness | [plan](2026-08-19-permission-readiness-plan.md) | [#87](https://github.com/the-sarge/turn/issues/87) | None | 1 | Complete via PR #105 |
 | 4 | Allocate exchange | [plan](2026-08-19-allocate-exchange-plan.md) | pending | None | 1 | FRONTIER (T4.S1) |
 
-There are no genuine blocking edges; every remaining slice is independently green. T1.S1, T1.S2, T2.S1, and T2.S2 landed in the strongly recommended order, and the recommended remaining dispatch order to minimize rebases — advice, not a blocker — is T3.S1 → T4.S1. Known file overlaps: T1 and T3 both touch `internal/client/prepare_test.go`; T1.S2 and T2.S1 both touch `AllocationConfig`; T4.S1 is root-only but shares `client.go` (`sendAllocateRequest`, `Allocate`) with T1.S2 and T2.S1. Text conflicts between independently implemented slices require rebasing, not artificial blockers. T3.S1 and T4.S1 share no files with each other. Recommended next slice: T3.S1.
+There are no genuine blocking edges; T3.S1 has now landed after T1.S1, T1.S2, T2.S1, and T2.S2, leaving T4.S1 as the independently green frontier. Known file overlaps: T1 and T3 both touch `internal/client/prepare_test.go`; T1.S2 and T2.S1 both touch `AllocationConfig`; T4.S1 is root-only but shares `client.go` (`sendAllocateRequest`, `Allocate`) with T1.S2 and T2.S1. Text conflicts between independently implemented slices require rebasing, not artificial blockers. Recommended next slice: T4.S1.
 
 ## Rules that bind every track
 
