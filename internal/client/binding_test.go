@@ -303,13 +303,11 @@ func TestBindingManagerConcurrentFinalSlot(t *testing.T) {
 	start := make(chan struct{})
 	var callers sync.WaitGroup
 	for _, peer := range peers {
-		callers.Add(1)
-		go func() {
-			defer callers.Done()
+		callers.Go(func() {
 			<-start
 			bound, ok := bm.getOrCreate(peer)
 			results <- result{bound: bound, ok: ok}
-		}()
+		})
 	}
 	close(start)
 	callers.Wait()

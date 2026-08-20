@@ -125,8 +125,8 @@ func newObservedClient(t *testing.T, conn *observerConn) *Client {
 	cl, err := NewClient(&ClientConfig{
 		Conn:     conn,
 		Server:   testServerAddrPort(),
-		Username: "user",
-		Password: "secret",
+		Username: testUsername,
+		Password: testPassword,
 		RTO:      25 * time.Millisecond,
 	})
 	require.NoError(t, err)
@@ -368,8 +368,8 @@ func TestAllocateRequestWireShape(t *testing.T) {
 
 			realm := stun.NewRealm("test-realm")
 			nonce := stun.NewNonce("test-nonce")
-			username := stun.NewUsername("user")
-			integrity := stun.NewLongTermIntegrity("user", "test-realm", "secret")
+			username := stun.NewUsername(testUsername)
+			integrity := stun.NewLongTermIntegrity(testUsername, "test-realm", testPassword)
 			require.NoError(t, cl.HandleInbound(unauthorizedResponse(t, anonymous), testServerNetAddr()))
 			authenticated := awaitRequestAfter(t, conn, 1, transactionID(t, anonymous))
 			authenticatedAttrs := []stun.AttrType{
@@ -435,7 +435,7 @@ func TestSendAllocateRequestReturnsAllocationInputs(t *testing.T) {
 		assert.Equal(t, 10*time.Minute, got.exchange.lifetime.Duration)
 		assert.Equal(t, stun.NewRealm("test-realm"), got.exchange.realm)
 		assert.Equal(t, stun.NewNonce("test-nonce"), got.exchange.nonce)
-		assert.Equal(t, stun.NewLongTermIntegrity("user", "test-realm", "secret"), got.exchange.integrity)
+		assert.Equal(t, stun.NewLongTermIntegrity(testUsername, "test-realm", testPassword), got.exchange.integrity)
 	case <-time.After(2 * time.Second):
 		require.Fail(t, "Allocate exchange did not return after the success response")
 	}

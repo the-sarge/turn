@@ -34,8 +34,8 @@ func newSilentServerAllocation(t *testing.T) (*client.UDPConn, <-chan string) {
 	cl, err := NewClient(&ClientConfig{
 		Conn:     clientSock,
 		Server:   netip.MustParseAddrPort(serverSock.LocalAddr().String()),
-		Username: "user",
-		Password: "secret",
+		Username: testUsername,
+		Password: testPassword,
 		RTO:      25 * time.Millisecond,
 	})
 	require.NoError(t, err)
@@ -56,9 +56,9 @@ func newSilentServerAllocation(t *testing.T) (*client.UDPConn, <-chan string) {
 			closeOrder <- "deallocated"
 			cl.onDeallocated()
 		},
-		Username:  stun.NewUsername("user"),
+		Username:  stun.NewUsername(testUsername),
 		Realm:     stun.NewRealm("realm"),
-		Integrity: stun.NewShortTermIntegrity("secret"),
+		Integrity: stun.NewShortTermIntegrity(testPassword),
 		Nonce:     stun.NewNonce("nonce"),
 		Lifetime:  time.Hour,
 	}

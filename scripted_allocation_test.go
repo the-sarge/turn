@@ -17,6 +17,13 @@ import (
 	"github.com/the-sarge/turn/v5/internal/client"
 )
 
+// Long-term credential fixture shared by the package's tests. The values carry
+// no meaning beyond being stable across every request the tests assert on.
+const (
+	testUsername = "user"
+	testPassword = "secret"
+)
+
 type scriptedAllocationScript struct {
 	performTransaction func(msg *stun.Message) (*stun.Message, error)
 	startTransaction   func(msg *stun.Message) error
@@ -103,9 +110,9 @@ func newScriptedAllocation(
 		PerformTransaction: script.transact,
 		StartTransaction:   script.start,
 		OnDeallocated:      script.deallocated,
-		Username:           stun.NewUsername("user"),
+		Username:           stun.NewUsername(testUsername),
 		Realm:              stun.NewRealm("realm"),
-		Integrity:          stun.NewShortTermIntegrity("pass"),
+		Integrity:          stun.NewShortTermIntegrity(testPassword),
 		Nonce:              stun.NewNonce("nonce"),
 		Lifetime:           time.Hour,
 	}, func() {})
