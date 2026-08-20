@@ -120,8 +120,8 @@ tasks:
     cmds:
       - GITLEAKS_GO_RUN_VERSION={{.GITLEAKS_VERSION}} ./scripts/ci/check-secrets.sh
 
-  release-check:
-    desc: Complete validation required before creating or moving a release tag.
+  release-gate:
+    desc: Complete validation required before creating or moving a release tag; run by the tag-push release workflow.
     cmds:
       - task: check
       - task: docs-check
