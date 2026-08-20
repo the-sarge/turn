@@ -6,36 +6,69 @@ package client
 import (
 	"net/netip"
 	"sync"
-	"sync/atomic"
-)
-
-type permState int32
-
-const (
-	permStateIdle permState = iota
-	permStatePermitted
 )
 
 type permission struct {
-	addr        netip.AddrPort
-	st          permState     // Thread-safe (atomic op)
-	attemptDone chan struct{} // Protected by attemptMutex; non-nil while a create attempt is in flight
-	attemptErr  error         // Protected by attemptMutex; result of the last create attempt
-
-	// attemptMutex guards the attempt bookkeeping only. It is never held
-	// across a transaction, unlike mutex, which createPermission holds for
-	// the duration of the CreatePermission transaction; waiters joining an
-	// attempt must not block behind that transaction.
-	attemptMutex sync.Mutex   // Thread-safe
-	mutex        sync.RWMutex // Thread-safe
+	addr      netip.AddrPort
+	mu        sync.Mutex
+	permitted bool
+	attempt   *permissionAttempt
+	result    error
 }
 
-func (p *permission) setState(state permState) {
-	atomic.StoreInt32((*int32)(&p.st), int32(state))
+// permissionAttempt owns one generation's immutable completion result. A read
+// after done closes observes the result published by resolve.
+type permissionAttempt struct {
+	done chan struct{}
+	err  error
 }
 
-func (p *permission) state() permState {
-	return permState(atomic.LoadInt32((*int32)(&p.st)))
+func (a *permissionAttempt) result() error {
+	return a.err
+}
+
+// beginOrJoin returns the current attempt handle. The caller that receives
+// fresh=true owns running and resolving the attempt. A nil handle means the
+// permission became ready before this caller could start work.
+func (p *permission) beginOrJoin() (attempt *permissionAttempt, fresh bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.permitted {
+		return nil, false
+	}
+	if p.attempt != nil {
+		return p.attempt, false
+	}
+
+	p.attempt = &permissionAttempt{done: make(chan struct{})}
+	p.result = nil
+
+	return p.attempt, true
+}
+
+// resolve publishes one attempt result before waking every joined caller.
+func (p *permission) resolve(err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.attempt == nil {
+		return
+	}
+	attempt := p.attempt
+	p.attempt = nil
+	p.result = err
+	p.permitted = err == nil
+	attempt.err = err
+	close(attempt.done)
+}
+
+// readiness reports the durable permitted fact and the last attempt result.
+func (p *permission) readiness() (permitted bool, err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	return p.permitted, p.result
 }
 
 // Thread-safe permission map. TURN permissions are per peer IP, so the map is
@@ -44,15 +77,6 @@ func (p *permission) state() permState {
 type permissionMap struct {
 	permMap map[netip.Addr]*permission
 	mutex   sync.RWMutex
-}
-
-func (m *permissionMap) insert(addr netip.AddrPort, p *permission) bool {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-	p.addr = addr
-	m.permMap[addr.Addr()] = p
-
-	return true
 }
 
 // getOrCreate returns the existing permission for addr, or creates one, so
@@ -70,14 +94,6 @@ func (m *permissionMap) getOrCreate(addr netip.AddrPort) *permission {
 	m.permMap[key] = p
 
 	return p
-}
-
-func (m *permissionMap) find(addr netip.AddrPort) (*permission, bool) {
-	m.mutex.RLock()
-	defer m.mutex.RUnlock()
-	p, ok := m.permMap[addr.Addr()]
-
-	return p, ok
 }
 
 func (m *permissionMap) delete(addr netip.AddrPort) {

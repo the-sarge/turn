@@ -1,7 +1,7 @@
 # Permission Readiness Implementation Plan
 
 **Date:** 2026-08-19
-**Status:** Accepted; not yet implemented
+**Status:** Complete via PR #105
 **Track:** 3 of 4 in the 2026-08-19 seam deepening program
 **Depends on:** Nothing — parallel-safe; T1.S1 first is recommended to avoid `prepare_test.go` conflicts but is not a blocker
 **Related:** [Program index](2026-08-19-seam-deepening-program.md), [Channel-binding readiness plan](2026-08-19-channel-binding-readiness-plan.md), [Prepared-only writes ADR](2026-08-15-prepared-only-writes.md), [Permission owns its attempt ADR](2026-08-19-permission-owns-its-attempt.md), [Allocation lifecycle plan](2026-08-17-allocation-lifecycle-plan.md)
@@ -40,13 +40,15 @@ Tests probe readiness by `permMap.find(peer).state() == permStatePermitted` (`pr
 
 | Slice | Status/disposition | Delivers | Blocked by | Removes temporary seam |
 |---|---|---|---|---|
-| T3.S1 | New | `permission` owns begin/join/resolve and the permitted fact behind three operations; `UDPConn` drives no permission lock or raw field; vestigial lock, enum, atomics, `insert`/`find` gone | None | Raw permission state protocol in `UDPConn` |
+| T3.S1 | Complete via PR #105 | `permission` owns begin/join/resolve and the permitted fact behind three operations; `UDPConn` drives no permission lock or raw field; vestigial lock, enum, atomics, `insert`/`find` gone | None | Raw permission state protocol in `UDPConn` |
 
 ## Implementation Slices
 
 ### Slice T3.S1 — Permission owns its attempt and readiness
 
 **What it delivers:** One PR introducing the three permission operations, migrating `awaitPermission`/`ensurePermissionAttempt`/`createPermission` to them, deleting the raw accessors, enum, atomics, `perm.mutex`, `insert`, `find`, and the dead `pm.insert` test setup, and replacing accessor/CRUD tests with a table over begin/join/resolve plus preserved PreparePeer behavior.
+
+**Implementation:** PR #105 is this slice's one product PR.
 
 **Existing-work disposition:** New slice.
 
@@ -92,10 +94,10 @@ Tests probe readiness by `permMap.find(peer).state() == permStatePermitted` (`pr
 
 ## Acceptance Criteria
 
-- [ ] Every permission state and attempt transition in the supported finite domain has one owner in `permission`; `UDPConn` drives no permission lock or raw field. Domain: the matrix; owner: `permission`; guarantee: universal over the finite matrix; evidence: table, preserved PreparePeer tests, one guard mutation.
-- [ ] Concurrent PreparePeer callers for one peer IP share one CreatePermission attempt; a failed fresh attempt wakes waiters with that exact attempt generation's error even if a stale caller starts or completes a replacement first; the next caller starts fresh; a closing Allocation wakes joined waiters with the terminal cause.
-- [ ] `permState`, `setState`, the raw `state()` accessor, `perm.mutex`, `attemptMutex`, `permissionMap.insert`, `permissionMap.find`, and the dead `pm.insert` test setup do not exist; no shared helper with channel binding exists.
-- [ ] Permission identity, CreatePermission bytes, retry count, refresh cadence and membership rule, prepared-binding terminalization, seal precedence, waiter-local cancellation, and public API are unchanged; the only behavior change is that a permission succeeding after an intermediate 438 remains in `permMap`.
+- [x] Every permission state and attempt transition in the supported finite domain has one owner in `permission`; `UDPConn` drives no permission lock or raw field. Domain: the matrix; owner: `permission`; guarantee: universal over the finite matrix; evidence: table, preserved PreparePeer tests, one guard mutation.
+- [x] Concurrent PreparePeer callers for one peer IP share one CreatePermission attempt; a failed fresh attempt wakes waiters with that exact attempt generation's error even if a stale caller starts or completes a replacement first; the next caller starts fresh; a closing Allocation wakes joined waiters with the terminal cause.
+- [x] `permState`, `setState`, the raw `state()` accessor, `perm.mutex`, `attemptMutex`, `permissionMap.insert`, `permissionMap.find`, and the dead `pm.insert` test setup do not exist; no shared helper with channel binding exists.
+- [x] Permission identity, CreatePermission bytes, retry count, refresh cadence and membership rule, prepared-binding terminalization, seal precedence, waiter-local cancellation, and public API are unchanged; the only behavior change is that a permission succeeding after an intermediate 438 remains in `permMap`.
 
 ## Validation Gates
 

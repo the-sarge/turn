@@ -187,21 +187,8 @@ func (c *UDPConn) ReadFrom(p []byte) (int, netip.AddrPort, error) {
 	}
 }
 
-func (c *UDPConn) createPermission(perm *permission, addr netip.AddrPort) error {
-	perm.mutex.Lock()
-	defer perm.mutex.Unlock()
-
-	if perm.state() == permStateIdle {
-		// Punch a hole! (this would block a bit..)
-		if err := c.CreatePermissions(addr); err != nil {
-			c.permMap.delete(addr)
-
-			return err
-		}
-		perm.setState(permStatePermitted)
-	}
-
-	return nil
+func (c *UDPConn) createPermission(addr netip.AddrPort) error {
+	return c.CreatePermissions(addr)
 }
 
 // PreparePeer creates a permission for the canonical peer and waits until the
@@ -242,76 +229,92 @@ func (c *UDPConn) PreparePeer(ctx context.Context, peer netip.AddrPort) error {
 func (c *UDPConn) awaitPermission(ctx context.Context, peer netip.AddrPort) error {
 	for {
 		perm := c.permMap.getOrCreate(peer)
-		if perm.state() == permStatePermitted {
+		permitted, _ := perm.readiness()
+		if permitted {
 			return nil
 		}
 
-		done := c.ensurePermissionAttempt(perm, peer)
-		if done == nil {
-			return c.closedErr()
+		attempt, fresh := perm.beginOrJoin()
+		if attempt == nil {
+			continue
+		}
+		if fresh {
+			c.runPermissionAttempt(perm, peer)
 		}
 
 		select {
-		case <-done:
+		case <-attempt.done:
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-c.closeCh:
 			return c.closedErr()
 		}
 
-		if perm.state() == permStatePermitted {
-			return nil
-		}
-		perm.attemptMutex.Lock()
-		err := perm.attemptErr
-		perm.attemptMutex.Unlock()
+		permitted, err := c.permissionAttemptResult(perm, attempt)
 		if err != nil {
 			return err
+		}
+		if permitted {
+			return nil
 		}
 		// The attempt we joined predates our loop iteration; re-evaluate.
 	}
 }
 
-// ensurePermissionAttempt returns a channel that closes when the in-flight
-// CreatePermission attempt (existing or newly started) completes. It returns
-// nil once the allocation is closing.
-func (c *UDPConn) ensurePermissionAttempt(perm *permission, peer netip.AddrPort) chan struct{} {
-	perm.attemptMutex.Lock()
-	defer perm.attemptMutex.Unlock()
-
-	if perm.attemptDone != nil {
-		return perm.attemptDone
+// permissionAttemptResult preserves the exact attempt generation a caller
+// joined before consulting readiness established by any later attempt.
+func (*UDPConn) permissionAttemptResult(
+	perm *permission,
+	attempt *permissionAttempt,
+) (permitted bool, err error) {
+	if err = attempt.result(); err != nil {
+		return false, err
 	}
+
+	return perm.readiness()
+}
+
+func (c *UDPConn) runPermissionAttempt(perm *permission, peer netip.AddrPort) {
+	if !c.startPermissionAttempt(perm, peer) {
+		perm.resolve(c.closedErr())
+	}
+}
+
+// startPermissionAttempt registers and starts the CreatePermission worker for
+// a fresh permission-owned attempt. It returns false once the allocation is
+// closing; the caller must resolve the attempt so joined waiters wake.
+func (c *UDPConn) startPermissionAttempt(perm *permission, peer netip.AddrPort) bool {
 	if !c.addWorker() {
-		return nil
+		return false
 	}
 
-	done := make(chan struct{})
-	perm.attemptDone = done
 	go func() {
 		defer c.workerWG.Done()
 		var err error
+		deleteOnFailure := false
 		for range maxRetryAttempts {
 			if c.isClosed() {
 				// Seal precedence: a waiter that joins this attempt gets the
 				// recorded terminal cause, exactly like an operation started
 				// after the seal.
 				err = c.closedErr()
+				deleteOnFailure = false
 
 				break
 			}
-			if err = c.createPermission(perm, peer); !errors.Is(err, errTryAgain) {
+			err = c.createPermission(peer)
+			deleteOnFailure = err != nil
+			if !errors.Is(err, errTryAgain) {
 				break
 			}
 		}
-		perm.attemptMutex.Lock()
-		perm.attemptDone = nil
-		perm.attemptErr = err
-		perm.attemptMutex.Unlock()
-		close(done)
+		if deleteOnFailure {
+			c.permMap.delete(peer)
+		}
+		perm.resolve(err)
 	}()
 
-	return done
+	return true
 }
 
 // awaitBinding blocks until the server confirms the channel binding, the
