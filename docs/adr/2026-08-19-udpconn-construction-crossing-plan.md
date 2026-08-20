@@ -1,7 +1,7 @@
 # UDPConn Construction and Transaction Crossing Implementation Plan
 
 **Date:** 2026-08-19
-**Status:** Implemented by PRs #96 and #98
+**Status:** Implemented by PRs #96 and #98; the started-constructor criterion was narrowly superseded by PR #112 (see the [Allocation publication and activation plan](2026-08-20-allocation-publication-activation-plan.md))
 **Track:** 1 of 4 in the 2026-08-19 seam deepening program
 **Depends on:** Nothing — safe to start first; T1.S1 first is strongly recommended for T1.S2 but is not a blocker
 **Related:** [Program index](2026-08-19-seam-deepening-program.md), [Allocation lifecycle plan](2026-08-17-allocation-lifecycle-plan.md), [Transaction registry plan](2026-08-17-transaction-registry-plan.md), [Server-bound transport plan](2026-08-19-server-bound-transport-plan.md), [Allocation construction timing validity plan](2026-08-19-allocation-construction-timing-validity-plan.md)
@@ -121,7 +121,7 @@ Exact private Go spellings (`newUDPConn`, `start`, `newTestConn`, `emitRelease`,
 
 ## Acceptance Criteria
 
-- [x] `NewUDPConn` behaves exactly as before (started timers, same intervals, same abort panic) and is the only production constructor; an unexported build step establishes every invariant without goroutines and `Close` on a built-unstarted conn is valid. Domain: the finite construction paths in this repository; owner: `newUDPConn`/`start`; guarantee: universal over that set via the negative-grep evidence in T1.S1.
+- [x] `NewUDPConn` behaves exactly as before (started timers, same intervals, same abort panic) and is the only production constructor; an unexported build step establishes every invariant without goroutines and `Close` on a built-unstarted conn is valid. Domain: the finite construction paths in this repository; owner: `newUDPConn`/`start`; guarantee: universal over that set via the negative-grep evidence in T1.S1. *Superseded in part by PR #112 ([Allocation publication and activation plan](2026-08-20-allocation-publication-activation-plan.md)): `NewUDPConn` now returns an invariant-complete quiescent connection and `UDPConn.Activate` alone arms the timers; the single production constructor, the invariant-establishing build step, and `Close` on an unstarted conn remain as accepted here.*
 - [x] No test writes `UDPConn` private func fields after construction; `mockClient` and `configure` do not exist; `UDPConn{` literals exist only at the six retained controlled-linearization/queue sites named in the T1.S1 PR.
 - [x] One scripted internal constructor and one root `newScriptedAllocation` replace `prepareHarness`'s construction, `allocHarness`, and `inboundDeliveryHarness`; `close_latency_test` keeps its own harness.
 - [x] `AllocationConfig` exposes `PerformTransaction(msg) (*stun.Message, error)` and `StartTransaction(msg) error`; `TransactionResult`, `dontWait`, `ignoreResult`, and `Client.performTransaction` are absent; root wires registry method values.
