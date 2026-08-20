@@ -869,9 +869,6 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		addr := netip.MustParseAddrPort("127.0.0.1:1234")
 
 		conn := newTestConn(t, script)
-		assert.True(t, conn.permMap.insert(addr, &permission{
-			st: permStatePermitted,
-		}))
 
 		binding := requireBinding(t, conn.bindingMgr, addr)
 		confirmBindingAt(t, binding, time.Now())
@@ -896,7 +893,6 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 			},
 		}
 		conn := newTestConn(t, script)
-		assert.True(t, conn.permMap.insert(addr, &permission{st: permStatePermitted}))
 		bound := requireBinding(t, conn.bindingMgr, addr)
 		originalCh := bound.number
 
