@@ -377,7 +377,6 @@ func TestAllocateRequestWireShape(t *testing.T) {
 				stun.AttrUsername,
 				stun.AttrRealm,
 				stun.AttrNonce,
-				stun.AttrMessageIntegrity,
 			}
 			authenticatedSetters := []stun.Setter{
 				stun.NewType(stun.MethodAllocate, stun.ClassRequest),
@@ -385,12 +384,13 @@ func TestAllocateRequestWireShape(t *testing.T) {
 				&username,
 				&realm,
 				&nonce,
-				&integrity,
 			}
 			if tt.requestIPv6 {
 				authenticatedAttrs = append(authenticatedAttrs, stun.AttrRequestedAddressFamily)
 				authenticatedSetters = append(authenticatedSetters, proto.RequestedFamilyIPv6)
 			}
+			authenticatedAttrs = append(authenticatedAttrs, stun.AttrMessageIntegrity)
+			authenticatedSetters = append(authenticatedSetters, &integrity)
 			authenticatedAttrs = append(authenticatedAttrs, stun.AttrFingerprint)
 			authenticatedSetters = append(authenticatedSetters, stun.Fingerprint)
 			assertAllocateRequestShape(t, authenticated, authenticatedAttrs, authenticatedSetters...)

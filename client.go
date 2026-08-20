@@ -167,12 +167,14 @@ func (c *Client) buildAllocateRequest(
 			&c.username,
 			&credentials.realm,
 			&credentials.nonce,
-			&credentials.integrity,
 		)
 	}
 
 	if c.requestedAddressFamily == proto.RequestedFamilyIPv6 {
 		allocationSetters = append(allocationSetters, c.requestedAddressFamily)
+	}
+	if credentials != nil {
+		allocationSetters = append(allocationSetters, &credentials.integrity)
 	}
 
 	// FINGERPRINT must be the last attribute per RFC 5389
