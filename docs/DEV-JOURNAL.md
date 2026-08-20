@@ -853,3 +853,36 @@ PR [#110](https://github.com/the-sarge/turn/pull/110) landed the standalone [#83
 **Next**
 
 - No deferred finding survived for a follow-up issue. The standalone behavior decision is complete, and the earlier seam-deepening program remains complete with no reopened slice.
+
+---
+
+## Allocation activation ordering landed - 2026-08-20 02:59 EDT
+
+**Main:** `c73226487832`
+**Actor:** Codex
+
+**Summary**
+
+PR [#112](https://github.com/the-sarge/turn/pull/112) landed the Allocation publication/activation correction as `c732264` and closed [#102](https://github.com/the-sarge/turn/issues/102). `Client.Allocate` can no longer publish an Allocation that sealed before publication: construction is quiescent, one `closeMutex`-held activation transition publishes before arming lifecycle timers, and zero remaining lifetime is terminal rather than live state.
+
+**Completed**
+
+- Changed `NewUDPConn` to return an invariant-complete quiescent connection and added the idempotent `UDPConn.Activate` transition as the sole owner of publication-before-timer activation.
+- Moved successful `Client.Allocate` publication and admission-claim release into the constrained activation callback while preserving the established `closeMutex`-then-Client-mutex order and caller-owned socket behavior.
+- Classified initial zero lifetime and ordinary successful zero-lifetime Refresh as terminal `ErrAllocationRefreshFailed` outcomes, preserving abort-before-release ordering, exactly one lifecycle Release transaction ID, terminal-cause exposure, and later admission.
+- Replaced the investigation characterization with deterministic production-path and direct internal evidence for gated first Refresh ordering, callback/timer state, positive fixed cadence, immediate zero classification, unchanged stored positive lifetime, and terminal lifecycle effects.
+
+**Decisions**
+
+- Zero denotes terminal server state and every positive wire lifetime remains live; the initial positive lifetime fixes the existing half-life cadence, while later positive grants update stored/requested lifetime without rescheduling. The complete boundaries, ownership, evidence ceiling, and non-goals remain in the [Allocation publication and activation plan](adr/2026-08-20-allocation-publication-activation-plan.md).
+
+**Validation**
+
+- The approved ordering mutation made the callback-before-timers test fail on all three timer-state assertions, then the restored order passed without sleeps or repetition. Focused public and internal lifecycle tests passed on the final candidate.
+- Initial RAS review `20260820T060914-bb8a089a61a7622d6643cc39` produced three accepted findings that verified resolved with 8/8 prior-cluster coverage at `518fe2c`; four unsupported or out-of-budget findings were rejected and one process-metadata finding was deferred to merged-head revalidation.
+- Replacement review `20260820T063742-4bc550b405363d33896e7425` found one narrow test-oracle gap; the direct zero-Refresh test resolved it 1/1 at final head `e9d13b1` without production or harness changes.
+- Exact-head `task preflight` passed at `e9d13b14ade7d0f7348a5cea8f518f885fbb6ce3` with Go 1.26.6, including format, vet, ordinary tests, lint, docs, race, dependency/vulnerability, Darwin/Windows build, workflow, and secret gates. Post-ready hosted run [32341702016](https://github.com/the-sarge/turn/actions/runs/32341702016) passed `ci-required` on that exact head before guarded squash merge.
+
+**Next**
+
+- Merged-head revalidation left no product follow-up. Documentation-only [#113](https://github.com/the-sarge/turn/issues/113) records the bounded plan-status and predecessor-supersession metadata cleanup; it explicitly excludes product code, behavior, tests, and broader ADR normalization.
