@@ -753,3 +753,38 @@ PR [#103](https://github.com/the-sarge/turn/pull/103) landed Track 2 Slice T2.S2
 
 - Track 2 has no successor slice. T3.S1 ([#93](https://github.com/the-sarge/turn/issues/93)) and T4.S1 ([#94](https://github.com/the-sarge/turn/issues/94)) remain independently ready, with T3.S1 recommended next; [tracking issue #95](https://github.com/the-sarge/turn/issues/95) is the live cross-track view.
 - No review finding survived for a follow-up issue, and no error-vocabulary effect remains untraced. The pre-existing Allocation self-seal investigation [#102](https://github.com/the-sarge/turn/issues/102) remains outside this slice and does not block the frontier.
+
+---
+
+## Permission readiness ownership landed - 2026-08-19 21:32 EDT
+
+**Main:** `71eff6f0967c`
+**Actor:** Codex
+
+**Summary**
+
+PR [#105](https://github.com/the-sarge/turn/pull/105) landed Track 3 Slice T3.S1 as `71eff6f` and closed [#93](https://github.com/the-sarge/turn/issues/93). `permission` now owns each CreatePermission attempt generation and its permitted fact behind one private lock, while `UDPConn` retains worker, transaction, retry, seal, deletion, and refresh policy.
+
+**Completed**
+
+- Replaced the permission enum, atomics, three caller-driven synchronization fields, raw accessors, and unused map `insert`/`find` operations with permission-owned begin/join/resolve/readiness operations and an immutable result per attempt generation.
+- Removed the permission lock held across CreatePermission I/O; final transaction failure now deletes map membership immediately before resolving waiters, while seal and registration-failure paths retain membership and still wake joined callers with the terminal cause.
+- Corrected the intermediate-438 orphan: 438-then-success retains the permitted object in `permMap`, so later preparation reuses it and permission refresh includes it.
+- Migrated raw readiness probes and dead permission setup to finite lifecycle, PreparePeer, membership, seal, cancellation, refresh, and exact-attempt-result evidence.
+- Published scoped contract re-audit [#106](https://github.com/the-sarge/turn/pull/106) after verification exposed a second joined-attempt ordering class; the plan now requires attempt A's immutable failure to win even when stale replacement B succeeds before A's waiter reads.
+- Marked T3.S1 and Track 3 complete in the normative plan and program index, leaving T4.S1 as the independently ready frontier.
+
+**Decisions**
+
+- `permission` is the sole owner of permission readiness and each attempt generation's done/result pair; `UDPConn` consumes the exact joined result before later readiness and remains the policy owner. Detached permission membership outside the accepted 438 correction remains an explicit pre-existing non-goal in the [permission readiness plan](adr/2026-08-19-permission-readiness-plan.md).
+
+**Validation**
+
+- Red-first transition and 438 regressions failed before the new operations and map-retention behavior existed. The budgeted permitted-transition mutation produced an unexpected third CreatePermission attempt, then passed after restoring the central guard.
+- Initial RAS review `20260820T003755-4e8d42048dcf40ff724cdc3c` produced three accepted findings. Exact-head verification at `25103db` exposed the second joined-result ordering class and triggered scoped re-audit; verification at `7db0e3f` then cleared every accepted cluster. Replacement review `20260820T011543-462e821a3bf5472b526ab8fc` established no contract-relevant shipped-behavior failure.
+- Exact-head `task preflight` certified `2c5018fa3030fad2b0967b76fdffc8c4233fc160` against base `e432547386d7c2beb59451f825dc7ca5ad272184`, including format, vet, tests, lint, docs, race, dependency/vulnerability, Darwin/Windows build, workflow, and secret gates. Post-ready hosted run [32321167040](https://github.com/the-sarge/turn/actions/runs/32321167040) passed `ci-required` on that exact head before the guarded squash merge.
+
+**Next**
+
+- T4.S1 ([#94](https://github.com/the-sarge/turn/issues/94)) remains open, unblocked, labeled ready, and is the only remaining program slice; [tracking issue #95](https://github.com/the-sarge/turn/issues/95) is the live frontier.
+- No review finding survived merged-head revalidation for a follow-up issue. The plan's explicit detached-membership non-goal and the rejected verification-aid synchronization request remain outside this slice.
