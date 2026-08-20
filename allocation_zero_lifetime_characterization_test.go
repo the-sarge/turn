@@ -8,6 +8,7 @@ package turn
 import (
 	"context"
 	"net"
+	"net/netip"
 	"testing"
 	"time"
 
@@ -44,7 +45,7 @@ func refreshSuccessResponseWithLifetime(t *testing.T, req []byte, lifetime time.
 	return msg.Raw
 }
 
-func requireZeroLifetimeRefresh(t *testing.T, raw []byte) [stun.TransactionIDSize]byte {
+func requireZeroLifetimeRefresh(t *testing.T, raw []byte) {
 	t.Helper()
 
 	msg := &stun.Message{Raw: append([]byte(nil), raw...)}
@@ -54,6 +55,18 @@ func requireZeroLifetimeRefresh(t *testing.T, raw []byte) [stun.TransactionIDSiz
 	var lifetime proto.Lifetime
 	require.NoError(t, lifetime.GetFrom(msg))
 	require.Zero(t, lifetime.Duration)
+}
+
+func requireRefreshLifetime(t *testing.T, raw []byte, want time.Duration) [stun.TransactionIDSize]byte {
+	t.Helper()
+
+	msg := &stun.Message{Raw: append([]byte(nil), raw...)}
+	require.NoError(t, msg.Decode())
+	require.Equal(t, stun.MethodRefresh, msg.Type.Method)
+
+	var lifetime proto.Lifetime
+	require.NoError(t, lifetime.GetFrom(msg))
+	require.Equal(t, want, lifetime.Duration)
 
 	return msg.TransactionID
 }
@@ -92,7 +105,31 @@ func awaitNewRefresh(
 	return raw
 }
 
-func TestCharacterizeZeroLifetimeRefreshSuccess(t *testing.T) {
+func distinctMethodTransactions(
+	t *testing.T,
+	conn *observerConn,
+	method stun.Method,
+) map[[stun.TransactionIDSize]byte]struct{} {
+	t.Helper()
+
+	transactions := make(map[[stun.TransactionIDSize]byte]struct{})
+	for i := int32(0); i < conn.writeCount.Load(); i++ {
+		raw := conn.write(int(i))
+		if raw == nil {
+			continue
+		}
+
+		msg := &stun.Message{Raw: raw}
+		require.NoError(t, msg.Decode())
+		if msg.Type.Method == method {
+			transactions[msg.TransactionID] = struct{}{}
+		}
+	}
+
+	return transactions
+}
+
+func TestZeroLifetimeAllocateNeverPublishes(t *testing.T) {
 	conn := newObserverConn()
 	cl, err := NewClient(&ClientConfig{
 		Conn:     conn,
@@ -104,15 +141,7 @@ func TestCharacterizeZeroLifetimeRefreshSuccess(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(cl.Close)
 
-	type outcome struct {
-		allocation *Allocation
-		err        error
-	}
-	resultCh := make(chan outcome, 1)
-	go func() {
-		allocation, err := cl.Allocate(context.Background())
-		resultCh <- outcome{allocation: allocation, err: err}
-	}()
+	resultCh := startObservedAllocate(cl, context.Background())
 
 	first := awaitWrite(t, conn, 1)
 	require.NoError(t, cl.HandleInbound(unauthorizedResponse(t, first), testServerNetAddr()))
@@ -122,56 +151,113 @@ func TestCharacterizeZeroLifetimeRefreshSuccess(t *testing.T) {
 		testServerNetAddr(),
 	))
 
+	select {
+	case result := <-resultCh:
+		require.ErrorIs(t, result.err, ErrAllocationRefreshFailed)
+		require.Nil(t, result.alloc)
+	case <-time.After(2 * time.Second):
+		require.FailNow(t, "Allocate did not return after the zero-lifetime success response")
+	}
+	require.Nil(t, cl.relayedUDPConn())
+
+	release := awaitNewRefresh(t, conn, nil)
+	requireZeroLifetimeRefresh(t, release)
+	require.Len(t, distinctMethodTransactions(t, conn, stun.MethodRefresh), 1,
+		"initial zero must create exactly one lifecycle Release transaction")
+
+	retryCtx, cancelRetry := context.WithCancelCause(context.Background())
+	retryResult := startObservedAllocate(cl, retryCtx)
+	require.Eventually(t, func() bool {
+		return len(distinctMethodTransactions(t, conn, stun.MethodAllocate)) >= 3
+	}, 5*time.Second, time.Millisecond, "later Allocate did not reach the wire")
+	cancelRetry(context.Canceled)
+	select {
+	case result := <-retryResult:
+		require.ErrorIs(t, result.err, context.Canceled)
+		require.Nil(t, result.alloc)
+	case <-time.After(2 * time.Second):
+		require.FailNow(t, "canceled later Allocate did not return")
+	}
+
+	cl.Close()
+	assert.Zero(t, conn.closeCalls.Load())
+	assert.Zero(t, conn.deadlineCalls.Load())
+	require.Len(t, distinctMethodTransactions(t, conn, stun.MethodRefresh), 1,
+		"terminal initial zero must not create a later distinct Refresh transaction")
+}
+
+func TestZeroLifetimeRefreshSuccessTerminalizesPublishedAllocation(t *testing.T) {
+	conn := newObserverConn()
+	cl, err := NewClient(&ClientConfig{
+		Conn:     conn,
+		Server:   testServerAddrPort(),
+		Username: "user",
+		Password: "secret",
+		RTO:      time.Millisecond,
+	})
+	require.NoError(t, err)
+	t.Cleanup(cl.Close)
+
+	resultCh := startObservedAllocate(cl, context.Background())
+	first := awaitWrite(t, conn, 1)
+	require.NoError(t, cl.HandleInbound(unauthorizedResponse(t, first), testServerNetAddr()))
+	authenticated := awaitRequestAfter(t, conn, 1, transactionID(t, first))
+	require.NoError(t, cl.HandleInbound(
+		allocateSuccessResponseWithLifetime(t, authenticated, time.Second),
+		testServerNetAddr(),
+	))
+
 	var allocation *Allocation
 	select {
 	case result := <-resultCh:
 		require.NoError(t, result.err)
-		require.NotNil(t, result.allocation)
-		allocation = result.allocation
+		require.NotNil(t, result.alloc)
+		allocation = result.alloc
 	case <-time.After(2 * time.Second):
-		require.FailNow(t, "Allocate did not return after the zero-lifetime success response")
+		require.FailNow(t, "Allocate did not return after the positive-lifetime success response")
 	}
-	require.Same(t, allocation.conn, cl.relayedUDPConn(), "zero-lifetime Allocation remains published")
+	require.Same(t, allocation.conn, cl.relayedUDPConn())
 
-	seenRefreshes := make(map[[stun.TransactionIDSize]byte]struct{})
-	firstRefresh := awaitNewRefresh(t, conn, seenRefreshes)
-	firstRefreshID := requireZeroLifetimeRefresh(t, firstRefresh)
-	seenRefreshes[firstRefreshID] = struct{}{}
+	firstRefresh := awaitNewRefresh(t, conn, nil)
+	require.Same(t, allocation.conn, cl.relayedUDPConn(),
+		"the first Refresh must observe the published Allocation")
+	firstRefreshID := requireRefreshLifetime(t, firstRefresh, time.Second)
 	require.NoError(t, cl.HandleInbound(
 		refreshSuccessResponseWithLifetime(t, firstRefresh, 0),
 		testServerNetAddr(),
 	))
 
-	secondRefresh := awaitNewRefresh(t, conn, seenRefreshes)
-	secondRefreshID := requireZeroLifetimeRefresh(t, secondRefresh)
-	seenRefreshes[secondRefreshID] = struct{}{}
+	require.Eventually(t, func() bool {
+		return cl.relayedUDPConn() == nil
+	}, 2*time.Second, time.Millisecond, "zero-lifetime Refresh success did not clear publication")
 
-	_, err = cl.Allocate(context.Background())
-	require.ErrorIs(t, err, ErrAlreadyAllocated, "published zero-lifetime Allocation blocks later admission")
-	require.Same(t, allocation.conn, cl.relayedUDPConn(), "successful zero-lifetime Refresh does not self-seal")
+	release := awaitNewRefresh(t, conn, map[[stun.TransactionIDSize]byte]struct{}{
+		firstRefreshID: {},
+	})
+	requireZeroLifetimeRefresh(t, release)
 
-	require.NoError(t, allocation.Close(), "caller remains the seal owner")
-	require.Nil(t, cl.relayedUDPConn(), "caller Close clears the published Allocation")
+	_, err = allocation.WriteTo([]byte("data"), netip.MustParseAddrPort("127.0.0.1:5000"))
+	assert.ErrorIs(t, err, net.ErrClosed)
+	assert.ErrorIs(t, err, ErrAllocationRefreshFailed)
+	assert.ErrorIs(t, allocation.Close(), ErrAllocationRefreshFailed)
 
-	release := awaitNewRefresh(t, conn, seenRefreshes)
-	releaseID := requireZeroLifetimeRefresh(t, release)
-	seenRefreshes[releaseID] = struct{}{}
-	cl.Close()
-
-	uniqueRefreshes := make(map[[stun.TransactionIDSize]byte]struct{})
-	for i := int32(0); i < conn.writeCount.Load(); i++ {
-		raw := conn.write(int(i))
-		msg := &stun.Message{Raw: raw}
-		require.NoError(t, msg.Decode())
-		if msg.Type.Method != stun.MethodRefresh {
-			continue
-		}
-
-		var lifetime proto.Lifetime
-		require.NoError(t, lifetime.GetFrom(msg))
-		assert.Zero(t, lifetime.Duration)
-		uniqueRefreshes[msg.TransactionID] = struct{}{}
+	retryCtx, cancelRetry := context.WithCancelCause(context.Background())
+	retryResult := startObservedAllocate(cl, retryCtx)
+	require.Eventually(t, func() bool {
+		return len(distinctMethodTransactions(t, conn, stun.MethodAllocate)) >= 3
+	}, 5*time.Second, time.Millisecond, "later Allocate did not reach the wire")
+	cancelRetry(context.Canceled)
+	select {
+	case result := <-retryResult:
+		require.ErrorIs(t, result.err, context.Canceled)
+		require.Nil(t, result.alloc)
+	case <-time.After(2 * time.Second):
+		require.FailNow(t, "canceled later Allocate did not return")
 	}
-	require.GreaterOrEqual(t, len(uniqueRefreshes), 3)
-	t.Logf("observed %d distinct lifetime-zero Refresh transactions", len(uniqueRefreshes))
+
+	cl.Close()
+	assert.Zero(t, conn.closeCalls.Load())
+	assert.Zero(t, conn.deadlineCalls.Load())
+	require.Len(t, distinctMethodTransactions(t, conn, stun.MethodRefresh), 2,
+		"ordinary zero success must create one waited Refresh and one lifecycle Release")
 }

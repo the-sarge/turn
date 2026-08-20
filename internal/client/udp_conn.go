@@ -87,16 +87,16 @@ type UDPConn struct {
 	// callerClosed records that the caller's Close has run, so a repeated
 	// caller Close returns net.ErrClosed. Protected by closeMutex.
 	callerClosed bool
+	// activated records that the one lifecycle activation transition has run.
+	// Protected by closeMutex.
+	activated bool
 }
 
-// NewUDPConn creates a new instance of UDPConn. abortTransactions is a
-// required capability: every allocation must be able to wake its pending
-// transaction waits before deallocation and lifetime-zero release.
+// NewUDPConn creates a quiescent UDPConn. abortTransactions is a required
+// capability: every allocation must be able to wake its pending transaction
+// waits before deallocation and lifetime-zero release.
 func NewUDPConn(config *AllocationConfig, abortTransactions func()) *UDPConn {
-	conn := newUDPConn(config, abortTransactions)
-	conn.start()
-
-	return conn
+	return newUDPConn(config, abortTransactions)
 }
 
 // newUDPConn builds a UDPConn with every construction invariant established
@@ -162,11 +162,31 @@ func newUDPConn(config *AllocationConfig, abortTransactions func()) *UDPConn {
 	return conn
 }
 
-// start arms every timer owned by the allocation.
-func (c *UDPConn) start() {
+// Activate publishes a positive-lifetime allocation through the constrained
+// callback, then atomically arms every lifecycle timer. A zero-lifetime
+// allocation terminalizes without publication or timer activation.
+func (c *UDPConn) Activate(publishAndReleaseAdmission func()) error {
+	c.closeMutex.Lock()
+	defer c.closeMutex.Unlock()
+
+	if c.activated || c.isClosed() {
+		return nil
+	}
+	c.activated = true
+
+	if c.lifetime() == 0 {
+		cause := fmt.Errorf("%w: %w", ErrAllocationRefreshFailed, errZeroRemainingLifetime)
+		_, _ = c.startCloseLocked(cause)
+
+		return c.terminalCause
+	}
+
+	publishAndReleaseAdmission()
 	c.refreshAllocTimer.Start()
 	c.refreshPermsTimer.Start()
 	c.checkBindingsTimer.Start()
+
+	return nil
 }
 
 // ReadFrom reads one relayed datagram, copying the payload into p. It returns

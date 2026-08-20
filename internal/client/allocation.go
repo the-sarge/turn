@@ -96,6 +96,9 @@ func (c *UDPConn) refreshAllocation(lifetime time.Duration) error {
 	if err := updatedLifetime.GetFrom(res); err != nil {
 		return fmt.Errorf("%w: %w", errFailedToGetLifetime, err)
 	}
+	if updatedLifetime.Duration == 0 {
+		return errZeroRemainingLifetime
+	}
 
 	c.setLifetime(updatedLifetime.Duration)
 
@@ -137,8 +140,14 @@ func (c *UDPConn) onRefreshTimers(id int) {
 }
 
 func (c *UDPConn) refreshAllocationWithRetries() {
-	var err error
 	lifetime := c.lifetime()
+	if lifetime == 0 {
+		c.startClose(fmt.Errorf("%w: %w", ErrAllocationRefreshFailed, errZeroRemainingLifetime))
+
+		return
+	}
+
+	var err error
 	// Limit the max retries on errTryAgain to 3
 	// when stale nonce returns, sencond retry should succeed
 	for range maxRetryAttempts {

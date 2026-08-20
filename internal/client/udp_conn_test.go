@@ -81,9 +81,18 @@ func TestNewUDPConnBuildsUnstartedAndClosesOnce(t *testing.T) {
 	assert.False(t, conn.refreshAllocTimer.IsRunning())
 	assert.False(t, conn.refreshPermsTimer.IsRunning())
 	assert.False(t, conn.checkBindingsTimer.IsRunning())
+
+	var callbackCount atomic.Int32
+	require.NoError(t, conn.Activate(func() {
+		callbackCount.Add(1)
+	}))
+	assert.Zero(t, callbackCount.Load())
+	assert.False(t, conn.refreshAllocTimer.IsRunning())
+	assert.False(t, conn.refreshPermsTimer.IsRunning())
+	assert.False(t, conn.checkBindingsTimer.IsRunning())
 }
 
-func TestNewUDPConnStartsTimers(t *testing.T) {
+func TestUDPConnActivatePublishesBeforeStartingTimers(t *testing.T) {
 	mock := &testConnScript{
 		performTransaction: func(*stun.Message) (*stun.Message, error) {
 			return new(stun.Message), nil
@@ -92,9 +101,102 @@ func TestNewUDPConnStartsTimers(t *testing.T) {
 	conn := NewUDPConn(testAllocationConfig(mock), func() {})
 	t.Cleanup(func() { _ = conn.Close() })
 
+	assert.False(t, conn.refreshAllocTimer.IsRunning())
+	assert.False(t, conn.refreshPermsTimer.IsRunning())
+	assert.False(t, conn.checkBindingsTimer.IsRunning())
+
+	var callbackCount atomic.Int32
+	require.NoError(t, conn.Activate(func() {
+		assert.False(t, conn.refreshAllocTimer.IsRunning())
+		assert.False(t, conn.refreshPermsTimer.IsRunning())
+		assert.False(t, conn.checkBindingsTimer.IsRunning())
+		callbackCount.Add(1)
+	}))
+
 	assert.True(t, conn.refreshAllocTimer.IsRunning())
 	assert.True(t, conn.refreshPermsTimer.IsRunning())
 	assert.True(t, conn.checkBindingsTimer.IsRunning())
+	assert.Equal(t, int32(1), callbackCount.Load())
+
+	require.NoError(t, conn.Activate(func() {
+		callbackCount.Add(1)
+	}))
+	assert.True(t, conn.refreshAllocTimer.IsRunning())
+	assert.True(t, conn.refreshPermsTimer.IsRunning())
+	assert.True(t, conn.checkBindingsTimer.IsRunning())
+	assert.Equal(t, int32(1), callbackCount.Load())
+}
+
+func TestUDPConnZeroLifetimeActivationTerminalizesOnce(t *testing.T) {
+	var releases atomic.Int32
+	mock := &testConnScript{
+		startTransaction: func(*stun.Message) error {
+			releases.Add(1)
+
+			return nil
+		},
+	}
+	config := testAllocationConfig(mock)
+	config.Lifetime = 0
+	conn := newUDPConn(config, func() {})
+
+	var callbackCount atomic.Int32
+	err := conn.Activate(func() {
+		callbackCount.Add(1)
+	})
+	require.ErrorIs(t, err, ErrAllocationRefreshFailed)
+	assert.Zero(t, callbackCount.Load())
+	assert.Equal(t, int32(1), releases.Load())
+	assert.False(t, conn.refreshAllocTimer.IsRunning())
+	assert.False(t, conn.refreshPermsTimer.IsRunning())
+	assert.False(t, conn.checkBindingsTimer.IsRunning())
+
+	require.NoError(t, conn.Activate(func() {
+		callbackCount.Add(1)
+	}))
+	assert.Zero(t, callbackCount.Load())
+	assert.Equal(t, int32(1), releases.Load())
+	assert.ErrorIs(t, conn.Close(), ErrAllocationRefreshFailed)
+	assert.Equal(t, int32(1), releases.Load())
+}
+
+func TestUDPConnPositiveRefreshKeepsInitialCadence(t *testing.T) {
+	const updatedLifetime = 30 * time.Second
+	mock := &testConnScript{
+		performTransaction: func(*stun.Message) (*stun.Message, error) {
+			return stun.MustBuild(
+				stun.NewType(stun.MethodRefresh, stun.ClassSuccessResponse),
+				proto.Lifetime{Duration: updatedLifetime},
+			), nil
+		},
+	}
+	config := testAllocationConfig(mock)
+	config.Lifetime = time.Second
+	conn := newUDPConn(config, func() {})
+	t.Cleanup(func() { _ = conn.Close() })
+
+	assert.Equal(t, 500*time.Millisecond, conn.refreshAllocTimer.interval)
+	require.NoError(t, conn.refreshAllocation(time.Second))
+	assert.Equal(t, updatedLifetime, conn.lifetime())
+	assert.Equal(t, 500*time.Millisecond, conn.refreshAllocTimer.interval,
+		"a later positive grant must not reschedule the initial cadence")
+}
+
+func TestUDPConnRefreshSelfSealStopsActivatedTimers(t *testing.T) {
+	mock := &testConnScript{
+		performTransaction: func(*stun.Message) (*stun.Message, error) {
+			return nil, errFake
+		},
+	}
+	conn := newTestConn(t, mock)
+	require.NoError(t, conn.Activate(func() {}))
+
+	conn.onRefreshTimers(timerIDRefreshAlloc)
+
+	assert.False(t, conn.refreshAllocTimer.IsRunning())
+	assert.False(t, conn.refreshPermsTimer.IsRunning())
+	assert.False(t, conn.checkBindingsTimer.IsRunning())
+	assert.ErrorIs(t, conn.Close(), ErrAllocationRefreshFailed)
 }
 
 func TestUDPConnHandleDataIndicationOwnsQueuedPayload(t *testing.T) {

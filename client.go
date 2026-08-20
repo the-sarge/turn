@@ -310,8 +310,12 @@ func (c *Client) Allocate(ctx context.Context) (*Allocation, error) {
 		return nil, fmt.Errorf("%w: %s", ErrInvalidRelayedAddress, exchange.relayed)
 	}
 
-	c.publishRelayedUDPConn(relayedConn)
-	claimHeld = false
+	if err = relayedConn.Activate(func() {
+		c.publishRelayedUDPConn(relayedConn)
+		claimHeld = false
+	}); err != nil {
+		return nil, err
+	}
 
 	return newAllocation(relayedConn, canonicalRelayed), nil
 }
