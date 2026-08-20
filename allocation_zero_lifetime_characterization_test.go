@@ -97,8 +97,9 @@ func awaitNewRefresh(
 func scanMethodTransactions(
 	conn *observerConn,
 	method stun.Method,
-) (map[[stun.TransactionIDSize]byte]struct{}, error) {
+) (map[[stun.TransactionIDSize]byte]struct{}, bool) {
 	transactions := make(map[[stun.TransactionIDSize]byte]struct{})
+	malformed := false
 	for i := int32(0); i < conn.writeCount.Load(); i++ {
 		raw := conn.write(int(i))
 		if raw == nil {
@@ -106,15 +107,17 @@ func scanMethodTransactions(
 		}
 
 		msg := &stun.Message{Raw: raw}
-		if err := msg.Decode(); err != nil {
-			return nil, err
+		if msg.Decode() != nil {
+			malformed = true
+
+			continue
 		}
 		if msg.Type.Method == method {
 			transactions[msg.TransactionID] = struct{}{}
 		}
 	}
 
-	return transactions, nil
+	return transactions, malformed
 }
 
 func distinctMethodTransactions(
@@ -123,8 +126,8 @@ func distinctMethodTransactions(
 ) map[[stun.TransactionIDSize]byte]struct{} {
 	t.Helper()
 
-	transactions, err := scanMethodTransactions(conn, stun.MethodRefresh)
-	require.NoError(t, err)
+	transactions, malformed := scanMethodTransactions(conn, stun.MethodRefresh)
+	require.False(t, malformed, "recorded datagram is not valid STUN")
 
 	return transactions
 }
@@ -135,9 +138,9 @@ func requireLaterAllocateReachesWire(t *testing.T, cl *Client, conn *observerCon
 	retryCtx, cancelRetry := context.WithCancelCause(context.Background())
 	retryResult := startObservedAllocate(cl, retryCtx)
 	require.Eventually(t, func() bool {
-		transactions, err := scanMethodTransactions(conn, stun.MethodAllocate)
+		transactions, _ := scanMethodTransactions(conn, stun.MethodAllocate)
 
-		return err == nil && len(transactions) >= 3
+		return len(transactions) >= 3
 	}, 5*time.Second, time.Millisecond, "later Allocate did not reach the wire")
 	cancelRetry(context.Canceled)
 	select {
