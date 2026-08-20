@@ -914,3 +914,36 @@ Merged [PR #115](https://github.com/the-sarge/turn/pull/115) as `c61cb32`, renam
 **Next**
 
 - Issue #116 (token-resolution check). Portfolio: wellspring is the last remaining migration.
+
+---
+
+## Go 1.27 toolchain and portfolio lint standard landed - 2026-08-20 17:11 EDT
+
+**Main:** `d3539386eb1d`
+**Actor:** Claude (Fable 5)
+
+**Summary**
+
+Two portfolio-standard PRs merged on 2026-08-20 with no product behavior change. [PR #118](https://github.com/the-sarge/turn/pull/118) (`a961f9b`) raised the consumer floor to `go 1.27` with an explicit `toolchain go1.27.0` directive and advanced the validation pins (`GO_VERSION=1.27.0`, `GOLANGCI_LINT_VERSION=v2.13.1`). [PR #119](https://github.com/the-sarge/turn/pull/119) (`d353938`) replaced the inherited Pion `.golangci.yml` with the byte-identical portfolio Go lint standard `golangci-standard/v1.0.0` and added a `lint-config-check` drift gate to `task lint`.
+
+**Completed**
+
+- `go.mod` moved from `go 1.24.0` to `go 1.27` + `toolchain go1.27.0`; `go.sum` unchanged. go1.27 `vet` flagged wrapping `*stun.TurnError` with `%w` in `handleChannelBindErrorResponse`; the variable now has static type `error`, preserving the pointer-form `errors.As` contract callers rely on.
+- golangci-lint moved from v2.8.0 to v2.13.1 because v2.8.0 cannot analyze a go1.27 target; the 17 new findings under the unchanged Pion config were fixed in test files (shared `testUsername`/`testPassword` fixture constants, `sync.WaitGroup.Go`, `atomic.Uint64`, one reasoned `//nolint:goconst` on subtest labels).
+- `.golangci.yml` now matches `the-sarge/infra` `config/golangci/.golangci.yml` at `golangci-standard/v1.0.0` (sha256 `a18cfc4f…10dc8`); `Taskfile.yml` carries `LINT_STANDARD_SHA256` and `lint-config-check` as a dependency of `lint`.
+- 264 lint findings under the standard were resolved: 14 `gci` import reflows, 29 reviewed `--fix` changes (`intrange`, `nolintlint`, `testifylint`), 209 hand fixes (177 `assert.*Error*` → `require.*`, one `go-require` goroutine fix, dead Pion-era `//nolint` directives deleted), and 12 reasoned `recvcheck` suppressions on the `internal/proto` attribute types whose `stun.Setter` value receivers and decoding pointer receivers must differ.
+- Two latent test bugs surfaced by `testifylint` in `internal/proto/stun_conn_test.go` (sentinels passed as `assert.Error` message arguments) became real `assert.ErrorIs` assertions.
+
+**Decisions**
+
+- The consumer-facing `go` directive is now 1.27; the README policy that raising it is an explicit release decision is honored by shipping it in the next tagged release with a paired wiremux toolchain bump (wiremux is moving to Go 1.27 independently).
+- This hard fork follows the portfolio lint standard, not upstream Pion's configuration; Pion-specific exclusions were dropped with no loss because no `examples/`, `main.go`, or `cmd/` exists here.
+
+**Validation**
+
+- PR #118: `task lint` 0 issues, `task check`, `go build ./...`, `go vet ./...` (incl. `GOOS=js GOARCH=wasm`), `go test ./...`, and `go test -race ./internal/client/...` under go1.27.0 with golangci-lint v2.13.1; hosted `ci-required` passed at head `35c6a47` after two earlier heads failed on the stale lint pin.
+- PR #119: exact-head `task preflight` at `5fc569a` against base `a961f9b` (lint 0 issues, lint-config-check passes and fails correctly on tamper, race, dependency-gate, platform-check, workflow-check, secret-scan over 765 commits); hosted `ci-required` passed at `5fc569a`.
+
+**Next**
+
+- Cut `v5.3.0-gs.1` at `d353938` so wiremux can adopt the IPv6 Allocate integrity fix, the Allocation activation fix, and the Go 1.27 floor in one bump. Open issues: [#113](https://github.com/the-sarge/turn/issues/113) (docs-only plan status) and [#116](https://github.com/the-sarge/turn/issues/116) (workflow-to-Taskfile token check); both mirrored to OmniFocus. M2 packet-path optimization remains gated on production wiremux traffic.
