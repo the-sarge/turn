@@ -973,3 +973,35 @@ Annotated tag `v5.3.0-gs.1` published at `d353938` and resolving via the public 
 **Next**
 
 - Wiremux adoption of `v5.3.0-gs.1` alongside its Go 1.27 bump (consumer-side, on wiremux's schedule). Remaining repository work: docs-only [#113](https://github.com/the-sarge/turn/issues/113) and CI decision [#116](https://github.com/the-sarge/turn/issues/116), both mirrored to the OmniFocus "turn" project; no architecture program has an open frontier, and M2 packet-path optimization stays gated on production wiremux traffic profiles.
+
+---
+
+## Activation plan closed and -gs suffix retired - 2026-08-20 17:46 EDT
+
+**Main:** `4a12153`
+**Actor:** Claude (Fable 5, planit)
+
+**Summary**
+
+[PR #121](https://github.com/the-sarge/turn/pull/121) merged as `4a12153` and closed [#113](https://github.com/the-sarge/turn/issues/113). Documentation only: the Allocation publication/activation plan now records its implementation by PR #112, the UDPConn construction plan carries the narrow supersession note, the README install pin moved to `v5.3.0-gs.1`, and a new ADR records the owner decision to retire the `-gs` tag suffix after `v5.3.0-gs.1`.
+
+**Completed**
+
+- `docs/adr/2026-08-20-allocation-publication-activation-plan.md`: status "Implemented by PR #112 (merged as `c732264`, closing issue #102)"; audit history extended with the implementation record (final head `e9d13b1`, RAS reviews `20260820T060914-bb8a089a61a7622d6643cc39` and `20260820T063742-4bc550b405363d33896e7425`, hosted run 32341702016); S1 row "Complete via PR #112"; acceptance criteria checked. Rationale and unrelated prose unchanged.
+- `docs/adr/2026-08-19-udpconn-construction-crossing-plan.md`: status line and the started-constructor criterion annotated as narrowly superseded by PR #112 (quiescent `NewUDPConn`, `UDPConn.Activate` arms timers; single constructor, build step, and `Close` on an unstarted conn remain).
+- `README.md`: install pin `v5.2.0-gs.1` → `v5.3.0-gs.1`; the suffix sentence points at the new ADR.
+- New `docs/adr/2026-08-20-plain-semver-tags.md` plus one-line "Amended 2026-08-20" pointers in scope-doc D3, the owned-library ADR, and the molding-program index; the index status line and Track 2 row reconciled to current state.
+
+**Decisions**
+
+- Release tags drop the `-gs` pre-release suffix: the next release is plain `v5.3.1` (fix-only) or `v5.4.0` (capability); published `-gs` tags are never moved. Rationale and consequences are in the [plain-semver tags ADR](adr/2026-08-20-plain-semver-tags.md).
+- The ADR's premise was corrected during review: the repository also carries upstream-inherited plain tags `v5.0.0`–`v5.0.12` (whose `go.mod` declares `github.com/pion/turn/v5`), so `@latest` currently resolves to the unusable `v5.0.12` while `@upgrade` from `v5.2.1-gs.1` selects `v5.3.0-gs.1`; verified against proxy.golang.org on 2026-08-20.
+
+**Validation**
+
+- RAS review `20260820T213653-c5a38ee10091fb1662bb9c70` at head `4f86c95`: one accepted `fix-now` cluster (C-001, the ADR premise above), fixed at `b604671`; C-002/C-004 duplicates, C-003 rejected as outside the accepted edit set. Docs-only fix, so the replacement review was skipped by policy.
+- `git diff --check`, relative-link target check, and local `task ci` (exit 0) at both heads; `task docs-check` at `b604671`. Post-ready hosted run [32420950055](https://github.com/the-sarge/turn/actions/runs/32420950055) passed `ci-required` on `b604671` before the guarded squash merge.
+
+**Next**
+
+- [#116](https://github.com/the-sarge/turn/issues/116) (workflow-to-Taskfile token check) is the only open repository issue; wiremux adoption of `v5.3.0-gs.1` with its Go 1.27 bump is consumer-side. No architecture program has an open frontier; M2 stays gated. OmniFocus project "turn" is the live view.
