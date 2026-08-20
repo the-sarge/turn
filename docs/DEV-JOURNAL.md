@@ -821,3 +821,35 @@ PR [#108](https://github.com/the-sarge/turn/pull/108) landed Track 4 Slice T4.S1
 
 - All six audited slices in the [seam-deepening program](adr/2026-08-19-seam-deepening-program.md) are complete, so there is no remaining implementation frontier; [tracking issue #95](https://github.com/the-sarge/turn/issues/95) is the live cross-track view.
 - No review finding survived for a follow-up issue, and no accepted T4.S1 effect remains untraced. [#83](https://github.com/the-sarge/turn/issues/83) remains open outside this completed program.
+
+---
+
+## IPv6 Allocate family integrity landed - 2026-08-19 22:45 EDT
+
+**Main:** `d3fd19c5cbb0`
+**Actor:** Codex
+
+**Summary**
+
+PR [#110](https://github.com/the-sarge/turn/pull/110) landed the standalone [#83](https://github.com/the-sarge/turn/issues/83) wire decision as `d3fd19c` and closed the issue. Authenticated IPv6 Allocate requests now place `REQUESTED-ADDRESS-FAMILY` before `MESSAGE-INTEGRITY`, so the requested relay family is integrity-protected for conforming TURN servers.
+
+**Completed**
+
+- Updated the existing six-cell txid-normalized wire table so the authenticated IPv6 cell requires `REQUESTED-ADDRESS-FAMILY` before `MESSAGE-INTEGRITY` and computes the expected HMAC over that order.
+- Split authenticated setter assembly at the single Allocate builder so username, realm, and nonce remain in place, the IPv6 family attribute is appended next, integrity follows it, and `FINGERPRINT` remains last.
+- Preserved every anonymous cell and the authenticated IPv4 and fallback cells byte-for-byte; family inference, response handling, allocation state, cancellation, concurrency, public APIs, and dependencies remain unchanged.
+
+**Decisions**
+
+- The intentional wire change is limited to authenticated IPv6 Allocate. Wildcard-IPv6 inference remains unchanged, and `turntest` remains an example-level fixture rather than an RFC-order validator, matching the owner decision in [#83](https://github.com/the-sarge/turn/issues/83).
+
+**Validation**
+
+- The red-first wire test failed only for the authenticated IPv6 cell, showing both the attribute-order mismatch and changed HMAC bytes; the focused wire test and `turntest` IPv6 E2E passed after the builder change.
+- `task verify` and `go test -race ./...` passed with the repository-pinned Go 1.26.6 toolchain.
+- Initial RAS review `20260820T023333-4dfcc1d5526db72a98eba124` found no `fix-now`, `defer`, or `stop-for-decision` item. Three out-of-contract or non-obligatory observations were rejected, so no verification or replacement review was required.
+- Exact-head `task preflight` certified `19c3035aaebcd696ca034684db952cc8fcee4fec` against base `9512c653524fbbccb431bbda853020202122ddab`. Post-ready hosted run [32325546834](https://github.com/the-sarge/turn/actions/runs/32325546834) passed `ci-required` on that exact head before guarded squash merge.
+
+**Next**
+
+- No deferred finding survived for a follow-up issue. The standalone behavior decision is complete, and the earlier seam-deepening program remains complete with no reopened slice.
