@@ -914,3 +914,62 @@ Merged [PR #115](https://github.com/the-sarge/turn/pull/115) as `c61cb32`, renam
 **Next**
 
 - Issue #116 (token-resolution check). Portfolio: wellspring is the last remaining migration.
+
+---
+
+## Go 1.27 toolchain and portfolio lint standard landed - 2026-08-20 17:11 EDT
+
+**Main:** `d3539386eb1d`
+**Actor:** Claude (Fable 5)
+
+**Summary**
+
+Two portfolio-standard PRs merged on 2026-08-20 with no product behavior change. [PR #118](https://github.com/the-sarge/turn/pull/118) (`a961f9b`) raised the consumer floor to `go 1.27` with an explicit `toolchain go1.27.0` directive and advanced the validation pins (`GO_VERSION=1.27.0`, `GOLANGCI_LINT_VERSION=v2.13.1`). [PR #119](https://github.com/the-sarge/turn/pull/119) (`d353938`) replaced the inherited Pion `.golangci.yml` with the byte-identical portfolio Go lint standard `golangci-standard/v1.0.0` and added a `lint-config-check` drift gate to `task lint`.
+
+**Completed**
+
+- `go.mod` moved from `go 1.24.0` to `go 1.27` + `toolchain go1.27.0`; `go.sum` unchanged. go1.27 `vet` flagged wrapping `*stun.TurnError` with `%w` in `handleChannelBindErrorResponse`; the variable now has static type `error`, preserving the pointer-form `errors.As` contract callers rely on.
+- golangci-lint moved from v2.8.0 to v2.13.1 because v2.8.0 cannot analyze a go1.27 target; the 17 new findings under the unchanged Pion config were fixed in test files (shared `testUsername`/`testPassword` fixture constants, `sync.WaitGroup.Go`, `atomic.Uint64`, one reasoned `//nolint:goconst` on subtest labels).
+- `.golangci.yml` now matches `the-sarge/infra` `config/golangci/.golangci.yml` at `golangci-standard/v1.0.0` (sha256 `a18cfc4f…10dc8`); `Taskfile.yml` carries `LINT_STANDARD_SHA256` and `lint-config-check` as a dependency of `lint`.
+- 264 lint findings under the standard were resolved: 14 `gci` import reflows, 29 reviewed `--fix` changes (`intrange`, `nolintlint`, `testifylint`), 209 hand fixes (177 `assert.*Error*` → `require.*`, one `go-require` goroutine fix, dead Pion-era `//nolint` directives deleted), and 12 reasoned `recvcheck` suppressions on the `internal/proto` attribute types whose `stun.Setter` value receivers and decoding pointer receivers must differ.
+- Two latent test bugs surfaced by `testifylint` in `internal/proto/stun_conn_test.go` (sentinels passed as `assert.Error` message arguments) became real `assert.ErrorIs` assertions.
+
+**Decisions**
+
+- The consumer-facing `go` directive is now 1.27; the README policy that raising it is an explicit release decision is honored by shipping it in the next tagged release with a paired wiremux toolchain bump (wiremux is moving to Go 1.27 independently).
+- This hard fork follows the portfolio lint standard, not upstream Pion's configuration; Pion-specific exclusions were dropped with no loss because no `examples/`, `main.go`, or `cmd/` exists here.
+
+**Validation**
+
+- PR #118: `task lint` 0 issues, `task check`, `go build ./...`, `go vet ./...` (incl. `GOOS=js GOARCH=wasm`), `go test ./...`, and `go test -race ./internal/client/...` under go1.27.0 with golangci-lint v2.13.1; hosted `ci-required` passed at head `35c6a47` after two earlier heads failed on the stale lint pin.
+- PR #119: exact-head `task preflight` at `5fc569a` against base `a961f9b` (lint 0 issues, lint-config-check passes and fails correctly on tamper, race, dependency-gate, platform-check, workflow-check, secret-scan over 765 commits); hosted `ci-required` passed at `5fc569a`.
+
+**Next**
+
+- Cut `v5.3.0-gs.1` at `d353938` so wiremux can adopt the IPv6 Allocate integrity fix, the Allocation activation fix, and the Go 1.27 floor in one bump. Open issues: [#113](https://github.com/the-sarge/turn/issues/113) (docs-only plan status) and [#116](https://github.com/the-sarge/turn/issues/116) (workflow-to-Taskfile token check); both mirrored to OmniFocus. M2 packet-path optimization remains gated on production wiremux traffic.
+
+---
+
+## Release v5.3.0-gs.1 - 2026-08-20 17:14 EDT
+
+**Main:** `d3539386eb1d`
+**Actor:** Claude (Fable 5)
+
+**Summary**
+
+Annotated tag `v5.3.0-gs.1` published at `d353938` and resolving via the public Go proxy. It packages the 38 commits merged since `v5.2.1-gs.1` with no exported API change: the 2026-08-19 architecture deepening program (PRs #72/#74/#76/#81), the 2026-08-19 seam deepening program (PRs #96/#98/#100/#103/#105/#108), the standalone IPv6 Allocate integrity change (#83 via PR #110), the Allocation publication/activation fix (#102 via PR #112), linear channel-capacity checks (#57 via PR #59), the portfolio CI standard and `release-gate` rename (PRs #61/#115), and the Go 1.27 toolchain and lint standard adoption (PRs #118/#119).
+
+**Decisions**
+
+- Minor bump, not patch: the release carries a deliberate wire change for authenticated IPv6 Allocate and raises the consumer-facing `go` directive to 1.27, so per the molding program's versioning rule (`v5.N.0-gs.1` for new capability, permanent `-gs` suffix) it ships as `v5.3.0-gs.1` even though the exported Go API is unchanged from `v5.2.1-gs.1`.
+- Consumers must build with Go 1.27; wiremux's Go 1.27 bump is in progress on its side and its adoption of this tag is consumer work outside this repository.
+
+**Validation**
+
+- Local `task release-gate` (check, docs-check, race, dependency-gate, platform-check, three 30s proto fuzz targets) exit 0 at `d353938` in a detached worktree under Go 1.27.0 and golangci-lint v2.13.1 before tagging; PR heads `35c6a47` (#118) and `5fc569a` (#119) had passed hosted `ci-required` before their squash merges.
+- Tag-ref hosted run [32417994767](https://github.com/the-sarge/turn/actions/runs/32417994767) (`Release checks`: release-gate, consumer-floor test, secret-scan) completed successfully: `release` (task release-gate), `floor` (tests under the Go 1.27 consumer floor), and `secret-scan` all passed.
+- Module resolution confirmed: `go list -m github.com/the-sarge/turn/v5@v5.3.0-gs.1` resolves through `proxy.golang.org`.
+
+**Next**
+
+- Wiremux adoption of `v5.3.0-gs.1` alongside its Go 1.27 bump (consumer-side, on wiremux's schedule). Remaining repository work: docs-only [#113](https://github.com/the-sarge/turn/issues/113) and CI decision [#116](https://github.com/the-sarge/turn/issues/116), both mirrored to the OmniFocus "turn" project; no architecture program has an open frontier, and M2 packet-path optimization stays gated on production wiremux traffic profiles.
