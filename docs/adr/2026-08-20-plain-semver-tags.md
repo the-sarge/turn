@@ -10,9 +10,9 @@ The next release of `github.com/the-sarge/turn/v5` is tagged as plain semver —
 
 ## Why
 
-D3 kept the suffix permanent on the premise that marking every tag as a semver pre-release would stop Go's version selection from ever auto-upgrading wiremux, so that every consumer bump stayed deliberate. That premise does not hold for a module that has only ever published pre-releases:
+D3 kept the suffix permanent on the premise that marking every tag as a semver pre-release would stop Go's version selection from ever auto-upgrading wiremux, so that every consumer bump stayed deliberate. That premise does not hold:
 
-- Go's `latest` query selects the highest release version, *or the highest pre-release when no release version exists*, so `go get -u` or `@latest` in wiremux would already move `v5.2.1-gs.1` to `v5.3.0-gs.1`. The suffix protects nothing relative to a plain release tag that was never published.
+- The fork's own releases are all pre-releases (`v5.0.13-gs.1` through `v5.3.0-gs.1`), but the repository also carries the plain tags `v5.0.0`–`v5.0.12` inherited from upstream `pion/turn`, whose `go.mod` still declares `github.com/pion/turn/v5`. Verified 2026-08-20: `go list -m github.com/the-sarge/turn/v5@latest` resolves to `v5.0.12`, which cannot be used under this module path, while an `upgrade` query from wiremux's existing `v5.2.1-gs.1` requirement (`go get -u`, `@upgrade`) selects `v5.3.0-gs.1` because Go prefers the highest pre-release once the consumer already requires one. The suffix therefore neither blocks pre-release-to-pre-release upgrades nor produces a useful `@latest`.
 - Dependabot and Renovate offer pre-release bumps when the consumer is already on a pre-release, which wiremux is.
 - The property that actually keeps consumer upgrades deliberate is minimal version selection: Go never moves a `go.mod` requirement unless someone edits it or runs an upgrade query. That is true with or without a suffix.
 
@@ -21,7 +21,7 @@ What the suffix still bought was a visual fork marker, and the module path `gith
 ## Consequences
 
 - Plain `v5.3.1` and `v5.4.0` sort above `v5.3.0-gs.1`, so wiremux's next adoption is an ordinary deliberate bump; no retagging is involved.
-- After the first plain tag, `go get github.com/the-sarge/turn/v5@latest` resolves to that release instead of the highest `-gs` pre-release. wiremux continues to pin exact versions.
+- After the first plain tag, `go get github.com/the-sarge/turn/v5@latest` resolves to that release instead of the unusable inherited `v5.0.12`. wiremux continues to pin exact versions.
 - The owned-library stance is unchanged: this remains wiremux's library, and API removal or divergence between milestone versions is still expected within the `/v5` module path; a plain tag is not a compatibility promise to other consumers.
 - Release mechanics are unchanged: local `task release-gate` in a detached worktree at the candidate head, an annotated tag, the tag-push `Release checks` workflow, proxy-resolution verification, and a journal entry.
 - README install guidance and the three amended documents point here rather than restating the rule.
