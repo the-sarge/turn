@@ -886,3 +886,31 @@ PR [#112](https://github.com/the-sarge/turn/pull/112) landed the Allocation publ
 **Next**
 
 - Merged-head revalidation left no product follow-up. Documentation-only [#113](https://github.com/the-sarge/turn/issues/113) records the bounded plan-status and predecessor-supersession metadata cleanup; it explicitly excludes product code, behavior, tests, and broader ADR normalization.
+
+---
+
+## Release gate target adopted - 2026-08-20 03:42 EDT
+
+**Main:** `c61cb320529e`
+**Actor:** Claude (Fable 5, standardize-github-ci)
+
+**Summary**
+
+Merged [PR #115](https://github.com/the-sarge/turn/pull/115) as `c61cb32`, renaming `release-check` to `release-gate` (portfolio CI standard, the-sarge/skills #15). Body unchanged: `check` + `docs-check` + `race` + `dependency-gate` + `platform-check` + `fuzz`.
+
+**Completed**
+
+- Taskfile target renamed; `release.yml`'s release-validation step runs `task release-gate`. Only two live callers existed (the definition and the workflow step); historical DEV-JOURNAL prose keeps the old name.
+
+**Decisions**
+
+- RAS review `20260820T070531-fdc754a5e47a5e18ed10405d`: no fix-now findings; the workflow-to-Taskfile token-resolution gap was deferred and filed as [issue #116](https://github.com/the-sarge/turn/issues/116).
+- Kept `fuzz` inside the gate: the policy's "bounded fuzzing left to the nightly" is a recommendation, and the existing gate includes it deliberately.
+
+**Validation**
+
+- `task workflow-check`, `task --dry release-gate`, local + live conformance audits clean, and local `task ci` (full `check` path, exit 0) at `bae2a51` under the repository's pinned Go 1.26.6 (a machine Go 1.27.0 cannot feed golangci-lint v2.8.0; hosted CI pins 1.26.6 via setup-validation). Post-ready run [32345028098](https://github.com/the-sarge/turn/actions/runs/32345028098): `ci-required` success before the squash merge.
+
+**Next**
+
+- Issue #116 (token-resolution check). Portfolio: wellspring is the last remaining migration.
