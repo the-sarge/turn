@@ -788,3 +788,36 @@ PR [#105](https://github.com/the-sarge/turn/pull/105) landed Track 3 Slice T3.S1
 
 - T4.S1 ([#94](https://github.com/the-sarge/turn/issues/94)) remains open, unblocked, labeled ready, and is the only remaining program slice; [tracking issue #95](https://github.com/the-sarge/turn/issues/95) is the live frontier.
 - No review finding survived merged-head revalidation for a follow-up issue. The plan's explicit detached-membership non-goal and the rejected verification-aid synchronization request remain outside this slice.
+
+---
+
+## Allocate exchange unified - 2026-08-19 22:11 EDT
+
+**Main:** `503e7c6f894d`
+**Actor:** Codex
+
+**Summary**
+
+PR [#108](https://github.com/the-sarge/turn/pull/108) landed Track 4 Slice T4.S1 as `503e7c6` and closed [#94](https://github.com/the-sarge/turn/issues/94). The Allocate exchange now builds both request forms through one setter builder and returns relay state plus credentials as one value, while the current wire shape remains pinned and unchanged.
+
+**Completed**
+
+- Added a six-cell txid-normalized characterization table over anonymous/authenticated Allocate requests and IPv4, IPv6, and non-UDP local-address fallback classes, including attribute-position and final-FINGERPRINT assertions.
+- Replaced the duplicate request setter lists with one Allocate request builder and returned relayed address, lifetime, realm, nonce, and derived integrity through one private exchange value.
+- Removed mutable realm/integrity fields from `Client`, collapsed address-family selection to one function evaluated in `NewClient`, and deleted the three superseded helper tests.
+- Marked T4.S1, Track 4, and the full seam-deepening program complete in the normative plan and program index.
+
+**Decisions**
+
+- Preserved the current `REQUESTED-ADDRESS-FAMILY` placement and all emitted bytes; [#83](https://github.com/the-sarge/turn/issues/83) remains the separate behavior decision. The accepted representation domain, evidence ceiling, ownership, and non-goals remain in the [Allocate exchange plan](adr/2026-08-19-allocate-exchange-plan.md).
+
+**Validation**
+
+- The six-cell characterization table passed against the pre-refactor implementation before the exchange change; the one-value regression then failed on the missing type and old four-result signature before passing with the new exchange.
+- Initial RAS review `20260820T015751-03dbf2699f5eb128cf5602cc` found no contract-relevant change or follow-up: two low-confidence style/documentation observations were independently rejected, so no verification or replacement review was required.
+- Exact-head `task preflight` certified `554113d476b8d55844258e01b842768d30bc1774` against base `f505d52e5ae224682d44655d5145802389200bc8`, including format, vet, tests, lint, docs, race, dependency/vulnerability, Darwin/Windows build, workflow, and secret gates. Post-ready hosted run [32323580978](https://github.com/the-sarge/turn/actions/runs/32323580978) passed `ci-required` on that exact head before guarded squash merge.
+
+**Next**
+
+- All six audited slices in the [seam-deepening program](adr/2026-08-19-seam-deepening-program.md) are complete, so there is no remaining implementation frontier; [tracking issue #95](https://github.com/the-sarge/turn/issues/95) is the live cross-track view.
+- No review finding survived for a follow-up issue, and no accepted T4.S1 effect remains untraced. [#83](https://github.com/the-sarge/turn/issues/83) remains open outside this completed program.
