@@ -1,7 +1,7 @@
 # Allocate Exchange Implementation Plan
 
 **Date:** 2026-08-19
-**Status:** Accepted; not yet implemented
+**Status:** Complete via PR #108
 **Track:** 4 of 4 in the 2026-08-19 seam deepening program
 **Depends on:** Nothing â€” parallel-safe with every other track (root-only)
 **Related:** [Program index](2026-08-19-seam-deepening-program.md), [Modernize kept API plan](2026-08-15-modernize-kept-api-plan.md), [Server-bound transport plan](2026-08-19-server-bound-transport-plan.md), [Allocation construction timing validity plan](2026-08-19-allocation-construction-timing-validity-plan.md), behaviour decision [#83](https://github.com/the-sarge/turn/issues/83)
@@ -42,13 +42,15 @@ The wire is the test surface: a characterization table over recorded datagrams â
 
 | Slice | Status/disposition | Delivers | Blocked by | Removes temporary seam |
 |---|---|---|---|---|
-| T4.S1 | New | One Allocate exchange returning one value; one setter builder; credentials off `Client`; wire-asserted characterization table replacing three helper tests | None | Duplicate setter lists; hidden credential output |
+| T4.S1 | Complete via PR #108 | One Allocate exchange returning one value; one setter builder; credentials off `Client`; wire-asserted characterization table replacing three helper tests | None | Duplicate setter lists; hidden credential output |
 
 ## Implementation Slices
 
 ### Slice T4.S1 â€” One Allocate exchange, wire-pinned
 
 **What it delivers:** One PR pinning the current anonymous and authenticated Allocate shape for each socket-family class as txid-normalized characterization tests, then refactoring `sendAllocateRequest` to one setter builder and one returned value, deleting `Client.realm`/`Client.integrity` and the three family helpers (inlined to one function), and deleting the three helper tests.
+
+**Implementation:** PR #108 is this slice's one product PR.
 
 **Existing-work disposition:** New slice.
 
@@ -80,10 +82,10 @@ The wire is the test surface: a characterization table over recorded datagrams â
 
 ## Acceptance Criteria
 
-- [ ] Anonymous and authenticated Allocate requests are byte-identical, after transaction-ID normalization, to the pre-change shape for IPv4, IPv6, and fallback sockets; `REQUESTED-ADDRESS-FAMILY` is present only for IPv6 at today's position and `FINGERPRINT` is last. Domain: the six cells; owner: the exchange's builder; guarantee: universal over the six cells; evidence: the txid-normalized equality table.
-- [ ] `sendAllocateRequest` returns relayed address, lifetime, realm, nonce, and integrity as one value; `Client` has no `realm`/`integrity` field; `AllocationConfig` is unchanged.
-- [ ] One unexported family-inference function computed once in `NewClient`; the three helpers and their tests are gone; inference behaviour is unchanged.
-- [ ] #83 remains open and the attribute placement is unchanged by this slice.
+- [x] Anonymous and authenticated Allocate requests are byte-identical, after transaction-ID normalization, to the pre-change shape for IPv4, IPv6, and fallback sockets; `REQUESTED-ADDRESS-FAMILY` is present only for IPv6 at today's position and `FINGERPRINT` is last. Domain: the six cells; owner: the exchange's builder; guarantee: universal over the six cells; evidence: the txid-normalized equality table.
+- [x] `sendAllocateRequest` returns relayed address, lifetime, realm, nonce, and integrity as one value; `Client` has no `realm`/`integrity` field; `AllocationConfig` is unchanged.
+- [x] One unexported family-inference function computed once in `NewClient`; the three helpers and their tests are gone; inference behaviour is unchanged.
+- [x] #83 remains open and the attribute placement is unchanged by this slice.
 
 ## Validation Gates
 
