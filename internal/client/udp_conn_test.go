@@ -182,6 +182,25 @@ func TestUDPConnPositiveRefreshKeepsInitialCadence(t *testing.T) {
 		"a later positive grant must not reschedule the initial cadence")
 }
 
+func TestUDPConnZeroRefreshReturnsTerminalBeforeStoring(t *testing.T) {
+	const initialLifetime = time.Second
+	mock := &testConnScript{
+		performTransaction: func(*stun.Message) (*stun.Message, error) {
+			return stun.MustBuild(
+				stun.NewType(stun.MethodRefresh, stun.ClassSuccessResponse),
+				proto.Lifetime{Duration: 0},
+			), nil
+		},
+	}
+	config := testAllocationConfig(mock)
+	config.Lifetime = initialLifetime
+	conn := newUDPConn(config, func() {})
+	t.Cleanup(func() { _ = conn.Close() })
+
+	require.ErrorIs(t, conn.refreshAllocation(initialLifetime), errZeroRemainingLifetime)
+	assert.Equal(t, initialLifetime, conn.lifetime())
+}
+
 func TestUDPConnRefreshSelfSealStopsActivatedTimers(t *testing.T) {
 	mock := &testConnScript{
 		performTransaction: func(*stun.Message) (*stun.Message, error) {
