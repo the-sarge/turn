@@ -162,9 +162,16 @@ func newUDPConn(config *AllocationConfig, abortTransactions func()) *UDPConn {
 	return conn
 }
 
-// Activate publishes a positive-lifetime allocation through the constrained
-// callback, then atomically arms every lifecycle timer. A zero-lifetime
-// allocation terminalizes without publication or timer activation.
+// Activate is the sole transition from a quiescent UDPConn to a live one. It
+// holds closeMutex while invoking publishAndReleaseAdmission with every timer
+// stopped, then arms all timers before unlocking. The callback is restricted
+// to acquiring the Client mutex, publishing this connection, and releasing
+// the admission claim; it must not re-enter UDPConn. The production caller
+// keeps the connection local and unarmed until this call.
+//
+// A zero-lifetime allocation terminalizes without invoking the callback or
+// arming timers. Repeated calls and calls after seal return nil without
+// invoking the callback or changing timer state.
 func (c *UDPConn) Activate(publishAndReleaseAdmission func()) error {
 	c.closeMutex.Lock()
 	defer c.closeMutex.Unlock()

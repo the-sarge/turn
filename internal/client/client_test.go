@@ -95,8 +95,8 @@ func testAllocationConfig(script *testConnScript) *AllocationConfig {
 	}
 }
 
-// newTestConn builds an unstarted UDPConn through the same invariant-owning
-// constructor as production. Tests that exercise timers call start explicitly.
+// newTestConn builds an unactivated UDPConn through the same invariant-owning
+// constructor as production. Tests that exercise timers call Activate explicitly.
 func newTestConn(t *testing.T, script *testConnScript) *UDPConn {
 	t.Helper()
 

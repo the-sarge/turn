@@ -94,13 +94,10 @@ func awaitNewRefresh(
 	return raw
 }
 
-func distinctMethodTransactions(
-	t *testing.T,
+func scanMethodTransactions(
 	conn *observerConn,
 	method stun.Method,
-) map[[stun.TransactionIDSize]byte]struct{} {
-	t.Helper()
-
+) (map[[stun.TransactionIDSize]byte]struct{}, error) {
 	transactions := make(map[[stun.TransactionIDSize]byte]struct{})
 	for i := int32(0); i < conn.writeCount.Load(); i++ {
 		raw := conn.write(int(i))
@@ -109,11 +106,25 @@ func distinctMethodTransactions(
 		}
 
 		msg := &stun.Message{Raw: raw}
-		require.NoError(t, msg.Decode())
+		if err := msg.Decode(); err != nil {
+			return nil, err
+		}
 		if msg.Type.Method == method {
 			transactions[msg.TransactionID] = struct{}{}
 		}
 	}
+
+	return transactions, nil
+}
+
+func distinctMethodTransactions(
+	t *testing.T,
+	conn *observerConn,
+) map[[stun.TransactionIDSize]byte]struct{} {
+	t.Helper()
+
+	transactions, err := scanMethodTransactions(conn, stun.MethodRefresh)
+	require.NoError(t, err)
 
 	return transactions
 }
@@ -124,7 +135,9 @@ func requireLaterAllocateReachesWire(t *testing.T, cl *Client, conn *observerCon
 	retryCtx, cancelRetry := context.WithCancelCause(context.Background())
 	retryResult := startObservedAllocate(cl, retryCtx)
 	require.Eventually(t, func() bool {
-		return len(distinctMethodTransactions(t, conn, stun.MethodAllocate)) >= 3
+		transactions, err := scanMethodTransactions(conn, stun.MethodAllocate)
+
+		return err == nil && len(transactions) >= 3
 	}, 5*time.Second, time.Millisecond, "later Allocate did not reach the wire")
 	cancelRetry(context.Canceled)
 	select {
@@ -225,7 +238,7 @@ func TestZeroLifetimeAllocateNeverPublishes(t *testing.T) {
 
 	release := awaitNewRefresh(t, conn, nil)
 	requireRefreshLifetime(t, release, 0)
-	require.Len(t, distinctMethodTransactions(t, conn, stun.MethodRefresh), 1,
+	require.Len(t, distinctMethodTransactions(t, conn), 1,
 		"initial zero must create exactly one lifecycle Release transaction")
 
 	requireLaterAllocateReachesWire(t, cl, conn)
@@ -233,7 +246,7 @@ func TestZeroLifetimeAllocateNeverPublishes(t *testing.T) {
 	cl.Close()
 	assert.Zero(t, conn.closeCalls.Load())
 	assert.Zero(t, conn.deadlineCalls.Load())
-	require.Len(t, distinctMethodTransactions(t, conn, stun.MethodRefresh), 1,
+	require.Len(t, distinctMethodTransactions(t, conn), 1,
 		"terminal initial zero must not create a later distinct Refresh transaction")
 }
 
@@ -297,7 +310,7 @@ func TestZeroLifetimeRefreshSuccessTerminalizesPublishedAllocation(t *testing.T)
 	cl.Close()
 	assert.Zero(t, conn.closeCalls.Load())
 	assert.Zero(t, conn.deadlineCalls.Load())
-	require.Len(t, distinctMethodTransactions(t, conn, stun.MethodRefresh), 2,
+	require.Len(t, distinctMethodTransactions(t, conn), 2,
 		"ordinary zero success must create one waited Refresh and one lifecycle Release")
 }
 
@@ -360,6 +373,6 @@ func TestFirstRefreshFailureObservesPublishedAllocation(t *testing.T) {
 	cl.Close()
 	assert.Zero(t, conn.closeCalls.Load())
 	assert.Zero(t, conn.deadlineCalls.Load())
-	require.Len(t, distinctMethodTransactions(t, conn.observerConn, stun.MethodRefresh), 2,
+	require.Len(t, distinctMethodTransactions(t, conn.observerConn), 2,
 		"permanent first Refresh failure must create one waited Refresh and one lifecycle Release")
 }
