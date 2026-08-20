@@ -947,3 +947,29 @@ Two portfolio-standard PRs merged on 2026-08-20 with no product behavior change.
 **Next**
 
 - Cut `v5.3.0-gs.1` at `d353938` so wiremux can adopt the IPv6 Allocate integrity fix, the Allocation activation fix, and the Go 1.27 floor in one bump. Open issues: [#113](https://github.com/the-sarge/turn/issues/113) (docs-only plan status) and [#116](https://github.com/the-sarge/turn/issues/116) (workflow-to-Taskfile token check); both mirrored to OmniFocus. M2 packet-path optimization remains gated on production wiremux traffic.
+
+---
+
+## Release v5.3.0-gs.1 - 2026-08-20 17:14 EDT
+
+**Main:** `d3539386eb1d`
+**Actor:** Claude (Fable 5)
+
+**Summary**
+
+Annotated tag `v5.3.0-gs.1` published at `d353938` and resolving via the public Go proxy. It packages the 38 commits merged since `v5.2.1-gs.1` with no exported API change: the 2026-08-19 architecture deepening program (PRs #72/#74/#76/#81), the 2026-08-19 seam deepening program (PRs #96/#98/#100/#103/#105/#108), the standalone IPv6 Allocate integrity change (#83 via PR #110), the Allocation publication/activation fix (#102 via PR #112), linear channel-capacity checks (#57 via PR #59), the portfolio CI standard and `release-gate` rename (PRs #61/#115), and the Go 1.27 toolchain and lint standard adoption (PRs #118/#119).
+
+**Decisions**
+
+- Minor bump, not patch: the release carries a deliberate wire change for authenticated IPv6 Allocate and raises the consumer-facing `go` directive to 1.27, so per the molding program's versioning rule (`v5.N.0-gs.1` for new capability, permanent `-gs` suffix) it ships as `v5.3.0-gs.1` even though the exported Go API is unchanged from `v5.2.1-gs.1`.
+- Consumers must build with Go 1.27; wiremux's Go 1.27 bump is in progress on its side and its adoption of this tag is consumer work outside this repository.
+
+**Validation**
+
+- Local `task release-gate` (check, docs-check, race, dependency-gate, platform-check, three 30s proto fuzz targets) exit 0 at `d353938` in a detached worktree under Go 1.27.0 and golangci-lint v2.13.1 before tagging; PR heads `35c6a47` (#118) and `5fc569a` (#119) had passed hosted `ci-required` before their squash merges.
+- Tag-ref hosted run [32417994767](https://github.com/the-sarge/turn/actions/runs/32417994767) (`Release checks`: release-gate, consumer-floor test, secret-scan) completed successfully: `release` (task release-gate), `floor` (tests under the Go 1.27 consumer floor), and `secret-scan` all passed.
+- Module resolution confirmed: `go list -m github.com/the-sarge/turn/v5@v5.3.0-gs.1` resolves through `proxy.golang.org`.
+
+**Next**
+
+- Wiremux adoption of `v5.3.0-gs.1` alongside its Go 1.27 bump (consumer-side, on wiremux's schedule). Remaining repository work: docs-only [#113](https://github.com/the-sarge/turn/issues/113) and CI decision [#116](https://github.com/the-sarge/turn/issues/116), both mirrored to the OmniFocus "turn" project; no architecture program has an open frontier, and M2 packet-path optimization stays gated on production wiremux traffic profiles.
