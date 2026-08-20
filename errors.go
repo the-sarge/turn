@@ -19,11 +19,12 @@ var ErrClosed = net.ErrClosed
 // were all exhausted without a server response.
 var ErrTransactionTimeout = client.ErrTransactionTimeout
 
-// ErrAllocationRefreshFailed reports a permanent allocation-refresh failure:
-// an exhausted refresh transaction, a well-formed non-438 error response, or
-// stale-nonce retry exhaustion. The allocation seals itself with this cause;
-// pending waiters wake, every subsequent operation returns ErrClosed wrapped
-// with it, and the caller's Close returns it.
+// ErrAllocationRefreshFailed reports a terminal allocation-lifetime result:
+// zero remaining lifetime, an exhausted refresh transaction, a well-formed
+// non-438 error response, or stale-nonce retry exhaustion. Initial zero returns
+// no Allocation; an existing allocation seals itself, wakes pending waiters,
+// makes every subsequent operation return ErrClosed wrapped with this cause,
+// and makes the caller's Close return it.
 var ErrAllocationRefreshFailed = client.ErrAllocationRefreshFailed
 
 // ErrPermissionRefreshFailed reports a permission refresh that kept failing

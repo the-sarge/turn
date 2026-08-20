@@ -34,6 +34,7 @@ var (
 	errFailedToBuildRefreshRequest   = errors.New("failed to build refresh request")
 	errFailedToRefreshAllocation     = errors.New("failed to refresh allocation")
 	errFailedToGetLifetime           = errors.New("failed to get lifetime from refresh response")
+	errZeroRemainingLifetime         = errors.New("turn: allocation has zero remaining lifetime")
 	errCannotBindChannel             = errors.New("cannot bind channel")
 	errChannelBindBadRequest         = errors.New("channel bind bad request")
 	errChannelBindTransactionFailed  = errors.New("channel bind transaction failed")

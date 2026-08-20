@@ -257,6 +257,10 @@ func (c *Client) sendAllocateRequest(ctx context.Context, protocol proto.Protoco
 // cannot be canonicalized, the allocation is released with a lifetime-0
 // Refresh and Allocate returns ErrInvalidRelayedAddress.
 //
+// A success response reporting zero remaining lifetime is terminal: Allocate
+// emits one lifetime-0 Release and returns no Allocation with
+// ErrAllocationRefreshFailed; it never publishes the terminal connection.
+//
 // Canceling ctx wakes only this caller: Allocate returns context.Cause(ctx)
 // promptly without touching the caller-owned socket. A cancellation that
 // lands after the request left the socket may orphan a server-side
@@ -310,8 +314,12 @@ func (c *Client) Allocate(ctx context.Context) (*Allocation, error) {
 		return nil, fmt.Errorf("%w: %s", ErrInvalidRelayedAddress, exchange.relayed)
 	}
 
-	c.publishRelayedUDPConn(relayedConn)
-	claimHeld = false
+	if err = relayedConn.Activate(func() {
+		c.publishRelayedUDPConn(relayedConn)
+		claimHeld = false
+	}); err != nil {
+		return nil, err
+	}
 
 	return newAllocation(relayedConn, canonicalRelayed), nil
 }

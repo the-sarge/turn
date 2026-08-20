@@ -67,6 +67,7 @@ func newSilentServerAllocation(t *testing.T) (*client.UDPConn, <-chan string) {
 		cl.transactions.AbortCurrent()
 		closeOrder <- "abort"
 	})
+	require.NoError(t, conn.Activate(func() {}))
 	t.Cleanup(func() {
 		_ = conn.Close()
 		cl.Close()
