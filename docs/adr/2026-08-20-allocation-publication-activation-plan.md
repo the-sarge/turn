@@ -40,7 +40,9 @@ The observable pre-publication deallocation guard is rejected. A Client flag, ge
 | --- | --- | --- | --- | --- |
 | S1 | Proposed; awaiting owner approval | Quiescent construction, publish-before-activation, and atomic `UDPConn` activation | Owner approval of this plan | Started-constructor compatibility path |
 
-## Slice S1 — Publish before atomic Allocation activation
+## Implementation Slices
+
+### Slice S1 — Publish before atomic Allocation activation
 
 **What it delivers:** One PR changing `NewUDPConn` to quiescent construction, adding one atomic `UDPConn.Start` activation owner, moving production activation after successful publication, updating the four current constructor call sites explicitly, and adding deterministic lifecycle-ordering evidence without timing sleeps or repetition.
 
@@ -84,6 +86,6 @@ The observable pre-publication deallocation guard is rejected. A Client flag, ge
 - [ ] Every successfully parsed Allocate lifetime remains accepted unchanged; fixed cadence, TURN bytes, retries, public API/errors, caller-owned socket behavior, and unrelated lifecycle behavior are unchanged.
 - [ ] The declared focused evidence, one guard mutation, ordinary and race suites, exact-head preflight, bounded review, and same-head hosted CI satisfy the terminating evidence plan.
 
-## Validation and Delivery Gates
+## Validation Gates
 
 After owner approval, implement the one slice test-first on a feature branch. Keep its PR draft through the bounded review and exact-head `task preflight`, mark it ready only afterward, require a successful post-ready `ci` run whose `ci-required` job matches the live head, then squash-merge that exact head. Append the development journal only after the product PR merges, revalidate deferred findings against merged `main`, and only then complete issue #102's OmniFocus task or file surviving follow-ups.
