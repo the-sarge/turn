@@ -408,6 +408,39 @@ func TestAllocateRequestWireShape(t *testing.T) {
 	}
 }
 
+func TestSendAllocateRequestReturnsAllocationInputs(t *testing.T) {
+	conn := newObserverConn()
+	cl := newObservedClient(t, conn)
+
+	type outcome struct {
+		exchange allocateExchange
+		err      error
+	}
+	result := make(chan outcome, 1)
+	go func() {
+		exchange, err := cl.sendAllocateRequest(context.Background(), proto.ProtoUDP)
+		result <- outcome{exchange: exchange, err: err}
+	}()
+
+	anonymous := awaitWrite(t, conn, 1)
+	require.NoError(t, cl.HandleInbound(unauthorizedResponse(t, anonymous), testServerNetAddr()))
+	authenticated := awaitRequestAfter(t, conn, 1, transactionID(t, anonymous))
+	require.NoError(t, cl.HandleInbound(allocateSuccessResponse(t, authenticated), testServerNetAddr()))
+
+	select {
+	case got := <-result:
+		require.NoError(t, got.err)
+		assert.True(t, got.exchange.relayed.IP.Equal(net.ParseIP("127.0.0.1")))
+		assert.Equal(t, 40000, got.exchange.relayed.Port)
+		assert.Equal(t, 10*time.Minute, got.exchange.lifetime.Duration)
+		assert.Equal(t, stun.NewRealm("test-realm"), got.exchange.realm)
+		assert.Equal(t, stun.NewNonce("test-nonce"), got.exchange.nonce)
+		assert.Equal(t, stun.NewLongTermIntegrity("user", "test-realm", "secret"), got.exchange.integrity)
+	case <-time.After(2 * time.Second):
+		require.Fail(t, "Allocate exchange did not return after the success response")
+	}
+}
+
 func TestAllocateRejectsConcurrentCallerWithoutNetworkOutput(t *testing.T) {
 	conn := newObserverConn()
 	conn.blockFrom = 1
