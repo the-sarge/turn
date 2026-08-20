@@ -338,7 +338,7 @@ func TestHandleInboundLiveUnknownChannelReturnsExistingErrorWithoutDelivery(t *t
 	)
 
 	assert.ErrorIs(t, err, errChannelBindNotFound)
-	assert.EqualError(t, err, "no binding found for channel: 16384")
+	assert.EqualError(t, err, "turn: no binding found for channel: 16384")
 	require.NoError(t, turnClient.HandleInbound(
 		buildDataIndication(t, []byte("marker"), peer),
 		net.UDPAddrFromAddrPort(server),

@@ -211,9 +211,6 @@ func (c *UDPConn) createPermission(perm *permission, addr netip.AddrPort) error 
 // share one permission and one bind attempt; canceling ctx wakes only that
 // caller (with its cause) and leaves the shared work running.
 func (c *UDPConn) PreparePeer(ctx context.Context, peer netip.AddrPort) error {
-	if ctx == nil {
-		return errNilContext
-	}
 	if err := ctx.Err(); err != nil {
 		return context.Cause(ctx)
 	}
