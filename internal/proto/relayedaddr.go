@@ -15,7 +15,7 @@ import (
 // client. It is encoded in the same way as XOR-MAPPED-ADDRESS.
 //
 // RFC 5766 Section 14.5.
-type RelayedAddress struct {
+type RelayedAddress struct { //nolint:recvcheck // pion/stun contract: AddTo needs a value receiver so unaddressable values satisfy stun.Setter, GetFrom needs a pointer receiver to decode into.
 	IP   net.IP
 	Port int
 }

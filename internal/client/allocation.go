@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/pion/stun/v3"
+
 	"github.com/the-sarge/turn/v5/internal/proto"
 )
 
@@ -88,7 +89,7 @@ func (c *UDPConn) refreshAllocation(lifetime time.Duration) error {
 			}
 		}
 
-		return fmt.Errorf("%s", res.Type) //nolint:err113
+		return fmt.Errorf("%s", res.Type)
 	}
 
 	// Getting lifetime from response

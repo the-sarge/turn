@@ -18,6 +18,7 @@ import (
 	"github.com/pion/stun/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	turn "github.com/the-sarge/turn/v5"
 	"github.com/the-sarge/turn/v5/turntest"
 )
@@ -41,7 +42,7 @@ func startClient(t *testing.T, srv *turntest.Server) *turn.Client {
 	if srv.Addr().Addr().Is6() {
 		network, listen = "udp6", "[::1]:0"
 	}
-	conn, err := net.ListenPacket(network, listen) //nolint:noctx // test socket
+	conn, err := net.ListenPacket(network, listen)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
 
@@ -105,7 +106,7 @@ func TestRejectChannelBind(t *testing.T) {
 	require.Error(t, alloc.PreparePeer(context.Background(), peer))
 
 	_, err = alloc.WriteTo([]byte{0x00}, peer)
-	assert.ErrorIs(t, err, net.ErrClosed)
+	require.ErrorIs(t, err, net.ErrClosed)
 	assert.ErrorIs(t, err, turn.ErrChannelBindFailed)
 }
 
@@ -166,7 +167,7 @@ func TestAllocationCount(t *testing.T) {
 func TestSecondAllocateMismatch(t *testing.T) {
 	srv := turntest.Start(t, options())
 
-	conn, err := net.ListenPacket("udp4", "0.0.0.0:0") //nolint:noctx // test socket
+	conn, err := net.ListenPacket("udp4", "0.0.0.0:0")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
 
@@ -222,7 +223,7 @@ func TestDataIndicationAfterBindingExpiry(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = alloc.Close() })
 
-	peerConn, err := net.ListenPacket("udp4", "127.0.0.1:0") //nolint:noctx // test peer socket
+	peerConn, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = peerConn.Close() })
 	peerUDP, ok := peerConn.LocalAddr().(*net.UDPAddr)

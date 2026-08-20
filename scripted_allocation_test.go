@@ -14,6 +14,7 @@ import (
 
 	"github.com/pion/stun/v3"
 	"github.com/stretchr/testify/require"
+
 	"github.com/the-sarge/turn/v5/internal/client"
 )
 

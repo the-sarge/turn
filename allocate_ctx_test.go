@@ -18,6 +18,7 @@ import (
 	"github.com/pion/stun/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	"github.com/the-sarge/turn/v5/internal/proto"
 )
 
@@ -474,7 +475,7 @@ func TestAllocateRejectsConcurrentCallerWithoutNetworkOutput(t *testing.T) {
 	select {
 	case outcome := <-firstResult:
 		assert.Nil(t, outcome.alloc)
-		assert.ErrorIs(t, outcome.err, cause)
+		require.ErrorIs(t, outcome.err, cause)
 	case <-time.After(2 * time.Second):
 		require.Fail(t, "first Allocate did not return after cancellation")
 	}
@@ -552,7 +553,7 @@ func TestAllocateContext(t *testing.T) {
 
 		alloc, err := cl.Allocate(ctx)
 		assert.Nil(t, alloc)
-		assert.ErrorIs(t, err, cause)
+		require.ErrorIs(t, err, cause)
 		assert.Equal(t, int32(0), conn.writeCount.Load(), "canceled-before-send Allocate must not write")
 		assert.Equal(t, int32(0), conn.deadlineCalls.Load(), "the fork must never deadline the caller's socket")
 		assert.Equal(t, int32(0), conn.closeCalls.Load(), "the fork must never close the caller's socket")
@@ -577,7 +578,7 @@ func TestAllocateContext(t *testing.T) {
 
 		select {
 		case err := <-result:
-			assert.ErrorIs(t, err, cause)
+			require.ErrorIs(t, err, cause)
 			assert.Less(t, time.Since(start), 500*time.Millisecond,
 				"cancellation must return well inside the retransmission budget")
 		case <-time.After(2 * time.Second):
@@ -606,7 +607,7 @@ func TestAllocateContext(t *testing.T) {
 
 		select {
 		case err := <-result:
-			assert.ErrorIs(t, err, cause)
+			require.ErrorIs(t, err, cause)
 			assert.Less(t, time.Since(start), 500*time.Millisecond,
 				"cancellation must return well inside the retransmission budget")
 		case <-time.After(2 * time.Second):
@@ -641,11 +642,11 @@ func TestAllocateContext(t *testing.T) {
 
 		select {
 		case res := <-result:
-			assert.NoError(t, res.err, "a published success must win over cancellation")
+			require.NoError(t, res.err, "a published success must win over cancellation")
 			assert.NotNil(t, res.alloc)
 			if res.alloc != nil {
 				assert.Equal(t, netip.MustParseAddrPort("127.0.0.1:40000"), res.alloc.RelayedAddr())
-				assert.NoError(t, res.alloc.Close(), "the raced Allocation must be closable")
+				require.NoError(t, res.alloc.Close(), "the raced Allocation must be closable")
 			}
 		case <-time.After(2 * time.Second):
 			assert.Fail(t, "Allocate did not return after the success response")
@@ -678,7 +679,7 @@ func TestAllocateCancelDuringBlockedRetransmit(t *testing.T) {
 	cancel(cause)
 	select {
 	case err := <-result:
-		assert.ErrorIs(t, err, cause)
+		require.ErrorIs(t, err, cause)
 		assert.Less(t, time.Since(start), 500*time.Millisecond,
 			"cancellation must not wait behind caller-socket I/O")
 	case <-time.After(2 * time.Second):
@@ -719,7 +720,7 @@ func TestAllocateCancelProducerRace(t *testing.T) {
 	cancel(cause)
 	select {
 	case err := <-result:
-		assert.ErrorIs(t, err, cause)
+		require.ErrorIs(t, err, cause)
 	case <-time.After(2 * time.Second):
 		assert.Fail(t, "canceled Allocate did not return")
 	}
@@ -753,7 +754,7 @@ func TestAllocateCancelProducerRace(t *testing.T) {
 	}()
 	select {
 	case err := <-handled:
-		assert.NoError(t, err)
+		require.NoError(t, err)
 	case <-time.After(2 * time.Second):
 		assert.Fail(t, "HandleInbound blocked behind an in-flight retransmit write")
 	}
@@ -783,8 +784,8 @@ func TestAllocateCancelVsClientClose(t *testing.T) {
 
 	select {
 	case err := <-result:
-		assert.ErrorIs(t, err, net.ErrClosed, "a closed client must surface net.ErrClosed")
-		assert.NotErrorIs(t, err, cause, "closure must take precedence over the cancellation cause")
+		require.ErrorIs(t, err, net.ErrClosed, "a closed client must surface net.ErrClosed")
+		require.NotErrorIs(t, err, cause, "closure must take precedence over the cancellation cause")
 	case <-time.After(2 * time.Second):
 		assert.Fail(t, "Allocate did not return after Client.Close")
 	}
@@ -812,18 +813,21 @@ func TestAllocateLateSuccessDiscarded(t *testing.T) {
 	cancel(cause)
 	select {
 	case err := <-result:
-		assert.ErrorIs(t, err, cause)
+		require.ErrorIs(t, err, cause)
 	case <-time.After(2 * time.Second):
 		assert.Fail(t, "canceled Allocate did not return")
 	}
 
 	// The delayed authenticated success arrives after Allocate returned: it
 	// must be discarded without blocking and without error.
+	// Build the response on the test goroutine: allocateSuccessResponse asserts
+	// with require, which may only fail the test from the test goroutine.
+	lateSuccess := allocateSuccessResponse(t, authReq)
 	done := make(chan error, 1)
-	go func() { done <- cl.HandleInbound(allocateSuccessResponse(t, authReq), testServerNetAddr()) }()
+	go func() { done <- cl.HandleInbound(lateSuccess, testServerNetAddr()) }()
 	select {
 	case err := <-done:
-		assert.NoError(t, err, "a late success for a departed waiter is silently discarded")
+		require.NoError(t, err, "a late success for a departed waiter is silently discarded")
 	case <-time.After(2 * time.Second):
 		assert.Fail(t, "HandleInbound blocked delivering a late success")
 	}
@@ -846,7 +850,7 @@ func TestAllocateLateSuccessDiscarded(t *testing.T) {
 	select {
 	case err := <-retryResult:
 		var turnErr *stun.TurnError
-		assert.ErrorAs(t, err, &turnErr, "the 437 must surface as a typed value")
+		require.ErrorAs(t, err, &turnErr, "the 437 must surface as a typed value")
 		if turnErr != nil {
 			assert.Equal(t, codeAllocMismatch, turnErr.ErrorCodeAttr.Code)
 		}

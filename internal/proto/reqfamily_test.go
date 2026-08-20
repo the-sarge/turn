@@ -8,6 +8,7 @@ import (
 
 	"github.com/pion/stun/v3"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRequestedAddressFamily(t *testing.T) {
@@ -24,7 +25,7 @@ func TestRequestedAddressFamily(t *testing.T) {
 	t.Run("IPv6", func(t *testing.T) {
 		stunMsg := new(stun.Message)
 		requestFamilyAddr := RequestedFamilyIPv6
-		assert.NoError(t, requestFamilyAddr.AddTo(stunMsg))
+		require.NoError(t, requestFamilyAddr.AddTo(stunMsg))
 
 		stunMsg.WriteHeader()
 		decoded := new(stun.Message)
@@ -41,7 +42,7 @@ func TestRequestedAddressFamily(t *testing.T) {
 		allocated := wasAllocs(func() {
 			// On stack.
 			r := RequestedFamilyIPv4
-			assert.NoError(t, r.AddTo(stunMsg))
+			require.NoError(t, r.AddTo(stunMsg))
 			stunMsg.Reset()
 		})
 		assert.False(t, allocated)
@@ -50,7 +51,7 @@ func TestRequestedAddressFamily(t *testing.T) {
 		*requestFamilyAttr = RequestedFamilyIPv4
 		allocated = wasAllocs(func() {
 			// On heap.
-			assert.NoError(t, requestFamilyAttr.AddTo(stunMsg))
+			require.NoError(t, requestFamilyAttr.AddTo(stunMsg))
 			stunMsg.Reset()
 		})
 		assert.False(t, allocated)
@@ -58,7 +59,7 @@ func TestRequestedAddressFamily(t *testing.T) {
 	t.Run("AddTo", func(t *testing.T) {
 		stunMsg := new(stun.Message)
 		requestFamilyAddr := RequestedFamilyIPv4
-		assert.NoError(t, requestFamilyAddr.AddTo(stunMsg))
+		require.NoError(t, requestFamilyAddr.AddTo(stunMsg))
 
 		stunMsg.WriteHeader()
 		t.Run("GetFrom", func(t *testing.T) {
@@ -78,14 +79,14 @@ func TestRequestedAddressFamily(t *testing.T) {
 			t.Run("HandleErr", func(t *testing.T) {
 				m := new(stun.Message)
 				var handle RequestedAddressFamily
-				assert.ErrorIs(t, handle.GetFrom(m), stun.ErrAttributeNotFound)
+				require.ErrorIs(t, handle.GetFrom(m), stun.ErrAttributeNotFound)
 
 				m.Add(stun.AttrRequestedAddressFamily, []byte{1, 2, 3})
 				assert.True(t, stun.IsAttrSizeInvalid(handle.GetFrom(m)))
 
 				m.Reset()
 				m.Add(stun.AttrRequestedAddressFamily, []byte{5, 0, 0, 0})
-				assert.NotNil(t, handle.GetFrom(m), "should not error on unknown value")
+				assert.Error(t, handle.GetFrom(m), "should not error on unknown value")
 			})
 		})
 	})

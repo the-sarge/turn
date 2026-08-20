@@ -24,7 +24,7 @@ const DefaultLifetime = time.Minute * 10
 // until expiration.
 //
 // RFC 5766 Section 14.2.
-type Lifetime struct {
+type Lifetime struct { //nolint:recvcheck // pion/stun contract: AddTo needs a value receiver so unaddressable values satisfy stun.Setter, GetFrom needs a pointer receiver to decode into.
 	time.Duration
 }
 

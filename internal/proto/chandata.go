@@ -92,7 +92,7 @@ func (c *ChannelData) WriteHeader() {
 	_ = c.Raw[:channelDataHeaderSize]
 	binary.BigEndian.PutUint16(c.Raw[:channelDataNumberSize], uint16(c.Number))
 	binary.BigEndian.PutUint16(c.Raw[channelDataNumberSize:channelDataHeaderSize],
-		uint16(len(c.Data)), // nolint:gosec // G115
+		uint16(len(c.Data)), //nolint:gosec // G115
 	)
 }
 

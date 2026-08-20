@@ -9,22 +9,23 @@ import (
 
 	"github.com/pion/stun/v3"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func BenchmarkLifetime(b *testing.B) {
 	b.Run("AddTo", func(b *testing.B) {
 		b.ReportAllocs()
 		m := new(stun.Message)
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			l := Lifetime{time.Second}
-			assert.NoError(b, l.AddTo(m))
+			require.NoError(b, l.AddTo(m))
 			m.Reset()
 		}
 	})
 	b.Run("GetFrom", func(b *testing.B) {
 		m := new(stun.Message)
-		assert.NoError(b, Lifetime{time.Minute}.AddTo(m))
-		for i := 0; i < b.N; i++ {
+		require.NoError(b, Lifetime{time.Minute}.AddTo(m))
+		for range b.N {
 			l := Lifetime{}
 			assert.NoError(b, l.GetFrom(m))
 		}
@@ -43,7 +44,7 @@ func TestLifetime(t *testing.T) {
 			l := Lifetime{
 				Duration: time.Minute,
 			}
-			assert.NoError(t, l.AddTo(stunMsg))
+			require.NoError(t, l.AddTo(stunMsg))
 			stunMsg.Reset()
 		})
 		assert.False(t, allocated)
@@ -51,7 +52,7 @@ func TestLifetime(t *testing.T) {
 		l := &Lifetime{time.Second}
 		allocated = wasAllocs(func() {
 			// On heap.
-			assert.NoError(t, l.AddTo(stunMsg))
+			require.NoError(t, l.AddTo(stunMsg))
 			stunMsg.Reset()
 		})
 		assert.False(t, allocated)
@@ -59,7 +60,7 @@ func TestLifetime(t *testing.T) {
 	t.Run("AddTo", func(t *testing.T) {
 		m := new(stun.Message)
 		lifetime := Lifetime{time.Second * 10}
-		assert.NoError(t, lifetime.AddTo(m))
+		require.NoError(t, lifetime.AddTo(m))
 		m.WriteHeader()
 		t.Run("GetFrom", func(t *testing.T) {
 			decoded := new(stun.Message)
@@ -78,7 +79,7 @@ func TestLifetime(t *testing.T) {
 			t.Run("HandleErr", func(t *testing.T) {
 				m := new(stun.Message)
 				nHandle := new(Lifetime)
-				assert.ErrorIs(t, nHandle.GetFrom(m), stun.ErrAttributeNotFound)
+				require.ErrorIs(t, nHandle.GetFrom(m), stun.ErrAttributeNotFound)
 
 				m.Add(stun.AttrLifetime, []byte{1, 2, 3})
 				assert.True(t, stun.IsAttrSizeInvalid(nHandle.GetFrom(m)))

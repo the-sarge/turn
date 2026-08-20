@@ -15,7 +15,7 @@ import "github.com/pion/stun/v3"
 // that relayed transport address for the allocation.
 //
 // RFC 5766 Section 14.9.
-type ReservationToken []byte
+type ReservationToken []byte //nolint:recvcheck // pion/stun contract: AddTo needs a value receiver so unaddressable values satisfy stun.Setter, GetFrom needs a pointer receiver to decode into.
 
 const reservationTokenSize = 8 // 8 bytes
 

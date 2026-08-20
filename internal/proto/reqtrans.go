@@ -37,7 +37,7 @@ func (p Protocol) String() string {
 // code point 17 (User Datagram Protocol).
 //
 // RFC 5766 Section 14.7.
-type RequestedTransport struct {
+type RequestedTransport struct { //nolint:recvcheck // pion/stun contract: AddTo needs a value receiver so unaddressable values satisfy stun.Setter, GetFrom needs a pointer receiver to decode into.
 	Protocol Protocol
 }
 

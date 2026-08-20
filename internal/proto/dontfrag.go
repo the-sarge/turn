@@ -20,7 +20,7 @@ type DontFragmentAttr = DontFragment
 // part and thus the attribute length field is 0.
 //
 // RFC 5766 Section 14.8.
-type DontFragment struct{}
+type DontFragment struct{} //nolint:recvcheck // pion/stun contract: AddTo needs a value receiver so unaddressable values satisfy stun.Setter, GetFrom needs a pointer receiver to decode into.
 
 const dontFragmentSize = 0
 

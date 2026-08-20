@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type mockConn struct {
@@ -63,16 +64,16 @@ func TestStunConn(t *testing.T) {
 		assert.Nil(t, stunConn.LocalAddr())
 		assert.True(t, testConn.didLocalAddr)
 
-		assert.NoError(t, stunConn.Close())
+		require.NoError(t, stunConn.Close())
 		assert.True(t, testConn.didClose)
 
-		assert.NoError(t, stunConn.SetDeadline(time.Time{}))
+		require.NoError(t, stunConn.SetDeadline(time.Time{}))
 		assert.True(t, testConn.didSetDeadline)
 
-		assert.NoError(t, stunConn.SetReadDeadline(time.Time{}))
+		require.NoError(t, stunConn.SetReadDeadline(time.Time{}))
 		assert.True(t, testConn.didSetReadDeadline)
 
-		assert.NoError(t, stunConn.SetWriteDeadline(time.Time{}))
+		require.NoError(t, stunConn.SetWriteDeadline(time.Time{}))
 		assert.True(t, testConn.didSetWriteDeadline)
 	})
 
@@ -84,13 +85,13 @@ func TestStunConn(t *testing.T) {
 		n, addr, err := stunConn.ReadFrom(nil)
 		assert.Zero(t, n)
 		assert.Nil(t, addr)
-		assert.Error(t, err, errInvalidTURNFrame)
+		assert.ErrorIs(t, err, errInvalidTURNFrame)
 	})
 
 	t.Run("Invalid ChannelData size", func(t *testing.T) {
 		n, err := consumeSingleTURNFrame([]byte{0x40, 0x00, 0x00, 0x12, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF})
-		assert.Equal(t, n, 0)
-		assert.Error(t, err, errIncompleteTURNFrame)
+		assert.Equal(t, 0, n)
+		assert.ErrorIs(t, err, errIncompleteTURNFrame)
 	})
 
 	t.Run("Padding", func(t *testing.T) {
@@ -99,7 +100,7 @@ func TestStunConn(t *testing.T) {
 		stunConn.buff = []byte{0x40, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
 
 		n, addr, err := stunConn.ReadFrom(nil)
-		assert.Equal(t, n, 8)
+		assert.Equal(t, 8, n)
 		assert.Nil(t, addr)
 		assert.NoError(t, err)
 	})

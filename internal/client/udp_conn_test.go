@@ -16,6 +16,7 @@ import (
 	"github.com/pion/stun/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	"github.com/the-sarge/turn/v5/internal/proto"
 )
 
@@ -156,7 +157,7 @@ func TestUDPConnZeroLifetimeActivationTerminalizesOnce(t *testing.T) {
 	}))
 	assert.Zero(t, callbackCount.Load())
 	assert.Equal(t, int32(1), releases.Load())
-	assert.ErrorIs(t, conn.Close(), ErrAllocationRefreshFailed)
+	require.ErrorIs(t, conn.Close(), ErrAllocationRefreshFailed)
 	assert.Equal(t, int32(1), releases.Load())
 }
 
@@ -264,7 +265,7 @@ func TestUDPConnHandleChannelDataDeliversAssignedUnpreparedBinding(t *testing.T)
 	payload[0] = 'x'
 
 	assert.True(t, handled)
-	assert.ErrorIs(t, bound.writeAccess(time.Now()), ErrNotPrepared,
+	require.ErrorIs(t, bound.writeAccess(time.Now()), ErrNotPrepared,
 		"inbound ChannelData must not establish prepared write access")
 	buf := make([]byte, len(payload))
 	n, from, err := conn.ReadFrom(buf)
@@ -321,7 +322,7 @@ func TestUDPConnDecodedDeliveryPreservesShortBufferError(t *testing.T) {
 
 	n, from, err := conn.ReadFrom(make([]byte, 3))
 
-	assert.ErrorIs(t, err, io.ErrShortBuffer)
+	require.ErrorIs(t, err, io.ErrShortBuffer)
 	assert.Zero(t, n)
 	assert.Equal(t, netip.AddrPort{}, from)
 }
@@ -522,7 +523,7 @@ func TestPermissionAndBindingRequestShapes(t *testing.T) {
 	require.NoError(t, conn.bind(bound))
 }
 
-func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
+func TestUDPConn(t *testing.T) {
 	makeConn := func(script *testConnScript) *UDPConn {
 		return newTestConn(t, script)
 	}
@@ -675,12 +676,12 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 
 				err := conn.bind(bound)
 				if tt.expectErr == nil {
-					assert.NoError(t, err)
+					require.NoError(t, err)
 				} else {
-					assert.ErrorIs(t, err, tt.expectErr)
+					require.ErrorIs(t, err, tt.expectErr)
 				}
 				if tt.expectErrContains != "" {
-					assert.ErrorContains(t, err, tt.expectErrContains)
+					require.ErrorContains(t, err, tt.expectErrContains)
 				}
 				assert.Equal(t, tt.expectBadRequest, errors.Is(err, errChannelBindBadRequest))
 				var turnErr *stun.TurnError
@@ -688,7 +689,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 					require.ErrorAs(t, err, &turnErr)
 					assert.Equal(t, tt.expectTurnErrorCode, turnErr.ErrorCodeAttr.Code)
 				} else {
-					assert.False(t, errors.As(err, &turnErr), "response class must remain untyped")
+					assert.NotErrorAs(t, err, &turnErr, "response class must remain untyped")
 				}
 
 				if tt.expectBindingDeleted {
@@ -729,13 +730,13 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		token, class, started := bound.beginAttempt(time.Now(), defaultBindingRefreshInterval)
 		require.True(t, started)
 		err := conn.bindChannel(bound, token, class)
-		assert.NoError(t, err, "the permanent exhausted-retry cause lives only in readiness")
+		require.NoError(t, err, "the permanent exhausted-retry cause lives only in readiness")
 		assert.Equal(t, int32(maxRetryAttempts), attempts.Load())
 		final, readinessErr := bound.preparationAccess(time.Now())
 		assert.True(t, final)
-		assert.ErrorIs(t, readinessErr, errTryAgain)
+		require.ErrorIs(t, readinessErr, errTryAgain)
 		var turnErr *stun.TurnError
-		assert.False(t, errors.As(err, &turnErr), "438 retry exhaustion must not become a typed TURN error")
+		assert.NotErrorAs(t, err, &turnErr, "438 retry exhaustion must not become a typed TURN error")
 	})
 
 	t.Run("maybeBind() retries unknown binding after transaction failure", func(t *testing.T) {
@@ -762,7 +763,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		}, 5*time.Second, 10*time.Millisecond)
 		final, err := bound.preparationAccess(time.Now())
 		assert.False(t, final)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		conn.maybeBind(bound)
 		assert.Eventually(t, func() bool {
@@ -825,7 +826,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 
 		select {
 		case err := <-refreshErrCh:
-			assert.NoError(t, err)
+			require.NoError(t, err)
 		default:
 		}
 		select {
@@ -842,7 +843,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		}
 
 		_, err := conn.WriteTo([]byte("still closed"), peerAddr)
-		assert.ErrorIs(t, err, net.ErrClosed)
+		require.ErrorIs(t, err, net.ErrClosed)
 		var turnErr *stun.TurnError
 		require.ErrorAs(t, err, &turnErr)
 		assert.Equal(t, stun.CodeBadRequest, turnErr.ErrorCodeAttr.Code)
@@ -947,7 +948,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 			return channelBindAttempts.Load() == 2 && bound.attempt == nil
 		}, 5*time.Second, 10*time.Millisecond)
 		_, err = bound.preparationAccess(staleRefreshedAt.Add(channelBindingLifetime))
-		assert.ErrorIs(t, err, ErrChannelBindingExpired,
+		require.ErrorIs(t, err, ErrChannelBindingExpired,
 			"recovered 400 must not advance confirmation time")
 		assert.False(t, conn.isClosed())
 	})
@@ -999,7 +1000,7 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 
 		buf := []byte("Hello")
 		n, err := conn.WriteTo(buf, addr)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, len(buf), n, "WriteTo reports the payload length, not the ChannelData frame length")
 	})
 
@@ -1021,10 +1022,10 @@ func TestUDPConn(t *testing.T) { // nolint:maintidx,cyclop,gocyclo
 		// its channel number, and a write (which fails, unprepared) does not
 		// disturb it.
 		err := conn.bind(bound)
-		assert.ErrorIs(t, err, errFake)
+		require.ErrorIs(t, err, errFake)
 
 		_, err = conn.WriteTo([]byte("hi"), addr)
-		assert.ErrorIs(t, err, ErrNotPrepared)
+		require.ErrorIs(t, err, ErrNotPrepared)
 
 		b2, ok := conn.bindingMgr.findByAddr(addr)
 		assert.True(t, ok)
@@ -1058,8 +1059,8 @@ func TestUDPConnBindingCompletionOrdersWithClose(t *testing.T) {
 
 	got := <-result
 	assert.False(t, got.applied)
-	assert.ErrorIs(t, got.err, net.ErrClosed)
-	assert.ErrorIs(t, got.err, sealCause)
+	require.ErrorIs(t, got.err, net.ErrClosed)
+	require.ErrorIs(t, got.err, sealCause)
 	final, err := bound.preparationAccess(t0)
 	assert.False(t, final, "close-winning completion must not create readiness")
 	assert.NoError(t, err)
@@ -1076,7 +1077,7 @@ func TestUDPConnBindingAttemptResultOwnership(t *testing.T) {
 		cause := fmt.Errorf("permanent: %w", errCannotBindChannel)
 
 		attemptResult := conn.resolveBindError(bound, token, class, cause)
-		assert.NoError(t, attemptResult, "attempt coordination must not duplicate a durable cause")
+		require.NoError(t, attemptResult, "attempt coordination must not duplicate a durable cause")
 		final, readinessErr := bound.preparationAccess(t0)
 		assert.True(t, final)
 		assert.ErrorIs(t, readinessErr, cause)
@@ -1090,7 +1091,7 @@ func TestUDPConnBindingAttemptResultOwnership(t *testing.T) {
 		cause := fmt.Errorf("%w: %w", errChannelBindTransactionFailed, errFake)
 
 		attemptResult := conn.resolveBindError(bound, token, class, cause)
-		assert.ErrorIs(t, attemptResult, cause)
+		require.ErrorIs(t, attemptResult, cause)
 		final, readinessErr := bound.preparationAccess(t0)
 		assert.False(t, final)
 		assert.NoError(t, readinessErr, "transient attempt results must not become durable readiness causes")
@@ -1113,7 +1114,7 @@ func TestCreatePermissions(t *testing.T) {
 		conn := newTestConn(t, script)
 		addr := netip.MustParseAddrPort("5.6.7.8:12345")
 		err := conn.CreatePermissions(addr)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.True(t, called)
 	})
 
@@ -1135,8 +1136,8 @@ func TestCreatePermissions(t *testing.T) {
 		addr := netip.MustParseAddrPort("5.6.7.8:12345")
 		err := conn.CreatePermissions(addr)
 		var turnErr *stun.TurnError
-		assert.Error(t, err)
-		assert.True(t, errors.As(err, &turnErr), "should return a TurnError")
+		require.Error(t, err)
+		require.ErrorAs(t, err, &turnErr, "should return a TurnError")
 		assert.Equal(t, stun.CodeForbidden, turnErr.ErrorCodeAttr.Code)
 	})
 }

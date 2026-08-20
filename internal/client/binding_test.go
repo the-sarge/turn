@@ -23,8 +23,8 @@ func TestBindingReadinessBeginsAndRetriesFreshAttempt(t *testing.T) {
 	assert.Equal(t, bindingAttemptFresh, class)
 	final, err := bound.preparationAccess(t0)
 	assert.False(t, final)
-	assert.NoError(t, err)
-	assert.ErrorIs(t, bound.writeAccess(t0), ErrNotPrepared)
+	require.NoError(t, err)
+	require.ErrorIs(t, bound.writeAccess(t0), ErrNotPrepared)
 
 	_, _, started = bound.beginAttempt(t0, defaultBindingRefreshInterval)
 	assert.False(t, started, "one readiness generation may be active at a time")
@@ -92,11 +92,11 @@ func TestBindingReadinessPreparationAndWriteAccess(t *testing.T) {
 	t0 := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
 	bound := &binding{}
 
-	assert.ErrorIs(t, bound.writeAccess(t0), ErrNotPrepared)
+	require.ErrorIs(t, bound.writeAccess(t0), ErrNotPrepared)
 	token, _, started := bound.beginAttempt(t0, defaultBindingRefreshInterval)
 	require.True(t, started)
 	require.True(t, bound.resolveAttempt(token, bindingAttemptConfirmed, nil, t0))
-	assert.ErrorIs(t, bound.writeAccess(t0), ErrNotPrepared,
+	require.ErrorIs(t, bound.writeAccess(t0), ErrNotPrepared,
 		"server confirmation alone must not establish prepared history")
 
 	final, err := bound.preparationAccess(t0.Add(channelBindingLifetime - time.Nanosecond))
@@ -104,8 +104,8 @@ func TestBindingReadinessPreparationAndWriteAccess(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, bound.writeAccess(t0.Add(channelBindingLifetime-time.Nanosecond)))
 
-	assert.ErrorIs(t, bound.writeAccess(t0.Add(channelBindingLifetime)), ErrChannelBindingExpired)
-	assert.ErrorIs(t, bound.writeAccess(t0.Add(channelBindingLifetime+time.Second)), ErrChannelBindingExpired,
+	require.ErrorIs(t, bound.writeAccess(t0.Add(channelBindingLifetime)), ErrChannelBindingExpired)
+	require.ErrorIs(t, bound.writeAccess(t0.Add(channelBindingLifetime+time.Second)), ErrChannelBindingExpired,
 		"expiry must retain its first durable cause")
 	assert.False(t, bound.resolveAttempt(token, bindingAttemptConfirmed, nil, t0.Add(time.Hour)),
 		"late completion must not resurrect terminal readiness")
@@ -132,7 +132,7 @@ func TestBindingReadinessPreparedPermissionLossOrdering(t *testing.T) {
 
 		assert.True(t, bound.failPrepared(permissionCause))
 		assert.False(t, bound.failPrepared(otherCause))
-		assert.ErrorIs(t, bound.writeAccess(t0), permissionCause)
+		require.ErrorIs(t, bound.writeAccess(t0), permissionCause)
 		assert.NotErrorIs(t, bound.writeAccess(t0), otherCause)
 	})
 }
@@ -171,7 +171,7 @@ func TestBindingReadinessPermanentFailureIsDurable(t *testing.T) {
 	require.True(t, bound.resolveAttempt(token, bindingAttemptPermanentFailure, cause, t0))
 	final, err := bound.preparationAccess(t0)
 	assert.True(t, final)
-	assert.ErrorIs(t, err, cause)
+	require.ErrorIs(t, err, cause)
 	_, _, started = bound.beginAttempt(t0.Add(time.Minute), defaultBindingRefreshInterval)
 	assert.False(t, started)
 	assert.False(t, bound.resolveAttempt(token, bindingAttemptConfirmed, nil, t0.Add(time.Minute)))
@@ -210,7 +210,7 @@ func TestBindingReadinessExpiryRejectsInFlightCompletion(t *testing.T) {
 	)
 	require.True(t, started)
 	assert.Equal(t, bindingAttemptPreviouslyConfirmed, class)
-	assert.ErrorIs(t, bound.writeAccess(t0.Add(channelBindingLifetime)), ErrChannelBindingExpired)
+	require.ErrorIs(t, bound.writeAccess(t0.Add(channelBindingLifetime)), ErrChannelBindingExpired)
 	assert.False(t, bound.resolveAttempt(token, bindingAttemptConfirmed, nil, t0.Add(channelBindingLifetime)),
 		"an in-flight success must not resurrect terminal expiry")
 	assert.ErrorIs(t, bound.writeAccess(t0.Add(channelBindingLifetime)), ErrChannelBindingExpired)
@@ -243,7 +243,7 @@ func TestBindingManagerCapacity(t *testing.T) {
 	bindingsByNumber := make(map[uint16]*binding, wantCapacity)
 	peerAddr := netip.MustParseAddr("192.0.2.1")
 	for i := range wantCapacity {
-		peer := netip.AddrPortFrom(peerAddr, uint16(i+1)) //nolint:gosec // Bounded by channel capacity.
+		peer := netip.AddrPortFrom(peerAddr, uint16(i+1))
 		peers[i] = peer
 
 		bound, ok := bm.getOrCreate(peer)
@@ -286,7 +286,7 @@ func TestBindingManagerConcurrentFinalSlot(t *testing.T) {
 	bm := newBindingManager()
 	peerAddr := netip.MustParseAddr("192.0.2.1")
 	for i := range maxChannelBindings - 1 {
-		peer := netip.AddrPortFrom(peerAddr, uint16(i+1)) //nolint:gosec // Bounded by channel capacity.
+		peer := netip.AddrPortFrom(peerAddr, uint16(i+1))
 		_, ok := bm.getOrCreate(peer)
 		require.True(t, ok)
 	}
@@ -367,7 +367,7 @@ func TestBindingManager(t *testing.T) {
 			assert.True(t, ok, "should exist")
 			assert.Equal(t, b, found, "should match")
 		}
-		assert.Equal(t, count, len(all), "should match")
+		assert.Len(t, all, count, "should match")
 	})
 
 	t.Run("missing lookup", func(t *testing.T) {

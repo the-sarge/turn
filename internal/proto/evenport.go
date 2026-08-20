@@ -12,7 +12,7 @@ import "github.com/pion/stun/v3"
 // reserve the next-higher port number.
 //
 // RFC 5766 Section 14.6.
-type EvenPort struct {
+type EvenPort struct { //nolint:recvcheck // pion/stun contract: AddTo needs a value receiver so unaddressable values satisfy stun.Setter, GetFrom needs a pointer receiver to decode into.
 	// ReservePort means that the server is requested to reserve
 	// the next-higher port number (on the same IP address)
 	// for a subsequent allocation.

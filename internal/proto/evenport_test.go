@@ -8,6 +8,7 @@ import (
 
 	"github.com/pion/stun/v3"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestEvenPort(t *testing.T) {
@@ -23,7 +24,7 @@ func TestEvenPort(t *testing.T) {
 		p := EvenPort{
 			ReservePort: false,
 		}
-		assert.NoError(t, p.AddTo(m))
+		require.NoError(t, p.AddTo(m))
 
 		m.WriteHeader()
 		decoded := new(stun.Message)
@@ -39,7 +40,7 @@ func TestEvenPort(t *testing.T) {
 		evenPortAttr := EvenPort{
 			ReservePort: true,
 		}
-		assert.NoError(t, evenPortAttr.AddTo(m))
+		require.NoError(t, evenPortAttr.AddTo(m))
 		m.WriteHeader()
 		t.Run("GetFrom", func(t *testing.T) {
 			decoded := new(stun.Message)
@@ -58,7 +59,7 @@ func TestEvenPort(t *testing.T) {
 			t.Run("HandleErr", func(t *testing.T) {
 				m := new(stun.Message)
 				var handle EvenPort
-				assert.ErrorIs(t, handle.GetFrom(m), stun.ErrAttributeNotFound)
+				require.ErrorIs(t, handle.GetFrom(m), stun.ErrAttributeNotFound)
 
 				m.Add(stun.AttrEvenPort, []byte{1, 2, 3})
 				assert.True(t, stun.IsAttrSizeInvalid(handle.GetFrom(m)))

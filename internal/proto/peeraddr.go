@@ -16,7 +16,7 @@ import (
 // transport address if the peer is behind a NAT.)
 //
 // RFC 5766 Section 14.3.
-type PeerAddress struct {
+type PeerAddress struct { //nolint:recvcheck // pion/stun contract: AddTo needs a value receiver so unaddressable values satisfy stun.Setter, GetFrom needs a pointer receiver to decode into.
 	IP   net.IP
 	Port int
 }

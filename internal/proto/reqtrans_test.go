@@ -8,6 +8,7 @@ import (
 
 	"github.com/pion/stun/v3"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRequestedTransport(t *testing.T) {
@@ -32,7 +33,7 @@ func TestRequestedTransport(t *testing.T) {
 			r := RequestedTransport{
 				Protocol: ProtoUDP,
 			}
-			assert.NoError(t, r.AddTo(stunMsg))
+			require.NoError(t, r.AddTo(stunMsg))
 			stunMsg.Reset()
 		})
 		assert.False(t, allocated)
@@ -42,7 +43,7 @@ func TestRequestedTransport(t *testing.T) {
 		}
 		allocated = wasAllocs(func() {
 			// On heap.
-			assert.NoError(t, r.AddTo(stunMsg))
+			require.NoError(t, r.AddTo(stunMsg))
 			stunMsg.Reset()
 		})
 		assert.False(t, allocated)
@@ -52,7 +53,7 @@ func TestRequestedTransport(t *testing.T) {
 		transAttr := RequestedTransport{
 			Protocol: ProtoUDP,
 		}
-		assert.NoError(t, transAttr.AddTo(m))
+		require.NoError(t, transAttr.AddTo(m))
 		m.WriteHeader()
 		t.Run("GetFrom", func(t *testing.T) {
 			decoded := new(stun.Message)
@@ -73,7 +74,7 @@ func TestRequestedTransport(t *testing.T) {
 			t.Run("HandleErr", func(t *testing.T) {
 				m := new(stun.Message)
 				var handle RequestedTransport
-				assert.ErrorIs(t, handle.GetFrom(m), stun.ErrAttributeNotFound)
+				require.ErrorIs(t, handle.GetFrom(m), stun.ErrAttributeNotFound)
 
 				m.Add(stun.AttrRequestedTransport, []byte{1, 2, 3})
 				assert.True(t, stun.IsAttrSizeInvalid(handle.GetFrom(m)))

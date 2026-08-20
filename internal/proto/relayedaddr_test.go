@@ -9,6 +9,7 @@ import (
 
 	"github.com/pion/stun/v3"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRelayedAddress(t *testing.T) {
@@ -21,7 +22,7 @@ func TestRelayedAddress(t *testing.T) {
 		assert.Equal(t, "111.11.1.2:333", a.String())
 	})
 	m := new(stun.Message)
-	assert.NoError(t, a.AddTo(m))
+	require.NoError(t, a.AddTo(m))
 
 	m.WriteHeader()
 	decoded := new(stun.Message)

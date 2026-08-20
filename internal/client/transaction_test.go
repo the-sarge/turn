@@ -107,7 +107,7 @@ func TestTransactionRegistryAbortWinsBlockedInitialSend(t *testing.T) {
 
 	select {
 	case err := <-resultCh:
-		assert.ErrorIs(t, err, net.ErrClosed)
+		require.ErrorIs(t, err, net.ErrClosed)
 	case <-time.After(time.Second):
 		assert.Fail(t, "aborted transaction did not wake")
 	}
@@ -138,7 +138,7 @@ func TestTransactionRegistryCancellationClaimsLiveWait(t *testing.T) {
 
 	select {
 	case err := <-resultCh:
-		assert.ErrorIs(t, err, cause)
+		require.ErrorIs(t, err, cause)
 	case <-time.After(time.Second):
 		assert.Fail(t, "canceled transaction did not wake")
 	}
@@ -170,7 +170,7 @@ func TestTransactionRegistryExhaustionSendsSevenByteIdenticalRequests(t *testing
 
 	select {
 	case err := <-resultCh:
-		assert.ErrorIs(t, err, ErrTransactionTimeout)
+		require.ErrorIs(t, err, ErrTransactionTimeout)
 	case <-time.After(2 * time.Second):
 		assert.Fail(t, "transaction did not exhaust its retry budget")
 	}
@@ -236,7 +236,7 @@ func TestTransactionRegistryInitialSendErrorSurvivesAbort(t *testing.T) {
 
 	select {
 	case err := <-resultCh:
-		assert.ErrorIs(t, err, sendErr)
+		require.ErrorIs(t, err, sendErr)
 	case <-time.After(time.Second):
 		assert.Fail(t, "blocked send failure did not return")
 	}
@@ -255,7 +255,7 @@ func TestTransactionRegistryClaimDuringBlockedRetryPreventsRearm(t *testing.T) {
 			},
 			assert: func(t *testing.T, result *stun.Message, err error, response *stun.Message) {
 				t.Helper()
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				assert.Same(t, response, result)
 			},
 		},

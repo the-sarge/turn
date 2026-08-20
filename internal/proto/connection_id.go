@@ -15,7 +15,7 @@ import (
 // connection.  It is a 32-bit unsigned integral value.
 //
 // RFC 6062 Section 6.2.1.
-type ConnectionID uint32
+type ConnectionID uint32 //nolint:recvcheck // pion/stun contract: AddTo needs a value receiver so unaddressable values satisfy stun.Setter, GetFrom needs a pointer receiver to decode into.
 
 const connectionIDSize = 4 // uint32: 4 bytes, 32 bits
 

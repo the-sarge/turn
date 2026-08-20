@@ -8,6 +8,7 @@ import (
 
 	"github.com/pion/stun/v3"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestDontFragment(t *testing.T) {
@@ -20,13 +21,13 @@ func TestDontFragment(t *testing.T) {
 	})
 	t.Run("AddTo", func(t *testing.T) {
 		stunMsg := new(stun.Message)
-		assert.NoError(t, dontFrag.AddTo(stunMsg))
+		require.NoError(t, dontFrag.AddTo(stunMsg))
 
 		stunMsg.WriteHeader()
 		t.Run("IsSet", func(t *testing.T) {
 			decoded := new(stun.Message)
 			_, err := decoded.Write(stunMsg.Raw)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			assert.True(t, dontFrag.IsSet(stunMsg))
 
 			allocated := wasAllocs(func() {

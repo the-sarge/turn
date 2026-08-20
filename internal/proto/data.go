@@ -14,7 +14,7 @@ import "github.com/pion/stun/v3"
 // and the peer).
 //
 // RFC 5766 Section 14.4.
-type Data []byte
+type Data []byte //nolint:recvcheck // pion/stun contract: AddTo needs a value receiver so unaddressable values satisfy stun.Setter, GetFrom needs a pointer receiver to decode into.
 
 // AddTo adds DATA to message.
 func (d Data) AddTo(m *stun.Message) error {

@@ -16,6 +16,7 @@ import (
 	"github.com/pion/stun/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	"github.com/the-sarge/turn/v5/internal/client"
 )
 
@@ -99,7 +100,7 @@ func TestCloseInterruptsTransactionWaits(t *testing.T) {
 		cancelB(cause)
 		select {
 		case err := <-resultB:
-			assert.ErrorIs(t, err, cause)
+			require.ErrorIs(t, err, cause)
 		case <-time.After(time.Second):
 			assert.Fail(t, "canceled waiter did not wake promptly")
 		}
@@ -110,7 +111,7 @@ func TestCloseInterruptsTransactionWaits(t *testing.T) {
 		}
 
 		start := time.Now()
-		assert.NoError(t, conn.Close())
+		require.NoError(t, conn.Close())
 		elapsed := time.Since(start)
 		t.Logf("Close took %v with abort", elapsed)
 		assert.Less(t, elapsed, time.Second,
@@ -121,7 +122,7 @@ func TestCloseInterruptsTransactionWaits(t *testing.T) {
 
 		select {
 		case err := <-resultA:
-			assert.Error(t, err)
+			require.Error(t, err)
 		case <-time.After(5 * time.Second):
 			assert.Fail(t, "surviving waiter did not unblock on close")
 		}
