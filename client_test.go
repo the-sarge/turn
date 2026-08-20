@@ -36,6 +36,7 @@ func TestNewClientRejectsNonCanonicalServer(t *testing.T) {
 	for name, server := range map[string]netip.AddrPort{
 		"zero value":       {},
 		"IPv4-mapped IPv6": mapped,
+		//nolint:goconst // Subtest label; a constant would break the table's literal names.
 		"zero port":        netip.MustParseAddrPort("192.0.2.1:0"),
 		"unspecified":      netip.MustParseAddrPort("0.0.0.0:3478"),
 		"multicast":        netip.MustParseAddrPort("224.0.0.1:3478"),
@@ -59,6 +60,10 @@ func TestNewClientValidatesPermissionRefreshInterval(t *testing.T) {
 
 	server := netip.MustParseAddrPort("192.0.2.1:3478")
 
+	// The exact wording every rejected interval must report, asserted as text
+	// so the public message stays pinned independently of the sentinel.
+	const wantIntervalText = "turn: PermissionRefreshInterval must be zero or a positive duration less than 5 minutes"
+
 	tests := []struct {
 		name     string
 		conn     net.PacketConn
@@ -70,7 +75,7 @@ func TestNewClientValidatesPermissionRefreshInterval(t *testing.T) {
 		{
 			name: "negative",
 			conn: conn, server: server, interval: -time.Nanosecond,
-			wantText: "turn: PermissionRefreshInterval must be zero or a positive duration less than 5 minutes",
+			wantText: wantIntervalText,
 		},
 		{name: "zero", conn: conn, server: server},
 		{name: "small positive", conn: conn, server: server, interval: time.Nanosecond},
@@ -78,12 +83,12 @@ func TestNewClientValidatesPermissionRefreshInterval(t *testing.T) {
 		{
 			name: "exactly five minutes",
 			conn: conn, server: server, interval: 5 * time.Minute,
-			wantText: "turn: PermissionRefreshInterval must be zero or a positive duration less than 5 minutes",
+			wantText: wantIntervalText,
 		},
 		{
 			name: "above five minutes",
 			conn: conn, server: server, interval: 5*time.Minute + 1,
-			wantText: "turn: PermissionRefreshInterval must be zero or a positive duration less than 5 minutes",
+			wantText: wantIntervalText,
 		},
 		{
 			name:   "nil connection takes precedence over invalid interval",
@@ -459,8 +464,8 @@ func TestClientCloseWinsBlockedInitialSendWithoutRearm(t *testing.T) {
 func TestClientNonceExpiration(t *testing.T) {
 	server, err := turntest.New(turntest.Options{
 		Realm:    "pion.ly",
-		Username: "foo",
-		Password: "pass",
+		Username: testUsername,
+		Password: testPassword,
 	})
 	require.NoError(t, err)
 
@@ -470,8 +475,8 @@ func TestClientNonceExpiration(t *testing.T) {
 	client, err := NewClient(&ClientConfig{
 		Conn:     conn,
 		Server:   server.Addr(),
-		Username: "foo",
-		Password: "pass",
+		Username: testUsername,
+		Password: testPassword,
 	})
 	assert.NoError(t, err)
 	startTestPump(t, client, conn)
@@ -499,8 +504,8 @@ func TestClientNonceExpiration(t *testing.T) {
 func TestClientE2E(t *testing.T) {
 	server, err := turntest.New(turntest.Options{
 		Realm:              "pion.ly",
-		Username:           "foo",
-		Password:           "pass",
+		Username:           testUsername,
+		Password:           testPassword,
 		AllocationLifetime: time.Second,
 		PermissionTimeout:  time.Millisecond * 100,
 		ChannelBindTimeout: time.Millisecond * 100,
@@ -513,8 +518,8 @@ func TestClientE2E(t *testing.T) {
 	client, err := NewClient(&ClientConfig{
 		Conn:                      stunClientConn,
 		Server:                    server.Addr(),
-		Username:                  "foo",
-		Password:                  "pass",
+		Username:                  testUsername,
+		Password:                  testPassword,
 		PermissionRefreshInterval: time.Millisecond * 50,
 		bindingRefreshInterval:    time.Millisecond * 50,
 		bindingCheckInterval:      time.Millisecond * 50,

@@ -213,8 +213,8 @@ func TestZeroLifetimeAllocateNeverPublishes(t *testing.T) {
 	cl, err := NewClient(&ClientConfig{
 		Conn:     conn,
 		Server:   testServerAddrPort(),
-		Username: "user",
-		Password: "secret",
+		Username: testUsername,
+		Password: testPassword,
 		RTO:      time.Millisecond,
 	})
 	require.NoError(t, err)
@@ -258,8 +258,8 @@ func TestZeroLifetimeRefreshSuccessTerminalizesPublishedAllocation(t *testing.T)
 	cl, err := NewClient(&ClientConfig{
 		Conn:     conn,
 		Server:   testServerAddrPort(),
-		Username: "user",
-		Password: "secret",
+		Username: testUsername,
+		Password: testPassword,
 		RTO:      time.Millisecond,
 	})
 	require.NoError(t, err)
@@ -323,8 +323,8 @@ func TestFirstRefreshFailureObservesPublishedAllocation(t *testing.T) {
 	cl, err := NewClient(&ClientConfig{
 		Conn:     conn,
 		Server:   testServerAddrPort(),
-		Username: "user",
-		Password: "secret",
+		Username: testUsername,
+		Password: testPassword,
 		RTO:      time.Millisecond,
 	})
 	require.NoError(t, err)

@@ -860,7 +860,11 @@ func (c *UDPConn) handleChannelBindErrorResponse(res *stun.Message) error {
 		return errTryAgain
 	}
 
-	turnError := &stun.TurnError{
+	// Deliberately wrap the pointer form: callers match it with
+	// errors.As(err, &(*stun.TurnError)). The static error type keeps
+	// go1.27 vet's printf %w pointer-vs-value check from suggesting a
+	// dereference that would change the wrapped concrete type.
+	var turnError error = &stun.TurnError{
 		StunMessageType: res.Type,
 		ErrorCodeAttr:   code,
 	}

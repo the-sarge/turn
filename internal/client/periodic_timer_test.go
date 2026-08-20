@@ -14,9 +14,9 @@ import (
 func TestPeriodicTimer(t *testing.T) {
 	t.Run("basic", func(t *testing.T) {
 		timerID := 3
-		var nCbs uint64
+		var nCbs atomic.Uint64
 		rt := NewPeriodicTimer(timerID, func(id int) {
-			atomic.AddUint64(&nCbs, 1)
+			nCbs.Add(1)
 			assert.Equal(t, timerID, id)
 		}, 50*time.Millisecond)
 
@@ -37,9 +37,9 @@ func TestPeriodicTimer(t *testing.T) {
 		assert.Equal(
 			t,
 			uint64(4),
-			atomic.LoadUint64(&nCbs),
+			nCbs.Load(),
 			"should be called 4 times (actual: %d)",
-			atomic.LoadUint64(&nCbs),
+			nCbs.Load(),
 		)
 	})
 

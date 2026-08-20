@@ -116,6 +116,7 @@ func TestCanonicalSourceAddr(t *testing.T) {
 		{name: "TCP source", in: &net.TCPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 3478}},
 		{name: "zoned UDP source", in: &net.UDPAddr{IP: net.ParseIP("fe80::1"), Port: 3478, Zone: "eth0"}},
 		{name: "IPv4 UDP source with zone", in: &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 3478, Zone: "eth0"}},
+		//nolint:goconst // Subtest label; a constant would break the table's literal names.
 		{name: "zero port", in: &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 0}},
 		{name: "port above uint16", in: &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 65536 + 3478}},
 		{name: "negative port", in: &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: -1}},

@@ -33,6 +33,7 @@ func TestChannelData_Equal(t *testing.T) {
 		value bool
 	}{
 		{
+			//nolint:goconst // Subtest label; a constant would break the table's literal names.
 			name:  "nil",
 			value: true,
 		},

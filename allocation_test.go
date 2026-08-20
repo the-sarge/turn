@@ -22,6 +22,8 @@ import (
 
 // invalidPeers is the rejection table for the canonical netip.AddrPort peer
 // domain: every entry must fail PreparePeer and WriteTo with ErrInvalidPeer.
+//
+//nolint:goconst // Subtest labels; constants would break the table's literal names.
 func invalidPeers() map[string]netip.AddrPort {
 	return map[string]netip.AddrPort{
 		"zero value":       {},
@@ -158,8 +160,8 @@ func TestAllocateRejectsInvalidRelayedAddress(t *testing.T) {
 	turnClient, err := NewClient(&ClientConfig{
 		Conn:     clientSock,
 		Server:   netip.MustParseAddrPort(serverSock.LocalAddr().String()),
-		Username: "user",
-		Password: "pass",
+		Username: testUsername,
+		Password: testPassword,
 	})
 	require.NoError(t, err)
 	startTestPump(t, turnClient, clientSock)
