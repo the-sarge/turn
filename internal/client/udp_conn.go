@@ -250,16 +250,28 @@ func (c *UDPConn) awaitPermission(ctx context.Context, peer netip.AddrPort) erro
 			return c.closedErr()
 		}
 
-		permitted, _ = perm.readiness()
-		if permitted {
-			return nil
-		}
-		err := attempt.result()
+		permitted, err := c.permissionAttemptResult(perm, attempt)
 		if err != nil {
 			return err
 		}
+		if permitted {
+			return nil
+		}
 		// The attempt we joined predates our loop iteration; re-evaluate.
 	}
+}
+
+// permissionAttemptResult preserves the exact attempt generation a caller
+// joined before consulting readiness established by any later attempt.
+func (*UDPConn) permissionAttemptResult(
+	perm *permission,
+	attempt *permissionAttempt,
+) (permitted bool, err error) {
+	if err = attempt.result(); err != nil {
+		return false, err
+	}
+
+	return perm.readiness()
 }
 
 func (c *UDPConn) runPermissionAttempt(perm *permission, peer netip.AddrPort) {

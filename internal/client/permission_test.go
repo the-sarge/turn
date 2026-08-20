@@ -85,7 +85,7 @@ func TestPermissionAttemptLifecycle(t *testing.T) {
 		assert.NoError(t, err)
 	})
 
-	t.Run("joined attempt result remains stable when a stale caller starts another attempt", func(t *testing.T) {
+	t.Run("joined failure wins when a stale replacement attempt succeeds", func(t *testing.T) {
 		perm := &permission{}
 		attemptA, fresh := perm.beginOrJoin()
 		require.True(t, fresh)
@@ -96,10 +96,12 @@ func TestPermissionAttemptLifecycle(t *testing.T) {
 		perm.resolve(errFake)
 		attemptB, fresh := perm.beginOrJoin()
 		require.True(t, fresh)
-		assert.ErrorIs(t, joinedA.result(), errFake)
-
 		perm.resolve(nil)
 		<-attemptB.done
+
+		permitted, err := new(UDPConn).permissionAttemptResult(perm, joinedA)
+		assert.False(t, permitted)
+		assert.ErrorIs(t, err, errFake)
 	})
 }
 
