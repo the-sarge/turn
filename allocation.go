@@ -37,6 +37,10 @@ func (a *Allocation) RelayedAddr() netip.AddrPort {
 // the same peer share one permission and one bind; canceling ctx wakes only
 // that caller and leaves the shared work running.
 func (a *Allocation) PreparePeer(ctx context.Context, peer netip.AddrPort) error {
+	if ctx == nil {
+		return errNilContext
+	}
+
 	canonical, ok := canonicalAddrPort(peer, canonicalUnmap)
 	if !ok {
 		return fmt.Errorf("%w: %s", ErrInvalidPeer, peer)

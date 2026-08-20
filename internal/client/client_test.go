@@ -4,12 +4,15 @@
 package client
 
 import (
+	"errors"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/pion/stun/v3"
 )
+
+var errFake = errors.New("fake error") //nolint:err113 // Shared test-local failure sentinel.
 
 // testConnScript is the single internal test adapter for UDPConn's package
 // crossings. Method values read these fields at call time, so tests may

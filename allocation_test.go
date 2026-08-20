@@ -32,6 +32,26 @@ func invalidPeers() map[string]netip.AddrPort {
 	}
 }
 
+func TestAllocationPreparePeerRejectsNilContextFirst(t *testing.T) {
+	script := &scriptedAllocationScript{}
+	allocation, _ := newScriptedAllocation(t, script)
+
+	//nolint:staticcheck // Nil is the programmer-error input under test.
+	err := allocation.PreparePeer(nil, netip.AddrPort{})
+
+	assert.ErrorIs(t, err, errNilContext)
+	assert.NotErrorIs(t, err, ErrInvalidPeer)
+	assert.Equal(t, int32(0), script.permissionCount.Load())
+	assert.Equal(t, int32(0), script.bindingCount.Load())
+}
+
+func TestAllocateRejectsNilContext(t *testing.T) {
+	allocation, err := (&Client{}).Allocate(nil) //nolint:staticcheck // Nil is the programmer-error input under test.
+
+	assert.Nil(t, allocation)
+	assert.ErrorIs(t, err, errNilContext)
+}
+
 func TestAllocationRejectsInvalidPeers(t *testing.T) {
 	script := &scriptedAllocationScript{}
 	allocation, _ := newScriptedAllocation(t, script)
