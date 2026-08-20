@@ -94,10 +94,10 @@ Tests probe readiness by `permMap.find(peer).state() == permStatePermitted` (`pr
 
 ## Acceptance Criteria
 
-- [ ] Every permission state and attempt transition in the supported finite domain has one owner in `permission`; `UDPConn` drives no permission lock or raw field. Domain: the matrix; owner: `permission`; guarantee: universal over the finite matrix; evidence: table, preserved PreparePeer tests, one guard mutation.
-- [ ] Concurrent PreparePeer callers for one peer IP share one CreatePermission attempt; a failed fresh attempt wakes waiters with that exact attempt generation's error even if a stale caller starts or completes a replacement first; the next caller starts fresh; a closing Allocation wakes joined waiters with the terminal cause.
-- [ ] `permState`, `setState`, the raw `state()` accessor, `perm.mutex`, `attemptMutex`, `permissionMap.insert`, `permissionMap.find`, and the dead `pm.insert` test setup do not exist; no shared helper with channel binding exists.
-- [ ] Permission identity, CreatePermission bytes, retry count, refresh cadence and membership rule, prepared-binding terminalization, seal precedence, waiter-local cancellation, and public API are unchanged; the only behavior change is that a permission succeeding after an intermediate 438 remains in `permMap`.
+- [x] Every permission state and attempt transition in the supported finite domain has one owner in `permission`; `UDPConn` drives no permission lock or raw field. Domain: the matrix; owner: `permission`; guarantee: universal over the finite matrix; evidence: table, preserved PreparePeer tests, one guard mutation.
+- [x] Concurrent PreparePeer callers for one peer IP share one CreatePermission attempt; a failed fresh attempt wakes waiters with that exact attempt generation's error even if a stale caller starts or completes a replacement first; the next caller starts fresh; a closing Allocation wakes joined waiters with the terminal cause.
+- [x] `permState`, `setState`, the raw `state()` accessor, `perm.mutex`, `attemptMutex`, `permissionMap.insert`, `permissionMap.find`, and the dead `pm.insert` test setup do not exist; no shared helper with channel binding exists.
+- [x] Permission identity, CreatePermission bytes, retry count, refresh cadence and membership rule, prepared-binding terminalization, seal precedence, waiter-local cancellation, and public API are unchanged; the only behavior change is that a permission succeeding after an intermediate 438 remains in `permMap`.
 
 ## Validation Gates
 
