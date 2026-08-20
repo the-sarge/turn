@@ -720,3 +720,36 @@ PR [#100](https://github.com/the-sarge/turn/pull/100) landed Track 2 Slice T2.S1
 
 - T2.S2 ([#92](https://github.com/the-sarge/turn/issues/92)) remains independently ready and is the recommended next slice; [tracking issue #95](https://github.com/the-sarge/turn/issues/95) is the live cross-track frontier.
 - Revalidate the deferred pre-existing start-before-publish lifecycle observation against merged `4a25a8e` before deciding whether it merits a separate architecture-review issue; no accepted T2.S1 effect remains untraced.
+
+---
+
+## Public error vocabulary centralized - 2026-08-19 20:13 EDT
+
+**Main:** `b90a32ebc097`
+**Actor:** Codex
+
+**Summary**
+
+PR [#103](https://github.com/the-sarge/turn/pull/103) landed Track 2 Slice T2.S2 as `b90a32e` and closed [#92](https://github.com/the-sarge/turn/issues/92). Root now owns the public error vocabulary's prose and prefixes, and nil context is enforced once at each public ingress.
+
+**Completed**
+
+- Added the root-first nil-context check to `Allocation.PreparePeer`, retained the existing `Client.Allocate` ingress check, and removed the unreachable internal duplicate check and sentinel.
+- Added `turn:` to the three remaining unprefixed root-defined sentinels while preserving their identities and the message text of the six internal identities re-exported by root.
+- Moved `errFake` from production vocabulary into the shared internal test adapter and reduced internal exported-sentinel comments to pointers at root-owned public prose.
+- Marked T2.S2 and Track 2 complete in the normative plan and program index while leaving T3.S1 and T4.S1 independently ready.
+
+**Decisions**
+
+- Root `errors.go` owns public error prose and prefixes, the two root public methods own programmer-error validation, and `internal/client/errors.go` owns only the identities it raises and root re-exports. The finite representation domain, evidence ceiling, and non-goals remain in the [Allocate admission and public error vocabulary plan](adr/2026-08-19-allocate-admission-errors-plan.md).
+
+**Validation**
+
+- The red-first `(nil context, invalid peer)` public test initially returned `ErrInvalidPeer`; after the root-first guard, both public nil-context ingress tests, exact negative/prefix greps, `task verify`, and `go test -race ./...` passed.
+- Initial RAS review `20260820T000504-01cfbfb6d7bb0c51c4e957f3` found no `fix-now`, `defer`, `reject`, or `stop-for-decision` finding, so no verification or replacement review was required.
+- Exact-head `task preflight` certified `0d4b9880aa4452ffb5d6ebb575300d9ce3772097` against base `bf3e328c8bdc27e2a310ee646b3bf86dd9c7673a`, including format, vet, tests, lint, docs, race, dependency/vulnerability, Darwin/Windows build, workflow, and secret gates. Post-ready hosted run [32316282220](https://github.com/the-sarge/turn/actions/runs/32316282220) passed `ci-required` on that exact head before the guarded squash merge.
+
+**Next**
+
+- Track 2 has no successor slice. T3.S1 ([#93](https://github.com/the-sarge/turn/issues/93)) and T4.S1 ([#94](https://github.com/the-sarge/turn/issues/94)) remain independently ready, with T3.S1 recommended next; [tracking issue #95](https://github.com/the-sarge/turn/issues/95) is the live cross-track view.
+- No review finding survived for a follow-up issue, and no error-vocabulary effect remains untraced. The pre-existing Allocation self-seal investigation [#102](https://github.com/the-sarge/turn/issues/102) remains outside this slice and does not block the frontier.
