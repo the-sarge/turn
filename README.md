@@ -6,13 +6,13 @@ The public API is one idiom: callers provide a `net.PacketConn` and a canonical 
 
 ## Install
 
-Pin an explicit GridSwarm pre-release version:
+Pin an explicit version:
 
 ```sh
-go get github.com/the-sarge/turn/v5@v5.2.0-gs.1
+go get github.com/the-sarge/turn/v5@v5.3.0-gs.1
 ```
 
-The permanent `-gs` suffix keeps consumer upgrades deliberate. This repository is an owned library rather than an upstream-compatible fork; API removal and divergence are expected between milestone versions.
+`v5.3.0-gs.1` is the last tag carrying the `-gs` pre-release suffix; later releases are plain semver tags (see [the plain-semver tags ADR](docs/adr/2026-08-20-plain-semver-tags.md)). Consumer upgrades stay deliberate because Go's minimal version selection never moves a pinned requirement on its own. This repository is an owned library rather than an upstream-compatible fork; API removal and divergence are expected between milestone versions.
 
 ## Test fixture
 
