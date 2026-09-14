@@ -1,4 +1,5 @@
-# Portfolio required CI workflow. Copy verbatim; change only `runs-on`
+# Portfolio required CI workflow, with the repository-owned Task version pin.
+# When copying the portfolio template, change only `runs-on`
 # and, when a repository has additional merge-blocking lanes, add sibling
 # `ci-<lane>` jobs with the same guard, timeout, setup steps, and one
 # `task ci-<lane>` step. Never add `needs`, `strategy.matrix`, other
@@ -24,8 +25,12 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+      - name: Export pinned Task version
+        run: |
+          source scripts/tool-versions.env
+          echo "TASK_VERSION=${TASK_VERSION#v}" >> "$GITHUB_ENV"
       - uses: arduino/setup-task@c0bc642852239c2689f73f4ea6459c29405f3c52 # v3.0.0
         with:
-          version: 3.x
+          version: ${{ env.TASK_VERSION }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - run: task ci
