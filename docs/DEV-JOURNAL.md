@@ -1141,3 +1141,28 @@ Merged [PR #144](https://github.com/the-sarge/turn/pull/144) as `b316b2b`, compl
 - Four temporary negative controls failed at the intended repaired assertions: corrupted ChannelData payload, changed Lifetime value, missing decoded DONT-FRAGMENT, and a typed TURN cause joined with `errTryAgain`. The controls were removed and affected tests passed again.
 - RAS review `20260915T145849-02446afb61429c8fb4f9edb5` completed with all six reviewers and no required fixes. Independent dispositions retained the decoder-validity assertion and deferred a pre-existing helper-style nit; no verification or replacement review was needed. The style nit was rechecked at the merged commit and did not warrant a follow-up ticket. See the [PR review record](https://github.com/the-sarge/turn/pull/144).
 - Exact-head `task preflight` passed with a clean worktree at `30f658d6f5f780c376ad1231a19128eb13904567` against `cd8679c30c2e82af51daaba89da52b334867b406`, including race, dependency, cross-build, workflow, and secret checks. Post-ready [CI run 34986514865](https://github.com/the-sarge/turn/actions/runs/34986514865) and `ci-required` succeeded on that exact head before guarded squash merge.
+
+---
+
+## Conventions and lifecycle documentation landed - 2026-09-15 11:48 EDT
+
+**Main:** `e006caf45f63`
+**Actor:** Codex
+
+### Summary
+
+Merged [PR #146](https://github.com/the-sarge/turn/pull/146) as `e006caf`, completing [issue #131](https://github.com/the-sarge/turn/issues/131). Maintainers now have a six-dimension conventions guide, and lifecycle comments describe nonterminal Client close, queued-before-seal reads, and caller-owned socket interruption. Runtime behavior is unchanged.
+
+### Completed
+
+- Added the README-linked conventions guide with observed preferences, authoritative ADR links, sentinel exceptions, and explicit construction/activation exceptions.
+- Corrected the retry schedule prose, bind-attempt return description, relayed-address attribute names, and inclusive channel count. The channel comment distinguishes the correct arithmetic from RFC 5766's printed count while retaining the implemented range.
+- Updated the survey's now-stale fuzz-panic observation to match current require-based fuzz assertions. Already-corrected binding-count and permission-mutex comments were left intact.
+
+### Validation
+
+- Documentation and formatting gates, local guide links, public `go doc` rendering, and comment-only Go diff inspection passed.
+- RAS review `20260915T153030-b32beebce70229980483f29c` completed with all six reviewers and adjudicators. Three factual prose corrections were independently accepted; duplicate fuzz observations were consolidated. The shared documentation-polish exemption avoided another RAS cycle after static verification and lightweight checks. See the [disposition record](https://github.com/the-sarge/turn/pull/146#issuecomment-5683275109).
+- Full exact-head `task preflight` passed with a clean worktree at `04be847640e332719f677137cf92d99c63d5a0e3` against `6e4f2ddf95f154f8f61a57d5069d1aa7bf2450de`. The first attempt stopped at another local golangci-lint run's shared lock; after that run ended, the unchanged-head retry passed all lanes.
+- Post-ready [CI run 34990535889](https://github.com/the-sarge/turn/actions/runs/34990535889) and `ci-required` succeeded on the certified head before the guarded squash merge.
+- The deferred pre-existing short-buffer documentation suggestion was rechecked at merged commit `e006caf45f639698acd347eaab4494acb0d16fae`, `internal/client/udp_conn.go:203` and `allocation.go:52`. It remains outside the bounded lifecycle corrections and does not warrant a standalone follow-up ticket. No tracked follow-ups remain.
