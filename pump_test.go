@@ -17,8 +17,8 @@ import (
 // it reads datagrams from conn and feeds them to cl.HandleInbound until a
 // read fails (normally because the test closed the socket). Production
 // consumers own their read pump by contract; the fork's own tests use this
-// helper owns socket closure at cleanup and joins the pump before returning.
-// The returned stop may also be called by the parent test for earlier teardown.
+// helper. Cleanup closes the socket and joins the pump. The returned stop
+// performs the same cleanup and may be called by the parent for earlier teardown.
 func startTestPump(t *testing.T, cl *Client, conn net.PacketConn) func() {
 	t.Helper()
 
