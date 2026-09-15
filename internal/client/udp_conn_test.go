@@ -736,7 +736,7 @@ func TestUDPConn(t *testing.T) {
 		assert.True(t, final)
 		require.ErrorIs(t, readinessErr, errTryAgain)
 		var turnErr *stun.TurnError
-		assert.NotErrorAs(t, err, &turnErr, "438 retry exhaustion must not become a typed TURN error")
+		assert.NotErrorAs(t, readinessErr, &turnErr, "438 retry exhaustion must not become a typed TURN error")
 	})
 
 	t.Run("maybeBind() retries unknown binding after transaction failure", func(t *testing.T) {

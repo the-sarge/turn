@@ -28,7 +28,7 @@ func TestDontFragment(t *testing.T) {
 			decoded := new(stun.Message)
 			_, err := decoded.Write(stunMsg.Raw)
 			require.NoError(t, err)
-			assert.True(t, dontFrag.IsSet(stunMsg))
+			assert.True(t, dontFrag.IsSet(decoded))
 
 			allocated := wasAllocs(func() {
 				dontFrag.IsSet(stunMsg)
