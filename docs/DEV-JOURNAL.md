@@ -1072,3 +1072,25 @@ Annotated tag `v5.3.0-gs.1` published at `d353938` and resolving via the public 
 - The binding cleanup regression first timed out after 15 seconds with `UDPConn.Close` waiting on the gated worker, then passed after the fix. Focused cleanup, preparation, and prepared-write tests, `go test -race ./internal/client`, and `task lint` passed.
 - RAS review `20260915T035628-a5b3af4205d174fa4e196797` completed with all six reviewers and adjudicators successful. Two low suggestions (a permanent cleanup watchdog and enforcement against hypothetical future gate-construction misuse) were independently rejected as verification-aid strengthening beyond the accepted repair. No fix verification, replacement review, or deferred follow-up was required; the [PR review contract and dispositions](https://github.com/the-sarge/turn/pull/138) retain the evidence.
 - Full `task preflight` passed with a clean worktree at head `e55c13002a84bd8477ff183001d35e6083ffb197` against base `c0fdd431a68a2139484d6cd121472665a3ea24d4`. Post-ready [CI run 34927350458](https://github.com/the-sarge/turn/actions/runs/34927350458) and `ci-required` succeeded on that same head before the guarded squash merge.
+
+---
+
+## E2E delivery and test cleanup bounded - 2026-09-15 01:24 EDT
+
+**Main:** `4b021b48f698`
+**Actor:** Codex (GPT-6, planit)
+
+### Summary
+
+[PR #140](https://github.com/the-sarge/turn/pull/140) merged as `4b021b48f69880eefe53da4329b1a26bba0dcd60`, closing [issue #128](https://github.com/the-sarge/turn/issues/128). E2E delivery now has bounded progress, parent-test error reporting, and joined readers; test resources register cleanup at acquisition and the shared pump closes its socket and joins during cleanup.
+
+### Completed
+
+- Preserved bidirectional delivery of 25 matching payloads, 25 ms pacing, prepared ChannelData writes, and the existing short refresh intervals. Setup contexts and test-owned UDP write deadlines bound blocking work; failure closes transports before joining allocation workers.
+- Added deliberate no-delivery checks for both UDP and allocation reads, representative reader/writer/payload failures, and a pump cleanup regression. Changes are confined to root test files; all four existing pump call sites remain compatible.
+
+### Validation
+
+- The delivery-failure regression first failed for the missing helper; the pump regression first failed because cleanup returned before the reader exited. Both passed after implementation. Focused success/failure checks, ordinary tests, vet, lint, and the full race suite passed.
+- RAS review `20260915T050943-0edea8c237b82eed88c87c16` completed with six successful initial reviewers and zero required behavioral fixes. Two duplicate documentation findings were fixed in a comment-only commit; verification and replacement review were skipped under the shared documentation-only exemption. Optional terminal-event precedence and unsupported failure-probe traffic were independently rejected as beyond the approved example-level contract. No deferred findings remain; the [PR contract and disposition receipt](https://github.com/the-sarge/turn/pull/140) retain the details.
+- Full `task preflight` passed with a clean worktree at head `c6bd8006abd89f833ef98e119290abff37604a03` against base `d846c63161f411bc915682b4f6aadeb69abfe0df`, including race, dependency, platform, workflow, and secret checks. Post-ready [CI run 34932368232](https://github.com/the-sarge/turn/actions/runs/34932368232) and `ci-required` succeeded on that exact head before the guarded squash merge.
