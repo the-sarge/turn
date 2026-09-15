@@ -1,0 +1,34 @@
+name: Test the consumer Go floor
+description: Resolve go.mod with the validation toolchain, then test using the latest patch of its Go major/minor version.
+
+runs:
+  using: composite
+  steps:
+    - name: Set up validation toolchain
+      uses: ./.github/actions/setup-validation
+
+    - name: Resolve the consumer Go floor
+      id: go_floor
+      shell: bash
+      run: |
+        set -euo pipefail
+        floor_version="$(go list -m -f '{{.GoVersion}}')"
+        if [[ ! "$floor_version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+          echo "::error::Unexpected go.mod Go version: $floor_version"
+          exit 1
+        fi
+        IFS=. read -r floor_major floor_minor _ <<< "$floor_version"
+        printf 'version=%s.%s\n' "$floor_major" "$floor_minor" >> "$GITHUB_OUTPUT"
+
+    - name: Set up latest patch of the consumer Go floor
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version: ${{ steps.go_floor.outputs.version }}
+        check-latest: true
+        cache: false
+
+    - name: Test with the consumer Go floor
+      shell: bash
+      run: |
+        go version
+        GOTOOLCHAIN=local go test ./...

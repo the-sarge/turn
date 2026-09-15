@@ -14,8 +14,6 @@
 set -euo pipefail
 set -f # never pathname-expand the globs
 
-remote="${CI_REMOTE:-origin}"
-head="${CI_HEAD_SHA:-HEAD}"
 docs_globs="${CI_DOCS_GLOBS:-*.md docs/* DEV-JOURNAL.md LICENSE LICENSE.*}"
 
 emit() {
@@ -26,27 +24,14 @@ emit() {
   exit 0
 }
 
-default_branch="${CI_DEFAULT_BRANCH:-${GITHUB_BASE_REF:-}}"
-if test -z "$default_branch"; then
-  default_branch="$(git symbolic-ref -q --short "refs/remotes/$remote/HEAD" 2>/dev/null | sed "s#^$remote/##" || true)"
-  default_branch="${default_branch:-main}"
-fi
-
-base="${CI_BASE_SHA:-}"
-if test -z "$base"; then
-  if git rev-parse --verify -q "$remote/$default_branch^{commit}" >/dev/null; then
-    base="$(git merge-base "$remote/$default_branch" "$head" 2>/dev/null || true)"
-  elif git rev-parse --verify -q "$default_branch^{commit}" >/dev/null; then
-    base="$(git merge-base "$default_branch" "$head" 2>/dev/null || true)"
-  fi
-fi
-
-if test -z "$base" || ! git rev-parse --verify -q "$base^{commit}" >/dev/null || ! git rev-parse --verify -q "$head^{commit}" >/dev/null; then
+# shellcheck source=scripts/ci/commit-range.sh
+source "$(dirname -- "${BASH_SOURCE[0]}")/ci/commit-range.sh"
+if ! resolve_ci_range; then
   printf 'ci-classify: cannot determine a trustworthy base; failing closed\n' >&2
   emit false
 fi
 
-changed="$(git diff --name-only --no-renames "$base" "$head")"
+changed="$(git diff --name-only --no-renames "$CI_RANGE_BASE" "$CI_RANGE_HEAD")"
 if test -z "$changed"; then
   printf 'ci-classify: empty diff; failing closed\n' >&2
   emit false
