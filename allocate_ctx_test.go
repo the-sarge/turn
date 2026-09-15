@@ -29,13 +29,13 @@ import (
 // must never make on a caller-owned socket. An optional gate blocks the Nth
 // and later writes, modeling a retransmit write stuck in caller-socket I/O.
 type observerConn struct {
-	deadlineCalls atomic.Int32
-	closeCalls    atomic.Int32
-	writeCount    atomic.Int32
-	localAddr     net.Addr
-	blockFrom     int32         // 1-based write ordinal at which writes block; 0 = never
-	gate          chan struct{} // Closed to release blocked writes
-	blocked       chan struct{} // Signaled once a write is blocked on the gate
+	deadlineCalls  atomic.Int32
+	closeCalls     atomic.Int32
+	admittedWrites atomic.Int32 // Write entry, before gating or recording.
+	localAddr      net.Addr
+	blockFrom      int32         // 1-based write ordinal at which writes block; 0 = never
+	gate           chan struct{} // Closed to release blocked writes
+	blocked        chan struct{} // Signaled once a write is blocked on the gate
 
 	mu           sync.Mutex
 	writes       [][]byte
@@ -51,7 +51,7 @@ func newObserverConn() *observerConn {
 }
 
 func (o *observerConn) WriteTo(p []byte, to net.Addr) (int, error) {
-	n := o.writeCount.Add(1)
+	n := o.admittedWrites.Add(1)
 	if o.blockFrom > 0 && n >= o.blockFrom {
 		o.blocked <- struct{}{}
 		<-o.gate
@@ -62,6 +62,15 @@ func (o *observerConn) WriteTo(p []byte, to net.Addr) (int, error) {
 	o.mu.Unlock()
 
 	return len(p), nil
+}
+
+// recordedCount observes entries only after both bytes and destination are stored.
+// Entries are append-only, so an observed index remains available to readers.
+func (o *observerConn) recordedCount() int32 {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	return int32(len(o.writes)) //nolint:gosec // Test recordings are bounded well below int32 capacity.
 }
 
 func (o *observerConn) destination(i int) string {
@@ -207,7 +216,7 @@ func awaitWrite(t *testing.T, conn *observerConn, n int32) []byte {
 	t.Helper()
 
 	require.Eventually(t, func() bool {
-		return conn.writeCount.Load() >= n
+		return conn.recordedCount() >= n
 	}, 5*time.Second, 5*time.Millisecond, "request %d never left the socket", n)
 
 	return conn.write(int(n - 1))
@@ -221,7 +230,7 @@ func awaitRequestAfter(t *testing.T, conn *observerConn, from int32, excludeID [
 
 	var raw []byte
 	require.Eventually(t, func() bool {
-		count := conn.writeCount.Load()
+		count := conn.recordedCount()
 		for i := from; i < count; i++ {
 			candidate := conn.write(int(i))
 			if candidate == nil {
@@ -467,7 +476,7 @@ func TestAllocateRejectsConcurrentCallerWithoutNetworkOutput(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		require.Fail(t, "concurrent Allocate did not reject promptly")
 	}
-	assert.Equal(t, int32(1), conn.writeCount.Load(), "rejected concurrent Allocate must not write")
+	assert.Equal(t, int32(1), conn.admittedWrites.Load(), "rejected concurrent Allocate must not write")
 
 	cause := errors.New("finish first Allocate") //nolint:err113 // test-local cause
 	cancelFirst(cause)
@@ -479,11 +488,9 @@ func TestAllocateRejectsConcurrentCallerWithoutNetworkOutput(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		require.Fail(t, "first Allocate did not return after cancellation")
 	}
-	require.Eventually(t, func() bool {
-		return conn.write(0) != nil
-	}, time.Second, 5*time.Millisecond, "released first write did not finish recording")
+	awaitWrite(t, conn, 1)
 
-	writesBeforeRetry := conn.writeCount.Load()
+	writesBeforeRetry := conn.recordedCount()
 	retryResult := startObservedAllocate(cl, context.Background())
 	retry := completeObservedAllocate(t, cl, conn, writesBeforeRetry+1, retryResult)
 	require.NoError(t, retry.Close())
@@ -496,14 +503,14 @@ func TestAllocateRejectsLiveAllocationAndAllowsAllocateAfterClose(t *testing.T) 
 	firstResult := startObservedAllocate(cl, context.Background())
 	first := completeObservedAllocate(t, cl, conn, 1, firstResult)
 
-	writesBeforeReject := conn.writeCount.Load()
+	writesBeforeReject := conn.admittedWrites.Load()
 	rejected, err := cl.Allocate(context.Background())
 	assert.Nil(t, rejected)
 	assert.Equal(t, ErrAlreadyAllocated, err)
-	assert.Equal(t, writesBeforeReject, conn.writeCount.Load(), "rejected live Allocate must not write")
+	assert.Equal(t, writesBeforeReject, conn.admittedWrites.Load(), "rejected live Allocate must not write")
 
 	require.NoError(t, first.Close())
-	writesBeforeRetry := conn.writeCount.Load()
+	writesBeforeRetry := conn.recordedCount()
 	retryResult := startObservedAllocate(cl, context.Background())
 	retry := completeObservedAllocate(t, cl, conn, writesBeforeRetry+1, retryResult)
 	require.NoError(t, retry.Close())
@@ -554,7 +561,7 @@ func TestAllocateContext(t *testing.T) {
 		alloc, err := cl.Allocate(ctx)
 		assert.Nil(t, alloc)
 		require.ErrorIs(t, err, cause)
-		assert.Equal(t, int32(0), conn.writeCount.Load(), "canceled-before-send Allocate must not write")
+		assert.Equal(t, int32(0), conn.admittedWrites.Load(), "canceled-before-send Allocate must not write")
 		assert.Equal(t, int32(0), conn.deadlineCalls.Load(), "the fork must never deadline the caller's socket")
 		assert.Equal(t, int32(0), conn.closeCalls.Load(), "the fork must never close the caller's socket")
 	})
@@ -689,12 +696,12 @@ func TestAllocateCancelDuringBlockedRetransmit(t *testing.T) {
 	// Release the blocked write: it must complete without re-arming the timer
 	// and without a further send.
 	close(conn.gate)
-	assert.Eventually(t, func() bool {
-		return conn.writeCount.Load() == 2
-	}, time.Second, 5*time.Millisecond, "released retransmit write did not complete")
+	awaitWrite(t, conn, 2)
 	time.Sleep(300 * time.Millisecond) // Several RTOs: a re-armed timer would have fired.
-	assert.Equal(t, int32(2), conn.writeCount.Load(),
+	assert.Equal(t, int32(2), conn.admittedWrites.Load(),
 		"a retransmit completing after cancellation must not re-arm or send again")
+	assert.Zero(t, conn.deadlineCalls.Load(), "the fork must never deadline the caller's socket")
+	assert.Zero(t, conn.closeCalls.Load(), "the fork must never close the caller's socket")
 }
 
 func TestAllocateCancelProducerRace(t *testing.T) {
@@ -790,7 +797,7 @@ func TestAllocateCancelVsClientClose(t *testing.T) {
 		assert.Fail(t, "Allocate did not return after Client.Close")
 	}
 
-	writesBeforeRetry := conn.writeCount.Load()
+	writesBeforeRetry := conn.recordedCount()
 	retryResult := startObservedAllocate(cl, context.Background())
 	retry := completeObservedAllocate(t, cl, conn, writesBeforeRetry+1, retryResult)
 	require.NoError(t, retry.Close())
@@ -834,7 +841,7 @@ func TestAllocateLateSuccessDiscarded(t *testing.T) {
 
 	// Documented consequence: the orphaned server-side allocation can answer a
 	// same-Conn retry with 437 Allocation Mismatch, which surfaces as a value.
-	writesBefore := conn.writeCount.Load()
+	writesBefore := conn.recordedCount()
 	retryResult := make(chan error, 1)
 	go func() {
 		_, err := cl.Allocate(context.Background())

@@ -70,7 +70,7 @@ func awaitNewRefresh(
 
 	var raw []byte
 	require.Eventually(t, func() bool {
-		for i := range conn.writeCount.Load() {
+		for i := range conn.recordedCount() {
 			candidate := conn.write(int(i))
 			if candidate == nil {
 				continue
@@ -101,7 +101,7 @@ func scanMethodTransactions(
 ) (map[[stun.TransactionIDSize]byte]struct{}, bool) {
 	transactions := make(map[[stun.TransactionIDSize]byte]struct{})
 	malformed := false
-	for i := range conn.writeCount.Load() {
+	for i := range conn.recordedCount() {
 		raw := conn.write(int(i))
 		if raw == nil {
 			continue

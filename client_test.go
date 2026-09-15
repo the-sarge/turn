@@ -455,7 +455,7 @@ func TestClientCloseWinsBlockedInitialSendWithoutRearm(t *testing.T) {
 		assert.Fail(t, "Client.Close did not wake the blocked begin caller")
 	}
 	time.Sleep(100 * time.Millisecond)
-	assert.Equal(t, int32(1), conn.writeCount.Load(), "a closed initial send must not arm a timer")
+	assert.Equal(t, int32(1), conn.admittedWrites.Load(), "a closed initial send must not arm a timer")
 }
 
 // Create an allocation, and then invalidate the server's nonce.
