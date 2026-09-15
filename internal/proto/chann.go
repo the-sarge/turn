@@ -53,7 +53,7 @@ func (n *ChannelNumber) GetFrom(m *stun.Message) error {
 // See https://tools.ietf.org/html/rfc5766#section-11:
 //
 // 0x4000 through 0x7FFF: These values are the allowed channel
-// numbers (16,383 possible values).
+// numbers (16,384 possible values).
 const (
 	MinChannelNumber = 0x4000
 	MaxChannelNumber = 0x7FFF

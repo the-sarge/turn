@@ -24,16 +24,6 @@ const (
 	maxDataBufferSize = math.MaxUint16 // Message size limit for Chromium
 )
 
-//              interval [msec]
-// 0: 0 ms      +500
-// 1: 500 ms	+1000
-// 2: 1500 ms   +2000
-// 3: 3500 ms   +4000
-// 4: 7500 ms   +8000
-// 5: 15500 ms  +16000
-// 6: 31500 ms  +32000
-// -: 63500 ms  failed
-
 // ClientConfig is a bag of config parameters for Client.
 type ClientConfig struct {
 	// Server is the TURN server's transport address. It must already be
@@ -133,9 +123,11 @@ func (c *Client) sendToServer(data []byte) (int, error) {
 	return c.conn.WriteTo(data, c.serverAddr)
 }
 
-// Close closes this client: every pending transaction is closed and its
-// waiter woken with an error wrapping net.ErrClosed. Close is idempotent and
-// never touches the caller-owned socket.
+// Close aborts the transactions live at the time of the call, waking their
+// waiters with an error wrapping net.ErrClosed. It does not permanently close
+// the Client: transactions begun after the abort remain possible. Close does
+// not directly seal or join an Allocation; use Allocation.Close for that.
+// It never closes, deadlines, or interrupts I/O on the caller-owned socket.
 func (c *Client) Close() {
 	c.transactions.AbortCurrent()
 }

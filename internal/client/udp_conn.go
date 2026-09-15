@@ -392,8 +392,8 @@ func (c *UDPConn) awaitBinding(ctx context.Context, bound *binding) error {
 }
 
 // startBindAttemptLocked starts a tracked bind attempt if the binding state
-// calls for one. It requires bound.muBind to be held and returns the channel
-// that closes when the attempt completes, or nil if no attempt was started.
+// calls for one. It requires bound.muBind to be held and returns the attempt
+// handle, whose done channel closes on completion, or nil if none was started.
 func (c *UDPConn) startBindAttemptLocked(bound *binding, now time.Time) *bindingAttempt {
 	if !c.addWorker() {
 		return nil
@@ -476,7 +476,9 @@ func (c *UDPConn) WriteTo(payload []byte, addr netip.AddrPort) (int, error) {
 }
 
 // Close closes the connection.
-// Any blocked ReadFrom or WriteTo operations will be unblocked and return errors.
+// Sealing wakes blocked ReadFrom calls; data queued before sealing may still
+// be returned, with no priority between queued data and closure. A WriteTo
+// already blocked on the base socket requires caller-owned I/O interruption.
 // Close returns only after allocation-owned goroutines (refresh timers and
 // bind/permission workers) have finished. It never closes or sets deadlines on
 // the caller-owned base socket, so a worker blocked on that socket is joined

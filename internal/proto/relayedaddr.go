@@ -24,12 +24,12 @@ func (a RelayedAddress) String() string {
 	return stun.XORMappedAddress(a).String()
 }
 
-// AddTo adds XOR-PEER-ADDRESS to message.
+// AddTo adds XOR-RELAYED-ADDRESS to message.
 func (a RelayedAddress) AddTo(m *stun.Message) error {
 	return stun.XORMappedAddress(a).AddToAs(m, stun.AttrXORRelayedAddress)
 }
 
-// GetFrom decodes XOR-PEER-ADDRESS from message.
+// GetFrom decodes XOR-RELAYED-ADDRESS from message.
 func (a *RelayedAddress) GetFrom(m *stun.Message) error {
 	return (*stun.XORMappedAddress)(a).GetFromAs(m, stun.AttrXORRelayedAddress)
 }

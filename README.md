@@ -20,6 +20,8 @@ The exported `turntest` package is a fork-owned, in-process scripted TURN respon
 
 ## Development
 
+See the [conventions guide](docs/conventions.md) for observed preferences and the ADRs that define required contracts.
+
 Run the ordinary local gate with `task verify` and the complete exact-head certification with `task preflight`.
 
 Validation tool versions in `scripts/tool-versions.env` are owned by the repository maintainers. Review those pins weekly alongside the dependency-update queue and before every release, updating one tool family at a time. Tools invoked by `task check` must support the consumer-facing Go version in `go.mod` because required CI installs that version; validate affected pin changes by running `task check` under that Go version with `GOTOOLCHAIN=local`, then run `task preflight` under the validation Go pin. The validation Go pin may advance independently of the consumer-facing `go` directive; raising that directive remains an explicit release decision.
