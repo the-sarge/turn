@@ -1050,3 +1050,25 @@ Annotated tag `v5.3.0-gs.1` published at `d353938` and resolving via the public 
 - Both recording-wait cases failed on the original helper with nil bytes and empty destinations, then passed after the fix. Focused observer/cancellation/refresh tests, `go test -race . -count=1`, and `task verify` passed.
 - RAS review `20260915T033057-0e8ec7b230f2d8b43468bf33` completed with all six reviewers and adjudicators successful. The sole low finding, optional nil-guard cleanup, was independently rejected as outside the accepted repair; no fix verification, replacement review, or deferred follow-up was needed. [Disposition and certification receipt](https://github.com/the-sarge/turn/pull/136#issuecomment-5674386964).
 - Full `task preflight` passed with a clean worktree at head `d6a15232ca3f5d652385c5b2699b9bc7b5276655` against base `ba4ec6934f15fcf3286360d3623451d5eef79282`. Post-ready [CI run 34925963539](https://github.com/the-sarge/turn/actions/runs/34925963539) and `ci-required` succeeded on that same head before squash merge.
+
+---
+
+## Preparation harness cleanup repaired - 2026-09-15 00:06 EDT
+
+**Main:** `a81be7d4e594`
+**Actor:** Codex (GPT-6, planit)
+
+### Summary
+
+[PR #138](https://github.com/the-sarge/turn/pull/138) merged as `a81be7d4e594966e2ce79d49bf40cd96984b1999`, closing [issue #127](https://github.com/the-sarge/turn/issues/127). Preparation tests now release scripted gates before connection cleanup joins workers, so early prerequisite failures can terminate cleanly.
+
+### Completed
+
+- Added a test-local gate with idempotent release shared by test code and cleanup. Permission, binding, and ad hoc attempt gates register cleanup after connection cleanup and before workers start, preserving explicit gate control during assertions.
+- Added early-return cleanup regressions for the three gate uses and repeated manual release followed by cleanup. Changes are confined to `internal/client/prepare_test.go`; production lifecycle behavior remains unchanged.
+
+### Validation
+
+- The binding cleanup regression first timed out after 15 seconds with `UDPConn.Close` waiting on the gated worker, then passed after the fix. Focused cleanup, preparation, and prepared-write tests, `go test -race ./internal/client`, and `task lint` passed.
+- RAS review `20260915T035628-a5b3af4205d174fa4e196797` completed with all six reviewers and adjudicators successful. Two low suggestions (a permanent cleanup watchdog and enforcement against hypothetical future gate-construction misuse) were independently rejected as verification-aid strengthening beyond the accepted repair. No fix verification, replacement review, or deferred follow-up was required; the [PR review contract and dispositions](https://github.com/the-sarge/turn/pull/138) retain the evidence.
+- Full `task preflight` passed with a clean worktree at head `e55c13002a84bd8477ff183001d35e6083ffb197` against base `c0fdd431a68a2139484d6cd121472665a3ea24d4`. Post-ready [CI run 34927350458](https://github.com/the-sarge/turn/actions/runs/34927350458) and `ci-required` succeeded on that same head before the guarded squash merge.
