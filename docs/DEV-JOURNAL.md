@@ -1190,3 +1190,29 @@ Merged [PR #148](https://github.com/the-sarge/turn/pull/148) as `5021ca4`, compl
 - `task verify` and full exact-head `task preflight` passed with a clean worktree at `750abbffd527395df8f6ad5c705fe2de7db7322c` against `135cf133eaa04eb7d009e720f9d2ea87e6e177dd`, including race, dependency, cross-build, workflow, and secret checks.
 - RAS review `20260915T160450-5b43ec230735948c405c203e` completed with six successful initial reviewers and zero findings. No fixes, verification, replacement review, or deferred follow-ups were required. The [PR contract and validation record](https://github.com/the-sarge/turn/pull/148) retains the bounded scope and receipts.
 - Post-ready [CI run 34993407878](https://github.com/the-sarge/turn/actions/runs/34993407878) and `ci-required` succeeded on the certified head before the guarded squash merge.
+
+---
+
+## CI policy ownership consolidation landed - 2026-09-15 12:49 EDT
+
+**Main:** `208c37b87cef`
+**Actor:** Codex (planit)
+
+### Summary
+
+Merged [PR #150](https://github.com/the-sarge/turn/pull/150) as `208c37b`, completing [issue #133](https://github.com/the-sarge/turn/issues/133). Commit-range resolution, consumer-floor validation, and deep-check orchestration now each have one owner. Runtime Go behavior is unchanged.
+
+### Completed
+
+- Shared Git range resolution between the classifier and docs lane while preserving explicit-endpoint versus merge-base comparison, environment precedence, and their different failure policies. Added 20 real-Git behavior cases to workflow validation; the divergent fixture distinguishes both comparison policies.
+- Extracted consumer-floor setup and tests into a composite action used by the existing independent release and deep-check jobs. Added its Dependabot directory and corrected the validation action's Go-version description.
+- Added `task deep-check` for the six shared validation lanes. Preflight retains secret scanning and exact-head receipts; required CI and release-gate behavior remain unchanged.
+- Added [CI configuration ownership](../docs/ci-maintenance.md), documenting action-pin equality groups, lint config/hash pairing, and unconfirmed external consumers of inherited release/coverage settings. Retained inherited configuration, tool pins, and historical secret-scan fingerprints.
+
+### Validation
+
+- All 20 shell cases passed against both the original and extracted scripts, including after the fixture refinement. ShellCheck, Bash syntax, actionlint, parsed composite-step comparison, pin-family equality, and Task command-order comparisons passed.
+- Consumer-floor `task check` passed on Go 1.27.1, which also matches the validation pin. `task release-gate` passed, including three 30-second fuzz runs.
+- Initial RAS review `20260915T162625-3d27fb421879105d12af2684` had six successful reviewers. The accepted docs merge-base fixture finding was fixed and verified at `e946558b7e5762674b072626ec9faa7e8c887e4d`. Replacement review `20260915T164103-87d0adcb87e098ab429f41d5` produced no findings with four successful reviewers; two Claude processes failed, and the run still met its configured quorum. [Review dispositions](https://github.com/the-sarge/turn/pull/150#issuecomment-5684128083) and [verification](https://github.com/the-sarge/turn/pull/150#issuecomment-5684219353) retain the evidence and limitations.
+- Full exact-head `task preflight` passed with a clean worktree at `e946558b7e5762674b072626ec9faa7e8c887e4d` against `308408e027173c6c7420c104c1dbaebe65380ea4`. Post-ready [CI run 34997081904](https://github.com/the-sarge/turn/actions/runs/34997081904) and `ci-required` succeeded on that same head before the guarded squash merge.
+- Deferred classifier-diagnostic polish and disconnected-case refinement were rechecked against merged `208c37b87cef1adbf760c4e5a2a8297e53ad45aa`, `scripts/ci/tests/range.sh:50` and `:75`. They remain optional improvements to the bounded verification aid and do not warrant standalone tickets. No tracked follow-ups remain.
