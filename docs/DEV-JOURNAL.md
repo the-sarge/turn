@@ -1216,3 +1216,29 @@ Merged [PR #150](https://github.com/the-sarge/turn/pull/150) as `208c37b`, compl
 - Initial RAS review `20260915T162625-3d27fb421879105d12af2684` had six successful reviewers. The accepted docs merge-base fixture finding was fixed and verified at `e946558b7e5762674b072626ec9faa7e8c887e4d`. Replacement review `20260915T164103-87d0adcb87e098ab429f41d5` produced no findings with four successful reviewers; two Claude processes failed, and the run still met its configured quorum. [Review dispositions](https://github.com/the-sarge/turn/pull/150#issuecomment-5684128083) and [verification](https://github.com/the-sarge/turn/pull/150#issuecomment-5684219353) retain the evidence and limitations.
 - Full exact-head `task preflight` passed with a clean worktree at `e946558b7e5762674b072626ec9faa7e8c887e4d` against `308408e027173c6c7420c104c1dbaebe65380ea4`. Post-ready [CI run 34997081904](https://github.com/the-sarge/turn/actions/runs/34997081904) and `ci-required` succeeded on that same head before the guarded squash merge.
 - Deferred classifier-diagnostic polish and disconnected-case refinement were rechecked against merged `208c37b87cef1adbf760c4e5a2a8297e53ad45aa`, `scripts/ci/tests/range.sh:50` and `:75`. They remain optional improvements to the bounded verification aid and do not warrant standalone tickets. No tracked follow-ups remain.
+
+---
+
+## Release v5.3.1 - 2026-09-15 13:29 EDT
+
+**Main:** `3207a1c5a627`
+**Actor:** Codex
+
+### Summary
+
+Published [v5.3.1](https://github.com/the-sarge/turn/releases/tag/v5.3.1) at `3207a1c5a6273161133c288bb9e5e6414eb5b464`, the first owned-library plain-semver release after `v5.3.0-gs.1`. [PR #152](https://github.com/the-sarge/turn/pull/152) merged the changelog, README install pin, and source-only release runbook before tagging.
+
+### Completed
+
+- Released the `turntest` live-permission delivery fix, dependency updates, test synchronization and cleanup repairs, lifecycle comment corrections, and CI ownership consolidation. There are no public API additions or removals and no direct production TURN-client logic changes; dependency changes are included. The consumer Go floor remains 1.27.
+- Created and pushed an annotated, immutable tag reachable from `main`. Published the GitHub Release only after all tag checks passed. Release notes identify Linux/amd64 and Darwin/arm64 as tested and Darwin/amd64 and Windows/amd64 as cross-build-only; this source-only library has no binary or checksum assets.
+
+### Decisions
+
+- The owner approved `v5.3.1` as a maintenance release, applying the accepted [plain-semver decision](adr/2026-08-20-plain-semver-tags.md). Published historical tags remain unchanged.
+
+### Validation
+
+- A clean dedicated feature-branch worktree passed `task release-gate`, `task workflow-check`, and `task secret-scan` at the exact tagged commit with Go 1.27.1 on Darwin/arm64. Validation included lint, ordinary and race tests, dependency checks, cross-builds, three 30-second fuzz runs, 20 CI range cases, and a full-history secret scan. The installed Command Line Tools were selected via `DEVELOPER_DIR` after the default Xcode selection rejected compilation because its license was unaccepted.
+- [Release checks run 35000891901](https://github.com/the-sarge/turn/actions/runs/35000891901) passed the Linux release gate, consumer Go-floor tests, and secret scan at `3207a1c5a6273161133c288bb9e5e6414eb5b464`. The preparation PR's [required CI](https://github.com/the-sarge/turn/actions/runs/35000526759) also passed before merge.
+- Explicit `@v5.3.1` and `@latest` queries both resolved to `v5.3.1` through `https://proxy.golang.org` with `GONOPROXY=none` and `GONOSUMDB=none`. Module download succeeded with `GOSUMDB=sum.golang.org`, origin commit `3207a1c5a6273161133c288bb9e5e6414eb5b464`, module checksum `h1:qK5B0XB2No+XZnEdQzK1ZewphECxkIt9U9UBB6Oq0pc=`, and go.mod checksum `h1:kaeJXMb067JGhAAxjph40CY5Du5Kxi7t1A8Qx/ypbfo=`. This resolves the previously documented inherited-tag `@latest` problem.
