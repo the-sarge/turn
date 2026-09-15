@@ -31,16 +31,21 @@ tasks:
   preflight:
     desc: Full local exact-head certification (core, docs, race, dependency, platform, workflow, secrets), then print the head/base receipt.
     cmds:
+      - task: deep-check
+      - task: secret-scan
+      - git status --short --branch
+      - git log -1 --format='preflight head %H'
+      - git rev-parse --verify '{{.BASE_REF | default "origin/main"}}' | sed 's/^/preflight base /'
+
+  deep-check:
+    desc: Shared portable deep validation for scheduled checks and local certification.
+    cmds:
       - task: check
       - task: docs-check
       - task: race
       - task: dependency-gate
       - task: platform-check
       - task: workflow-check
-      - task: secret-scan
-      - git status --short --branch
-      - git log -1 --format='preflight head %H'
-      - git rev-parse --verify '{{.BASE_REF | default "origin/main"}}' | sed 's/^/preflight base /'
 
   verify:
     desc: Core lane plus docs lane; the ordinary local development gate.
@@ -125,11 +130,12 @@ tasks:
       - GOOS=windows GOARCH=amd64 CGO_ENABLED=0 {{.GO}} build ./...
 
   workflow-check:
-    desc: Validate GitHub Actions syntax.
+    desc: Validate GitHub Actions syntax and CI range behavior.
     env:
       GOTOOLCHAIN: local
     cmds:
       - go run {{.ACTIONLINT_PKG}}@{{.ACTIONLINT_VERSION}}
+      - bash scripts/ci/tests/range.sh
 
   secret-scan:
     desc: Scan a selected commit range (CI_BASE_SHA..CI_HEAD_SHA), or the complete repository history, for secrets.

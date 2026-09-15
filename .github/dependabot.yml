@@ -16,11 +16,11 @@ updates:
           - '*'
 
   - package-ecosystem: github-actions
-    # "/" covers .github/workflows; the second entry covers the nested
-    # composite action manifest, which the root directory does not scan.
+    # "/" covers .github/workflows; explicitly include nested composite actions.
     directories:
       - /
       - /.github/actions/setup-validation
+      - /.github/actions/consumer-floor
     schedule:
       interval: weekly
       day: tuesday

@@ -1,5 +1,5 @@
 name: Set up validation toolchain
-description: Install the go.mod Go version, report its environment, and export pinned validation tool versions.
+description: Install the pinned validation Go version, report its environment, and export pinned validation tool versions.
 
 inputs:
   install-task:
