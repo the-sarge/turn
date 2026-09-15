@@ -1005,3 +1005,25 @@ Annotated tag `v5.3.0-gs.1` published at `d353938` and resolving via the public 
 **Next**
 
 - [#116](https://github.com/the-sarge/turn/issues/116) (workflow-to-Taskfile token check) is the only open repository issue; wiremux adoption of `v5.3.0-gs.1` with its Go 1.27 bump is consumer-side. No architecture program has an open frontier; M2 stays gated. OmniFocus project "turn" is the live view.
+
+---
+
+## Fixture permission expiry enforced - 2026-09-14 22:40 EDT
+
+**Main:** `72137c2000ef`
+**Actor:** Codex (GPT-6, planit)
+
+### Summary
+
+[PR #134](https://github.com/the-sarge/turn/pull/134) merged as `72137c2000efb17e5624cf90471f02c71da3e8ef`, closing [issue #125](https://github.com/the-sarge/turn/issues/125). The turntest fixture now checks live permission before choosing ChannelData or a Data indication, so a live channel binding cannot bypass permission expiry.
+
+### Completed
+
+- Added controlled-state regressions for expired permission before sweep, removed permission after sweep with a surviving binding, live permission with live/expired/absent bindings, and ChannelBind renewing permission with configured lifetimes and restored delivery.
+- Preserved the fixture's example-level verification scope and documented that E2E traffic does not independently establish CreatePermission refresh, since ChannelBind also renews permission.
+
+### Validation
+
+- The expired-permission/live-binding regression failed on the original code with an emitted ChannelData packet, then passed with the permission guard. Focused fixture cases, `go test ./turntest -count=1`, affected real-client E2E and nonce-expiration tests, and `task verify` passed.
+- RAS review `20260915T023432-8f3c46e8503a7f596c6c898a` completed with six successful reviewers and zero findings. No fix verification or deferred follow-ups were required.
+- `task preflight` passed with a clean worktree at head `3d88cdbb306c95c163fb8a01873e9343647abcd1` against base `4ebf3b0fe39443d479a7b659a8f44d9449e15bf7`, including race, dependency, platform, workflow, and secret checks. Post-ready [CI run 34921899087](https://github.com/the-sarge/turn/actions/runs/34921899087) and `ci-required` succeeded on that exact head before squash merge.
