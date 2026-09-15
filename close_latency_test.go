@@ -10,6 +10,7 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,10 +21,34 @@ import (
 	"github.com/the-sarge/turn/v5/internal/client"
 )
 
+// permissionWaitContext signals after PreparePeer captures its permission
+// attempt and evaluates the cancellation operand of its wait. The silent
+// server cannot complete that attempt before this test closes the allocation.
+type permissionWaitContext struct {
+	context.Context
+	joined chan struct{}
+	once   sync.Once
+}
+
+func (ctx *permissionWaitContext) Done() <-chan struct{} {
+	ctx.once.Do(func() { close(ctx.joined) })
+
+	return ctx.Context.Done()
+}
+
+func awaitPermissionJoin(t *testing.T, ctx *permissionWaitContext) {
+	t.Helper()
+	select {
+	case <-ctx.joined:
+	case <-time.After(time.Second):
+		t.Fatal("PreparePeer did not join the permission attempt")
+	}
+}
+
 // newSilentServerAllocation builds a UDP allocation whose transactions go to a
 // server that never responds, driving the real transaction/retransmission
 // machinery. Its abort adapter mirrors the wiring Allocate performs.
-func newSilentServerAllocation(t *testing.T) (*client.UDPConn, <-chan string) {
+func newSilentServerAllocation(t *testing.T) (*client.UDPConn, <-chan string, net.PacketConn) {
 	t.Helper()
 
 	var listenConfig net.ListenConfig
@@ -76,24 +101,34 @@ func newSilentServerAllocation(t *testing.T) (*client.UDPConn, <-chan string) {
 		_ = serverSock.Close()
 	})
 
-	return conn, closeOrder
+	return conn, closeOrder, serverSock
 }
 
 func TestCloseInterruptsTransactionWaits(t *testing.T) {
 	peer := netip.MustParseAddrPort("127.0.0.1:1234")
 
 	t.Run("with abort Close returns promptly and cancellation stays waiter-local", func(t *testing.T) {
-		conn, closeOrder := newSilentServerAllocation(t)
+		conn, closeOrder, serverSock := newSilentServerAllocation(t)
 
+		ctxA := &permissionWaitContext{Context: context.Background(), joined: make(chan struct{})}
 		resultA := make(chan error, 1)
-		go func() { resultA <- conn.PreparePeer(context.Background(), peer) }()
+		go func() { resultA <- conn.PreparePeer(ctxA, peer) }()
 
 		ctxB, cancelB := context.WithCancelCause(context.Background())
 		defer cancelB(nil)
+		observedB := &permissionWaitContext{Context: ctxB, joined: make(chan struct{})}
 		resultB := make(chan error, 1)
-		go func() { resultB <- conn.PreparePeer(ctxB, peer) }()
+		go func() { resultB <- conn.PreparePeer(observedB, peer) }()
 
-		time.Sleep(150 * time.Millisecond) // Let the CreatePermission transaction get in flight
+		awaitPermissionJoin(t, ctxA)
+		awaitPermissionJoin(t, observedB)
+		require.NoError(t, serverSock.SetReadDeadline(time.Now().Add(time.Second)))
+		packet := make([]byte, 2048)
+		n, _, err := serverSock.ReadFrom(packet)
+		require.NoError(t, err)
+		request := &stun.Message{Raw: packet[:n]}
+		require.NoError(t, request.Decode())
+		require.Equal(t, stun.NewType(stun.MethodCreatePermission, stun.ClassRequest), request.Type)
 
 		// Canceling one waiter must not abort the shared transaction work.
 		cause := errors.New("waiter B gave up") //nolint:err113 // test-local cause
@@ -107,8 +142,10 @@ func TestCloseInterruptsTransactionWaits(t *testing.T) {
 		select {
 		case err := <-resultA:
 			assert.Failf(t, "surviving waiter finished early", "err: %v", err)
-		case <-time.After(200 * time.Millisecond):
+		default:
 		}
+
+		require.Empty(t, closeOrder, "waiter cancellation must not abort or deallocate shared work")
 
 		start := time.Now()
 		require.NoError(t, conn.Close())
