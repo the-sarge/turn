@@ -502,6 +502,8 @@ func TestClientNonceExpiration(t *testing.T) {
 // the removed upstream fixture and now run against turntest: after
 // PreparePeer, every outbound relayed datagram travels as ChannelData over the
 // confirmed binding, and inbound relayed datagrams are delivered to ReadFrom.
+// ChannelBind also refreshes permission, so this test does not independently
+// demonstrate CreatePermission refresh.
 func TestClientE2E(t *testing.T) {
 	server, err := turntest.New(turntest.Options{
 		Realm:              "pion.ly",
