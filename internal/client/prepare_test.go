@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -20,6 +21,27 @@ import (
 	"github.com/the-sarge/turn/v5/internal/proto"
 )
 
+// prepareGate lets the test and its cleanup share release ownership.
+type prepareGate struct {
+	done    <-chan struct{}
+	release func()
+}
+
+// Register after connection cleanup and before starting the gated worker:
+// testing runs cleanups in reverse order, so release precedes Close's join.
+func newPrepareGate(t *testing.T) *prepareGate {
+	t.Helper()
+
+	done := make(chan struct{})
+	gate := &prepareGate{
+		done:    done,
+		release: sync.OnceFunc(func() { close(done) }),
+	}
+	t.Cleanup(gate.release)
+
+	return gate
+}
+
 // prepareHarness drives a NewUDPConn against a scripted mock TURN server.
 type prepareHarness struct {
 	conn       *UDPConn
@@ -27,10 +49,10 @@ type prepareHarness struct {
 	peer       netip.AddrPort
 	permCount  atomic.Int32
 	bindCount  atomic.Int32
-	bindGate   chan struct{} // If non-nil, ChannelBind transactions block on it
-	permGate   chan struct{} // If non-nil, CreatePermission transactions block on it
-	failPerms  atomic.Bool   // If set, CreatePermission transactions return 403
-	staleNonce atomic.Bool   // If set, CreatePermission transactions return 438
+	bindGate   *prepareGate // If non-nil, ChannelBind transactions block on it
+	permGate   *prepareGate // If non-nil, CreatePermission transactions block on it
+	failPerms  atomic.Bool  // If set, CreatePermission transactions return 403
+	staleNonce atomic.Bool  // If set, CreatePermission transactions return 438
 }
 
 func newPrepareHarness(t *testing.T, gateBinds bool) *prepareHarness {
@@ -39,17 +61,13 @@ func newPrepareHarness(t *testing.T, gateBinds bool) *prepareHarness {
 	harness := &prepareHarness{
 		peer: netip.MustParseAddrPort("127.0.0.1:1234"),
 	}
-	if gateBinds {
-		harness.bindGate = make(chan struct{})
-	}
-
 	script := &testConnScript{
 		performTransaction: func(msg *stun.Message) (*stun.Message, error) {
 			switch msg.Type.Method {
 			case stun.MethodCreatePermission:
 				harness.permCount.Add(1)
 				if harness.permGate != nil {
-					<-harness.permGate
+					<-harness.permGate.done
 				}
 				if harness.failPerms.Load() {
 					return stun.MustBuild(
@@ -71,7 +89,7 @@ func newPrepareHarness(t *testing.T, gateBinds bool) *prepareHarness {
 			case stun.MethodChannelBind:
 				harness.bindCount.Add(1)
 				if harness.bindGate != nil {
-					<-harness.bindGate
+					<-harness.bindGate.done
 				}
 
 				return stun.MustBuild(
@@ -86,6 +104,9 @@ func newPrepareHarness(t *testing.T, gateBinds bool) *prepareHarness {
 	harness.script = script
 	harness.conn = newTestConn(t, script)
 	t.Cleanup(func() { _ = harness.conn.Close() })
+	if gateBinds {
+		harness.bindGate = newPrepareGate(t)
+	}
 
 	return harness
 }
@@ -106,6 +127,79 @@ func fillBindingManager(t *testing.T, mgr *bindingManager) {
 		peer := netip.AddrPortFrom(peerAddr, uint16(i+1))
 		_, ok := mgr.getOrCreate(peer)
 		require.True(t, ok)
+	}
+}
+
+func TestPrepareHarnessCleanup(t *testing.T) {
+	for _, kind := range []string{"permission", "binding", "ad hoc attempt"} {
+		t.Run(kind, func(t *testing.T) {
+			for _, manualRelease := range []bool{false, true} {
+				name := "cleanup only"
+				if manualRelease {
+					name = "manual release then cleanup"
+				}
+				t.Run(name, func(t *testing.T) {
+					var harness *prepareHarness
+					result := make(chan error, 1)
+					if !t.Run("gated transaction", func(t *testing.T) {
+						harness = newPrepareHarness(t, kind == "binding")
+						gate := harness.bindGate
+						count := &harness.bindCount
+						switch kind {
+						case "permission":
+							harness.permGate = newPrepareGate(t)
+							gate = harness.permGate
+							count = &harness.permCount
+						case "ad hoc attempt":
+							gate = newPrepareGate(t)
+							inner := harness.script.performTransaction
+							harness.script.performTransaction = func(msg *stun.Message) (*stun.Message, error) {
+								if msg.Type.Method == stun.MethodChannelBind {
+									harness.bindCount.Add(1)
+									<-gate.done
+
+									return nil, errFake
+								}
+
+								return inner(msg)
+							}
+						}
+
+						go func() { result <- harness.conn.PreparePeer(context.Background(), harness.peer) }()
+						require.Eventually(t, func() bool {
+							return count.Load() == 1
+						}, 5*time.Second, 10*time.Millisecond)
+						select {
+						case err := <-result:
+							t.Fatalf("preparing caller finished before gate release: %v", err)
+						default:
+						}
+						if manualRelease {
+							gate.release()
+							gate.release()
+						}
+						// Otherwise return without the normal gate release, as an
+						// early prerequisite failure would. Cleanup must join the worker.
+					}) {
+						return
+					}
+
+					require.ErrorIs(t, harness.conn.PreparePeer(context.Background(), harness.peer), net.ErrClosed)
+					select {
+					case err := <-result:
+						// Gate release can finish preparation before Close seals it.
+						if kind == "ad hoc attempt" && errors.Is(err, errChannelBindTransactionFailed) {
+							return
+						}
+						if err != nil {
+							require.ErrorIs(t, err, net.ErrClosed)
+						}
+					case <-time.After(5 * time.Second):
+						t.Fatal("preparing caller did not finish after harness cleanup")
+					}
+				})
+			}
+		})
 	}
 }
 
@@ -161,7 +255,7 @@ func TestPreparePeer(t *testing.T) {
 
 	t.Run("failed shared attempt wakes waiters and the next caller starts fresh", func(t *testing.T) {
 		harness := newPrepareHarness(t, false)
-		harness.permGate = make(chan struct{})
+		harness.permGate = newPrepareGate(t)
 		harness.failPerms.Store(true)
 
 		results := make(chan error, 2)
@@ -172,7 +266,7 @@ func TestPreparePeer(t *testing.T) {
 		failedPerm := harness.conn.permMap.getOrCreate(harness.peer)
 		go func() { results <- harness.conn.PreparePeer(context.Background(), harness.peer) }()
 		time.Sleep(100 * time.Millisecond)
-		close(harness.permGate)
+		harness.permGate.release()
 
 		for range 2 {
 			var turnErr *stun.TurnError
@@ -340,7 +434,7 @@ func TestPreparePeer(t *testing.T) {
 		// success must not resurrect the binding.
 		permissionCause := fmt.Errorf("%w: %w", ErrPermissionRefreshFailed, errFake)
 		require.True(t, bound.failPrepared(permissionCause))
-		close(harness.bindGate)
+		harness.bindGate.release()
 
 		assert.Eventually(t, func() bool {
 			bound.muBind.Lock()
@@ -369,7 +463,7 @@ func TestPreparePeer(t *testing.T) {
 			return harness.bindCount.Load() == 1
 		}, 5*time.Second, 10*time.Millisecond)
 		time.Sleep(100 * time.Millisecond)
-		close(harness.bindGate)
+		harness.bindGate.release()
 
 		for range waiters {
 			select {
@@ -414,7 +508,7 @@ func TestPreparePeer(t *testing.T) {
 		case <-time.After(200 * time.Millisecond):
 		}
 
-		close(harness.bindGate)
+		harness.bindGate.release()
 		select {
 		case err := <-resultB:
 			require.NoError(t, err, "surviving waiter should complete via the shared bind")
@@ -437,7 +531,7 @@ func TestPreparePeer(t *testing.T) {
 		cancel(cause)
 		require.ErrorIs(t, <-result, cause)
 
-		close(harness.bindGate)
+		harness.bindGate.release()
 		bound, ok := harness.conn.bindingMgr.findByAddr(harness.peer)
 		require.True(t, ok)
 		require.Eventually(t, func() bool {
@@ -455,7 +549,7 @@ func TestPreparePeer(t *testing.T) {
 
 	t.Run("cancellation wakes waiter during in-flight permission transaction", func(t *testing.T) {
 		harness := newPrepareHarness(t, false)
-		harness.permGate = make(chan struct{})
+		harness.permGate = newPrepareGate(t)
 
 		// First caller's CreatePermission transaction is in flight (and holds
 		// the permission mutex for its duration, as createPermission does).
@@ -483,7 +577,7 @@ func TestPreparePeer(t *testing.T) {
 			assert.Fail(t, "canceled waiter did not wake during in-flight permission transaction")
 		}
 
-		close(harness.permGate)
+		harness.permGate.release()
 		select {
 		case err := <-resultA:
 			require.NoError(t, err)
@@ -557,13 +651,13 @@ func TestPreparePeer(t *testing.T) {
 
 	t.Run("joined bind failure is attempt-local for every waiter", func(t *testing.T) {
 		harness := newPrepareHarness(t, false)
-		gate := make(chan struct{})
+		gate := newPrepareGate(t)
 		mock := harness.script
 		inner := mock.performTransaction
 		mock.performTransaction = func(msg *stun.Message) (*stun.Message, error) {
 			if msg.Type.Method == stun.MethodChannelBind {
 				harness.bindCount.Add(1)
-				<-gate
+				<-gate.done
 
 				return nil, errFake
 			}
@@ -576,7 +670,7 @@ func TestPreparePeer(t *testing.T) {
 			go func() { results <- harness.conn.PreparePeer(context.Background(), harness.peer) }()
 		}
 		require.Eventually(t, func() bool { return harness.bindCount.Load() == 1 }, 5*time.Second, 10*time.Millisecond)
-		close(gate)
+		gate.release()
 
 		for range 2 {
 			require.ErrorIs(t, <-results, errChannelBindTransactionFailed)
@@ -641,7 +735,7 @@ func TestPreparePeer(t *testing.T) {
 		case <-time.After(300 * time.Millisecond):
 		}
 
-		close(harness.bindGate)
+		harness.bindGate.release()
 		select {
 		case err := <-closeResult:
 			require.NoError(t, err)
@@ -657,7 +751,7 @@ func TestPreparePeer(t *testing.T) {
 
 	t.Run("attempt in flight during self-seal records the terminal cause", func(t *testing.T) {
 		harness := newPrepareHarness(t, false)
-		harness.permGate = make(chan struct{})
+		harness.permGate = newPrepareGate(t)
 		harness.staleNonce.Store(true)
 
 		// A permission attempt is mid-transaction when the allocation seals
@@ -674,7 +768,7 @@ func TestPreparePeer(t *testing.T) {
 		}, 5*time.Second, 10*time.Millisecond)
 
 		harness.conn.startClose(errFake)
-		close(harness.permGate)
+		harness.permGate.release()
 		select {
 		case <-attempt.done:
 		case <-time.After(5 * time.Second):
