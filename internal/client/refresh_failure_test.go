@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/pion/stun/v3"
@@ -132,63 +133,71 @@ func TestRefreshFailureTerminalizes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			harness := newRefreshFailureHarness(t, tt.waited, nil)
-			conn := harness.conn
+			synctest.Test(t, func(t *testing.T) {
+				harness := newRefreshFailureHarness(t, tt.waited, nil)
+				conn := harness.conn
+				t.Cleanup(func() { _ = conn.Close() })
 
-			// A blocked reader must wake when the allocation terminalizes.
-			readResult := make(chan error, 1)
-			go func() {
-				_, _, err := conn.ReadFrom(make([]byte, 64))
-				readResult <- err
-			}()
-			time.Sleep(50 * time.Millisecond) // Let the reader block.
+				// A blocked reader must wake when the allocation terminalizes.
+				readResult := make(chan error, 1)
+				go func() {
+					_, _, err := conn.ReadFrom(make([]byte, 64))
+					readResult <- err
+				}()
+				synctest.Wait()
+				select {
+				case err := <-readResult:
+					t.Fatalf("ReadFrom returned before the refresh failure: %v", err)
+				default:
+				}
 
-			// The refresh timer fires against a permanently failing server.
-			conn.onRefreshTimers(timerIDRefreshAlloc)
+				// The refresh timer fires against a permanently failing server.
+				conn.onRefreshTimers(timerIDRefreshAlloc)
 
-			assert.Equal(t, tt.wantWaited, harness.waitedCount.Load(),
-				"unexpected number of waited refresh transactions")
-			assert.Equal(t, int32(1), harness.emitCount.Load(),
-				"a refresh-failure seal must emit exactly one lifetime-0 refresh")
+				assert.Equal(t, tt.wantWaited, harness.waitedCount.Load(),
+					"unexpected number of waited refresh transactions")
+				assert.Equal(t, int32(1), harness.emitCount.Load(),
+					"a refresh-failure seal must emit exactly one lifetime-0 refresh")
 
-			select {
-			case err := <-readResult:
-				require.ErrorIs(t, err, net.ErrClosed, "post-seal ReadFrom must wrap net.ErrClosed")
-				require.ErrorIs(t, err, ErrAllocationRefreshFailed, "post-seal ReadFrom must carry the terminal cause")
-			case <-time.After(2 * time.Second):
-				assert.Fail(t, "blocked ReadFrom did not wake on the refresh-failure seal")
-			}
+				select {
+				case err := <-readResult:
+					require.ErrorIs(t, err, net.ErrClosed, "post-seal ReadFrom must wrap net.ErrClosed")
+					require.ErrorIs(t, err, ErrAllocationRefreshFailed, "post-seal ReadFrom must carry the terminal cause")
+				case <-time.After(2 * time.Second):
+					assert.Fail(t, "blocked ReadFrom did not wake on the refresh-failure seal")
+				}
 
-			_, err := conn.WriteTo([]byte("data"), peer)
-			require.ErrorIs(t, err, net.ErrClosed)
-			require.ErrorIs(t, err, ErrAllocationRefreshFailed)
+				_, err := conn.WriteTo([]byte("data"), peer)
+				require.ErrorIs(t, err, net.ErrClosed)
+				require.ErrorIs(t, err, ErrAllocationRefreshFailed)
 
-			err = conn.PreparePeer(context.Background(), peer)
-			require.ErrorIs(t, err, net.ErrClosed)
-			require.ErrorIs(t, err, ErrAllocationRefreshFailed)
+				err = conn.PreparePeer(context.Background(), peer)
+				require.ErrorIs(t, err, net.ErrClosed)
+				require.ErrorIs(t, err, ErrAllocationRefreshFailed)
 
-			// The caller's Close joins and returns the recorded terminal cause,
-			// wrapping only the underlying failure — never a synthetic
-			// net.ErrClosed.
-			closeErr := conn.Close()
-			require.Error(t, closeErr)
-			require.ErrorIs(t, closeErr, ErrAllocationRefreshFailed)
-			require.NotErrorIs(t, closeErr, net.ErrClosed,
-				"the terminal cause must wrap the underlying failure, not a synthetic net.ErrClosed")
-			if tt.underlying != nil {
-				require.ErrorIs(t, closeErr, tt.underlying)
-			}
-			if tt.wantTurnError {
-				var turnErr *stun.TurnError
-				require.ErrorAs(t, closeErr, &turnErr,
-					"a well-formed error response must surface as a typed *stun.TurnError")
-			}
+				// The caller's Close joins and returns the recorded terminal cause,
+				// wrapping only the underlying failure — never a synthetic
+				// net.ErrClosed.
+				closeErr := conn.Close()
+				require.Error(t, closeErr)
+				require.ErrorIs(t, closeErr, ErrAllocationRefreshFailed)
+				require.NotErrorIs(t, closeErr, net.ErrClosed,
+					"the terminal cause must wrap the underlying failure, not a synthetic net.ErrClosed")
+				if tt.underlying != nil {
+					require.ErrorIs(t, closeErr, tt.underlying)
+				}
+				if tt.wantTurnError {
+					var turnErr *stun.TurnError
+					require.ErrorAs(t, closeErr, &turnErr,
+						"a well-formed error response must surface as a typed *stun.TurnError")
+				}
 
-			require.ErrorIs(t, conn.Close(), net.ErrClosed,
-				"a repeated caller Close returns net.ErrClosed")
+				require.ErrorIs(t, conn.Close(), net.ErrClosed,
+					"a repeated caller Close returns net.ErrClosed")
 
-			assert.Equal(t, int32(1), harness.emitCount.Load(),
-				"the caller's Close after a self-seal must not emit a second lifetime-0 refresh")
+				assert.Equal(t, int32(1), harness.emitCount.Load(),
+					"the caller's Close after a self-seal must not emit a second lifetime-0 refresh")
+			})
 		})
 	}
 }

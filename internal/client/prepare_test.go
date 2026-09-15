@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/pion/stun/v3"
@@ -40,6 +41,43 @@ func newPrepareGate(t *testing.T) *prepareGate {
 	t.Cleanup(gate.release)
 
 	return gate
+}
+
+// prepareWaiter observes select operand evaluation after PreparePeer has
+// captured its attempt. With a gated permission, call 1 is the permission wait
+// and call 2 is the binding wait. With permission already ready, call 1 is the
+// binding wait. These are the only paths used by the observed test callers.
+type prepareWaiter struct {
+	context.Context
+	waits  atomic.Int32
+	result chan error
+}
+
+func (w *prepareWaiter) Done() <-chan struct{} {
+	w.waits.Add(1)
+
+	return w.Context.Done()
+}
+
+func (harness *prepareHarness) startWaiter(ctx context.Context) *prepareWaiter {
+	waiter := &prepareWaiter{Context: ctx, result: make(chan error, 1)}
+	go func() { waiter.result <- harness.conn.PreparePeer(waiter, harness.peer) }()
+
+	return waiter
+}
+
+// Called inside a synctest bubble with the result gate still closed. Wait
+// establishes durable blocking; the counter proves this caller reached the
+// expected attempt select, rather than merely starting its goroutine.
+func requirePrepareWaiting(t *testing.T, waiter *prepareWaiter, waits int32) {
+	t.Helper()
+	synctest.Wait()
+	require.Equal(t, waits, waiter.waits.Load(), "caller must join the intended attempt")
+	select {
+	case err := <-waiter.result:
+		t.Fatalf("PreparePeer returned before the result gate opened: %v", err)
+	default:
+	}
 }
 
 // prepareHarness drives a NewUDPConn against a scripted mock TURN server.
@@ -254,33 +292,33 @@ func TestPreparePeer(t *testing.T) {
 	})
 
 	t.Run("failed shared attempt wakes waiters and the next caller starts fresh", func(t *testing.T) {
-		harness := newPrepareHarness(t, false)
-		harness.permGate = newPrepareGate(t)
-		harness.failPerms.Store(true)
+		synctest.Test(t, func(t *testing.T) {
+			harness := newPrepareHarness(t, false)
+			harness.permGate = newPrepareGate(t)
+			harness.failPerms.Store(true)
 
-		results := make(chan error, 2)
-		go func() { results <- harness.conn.PreparePeer(context.Background(), harness.peer) }()
-		require.Eventually(t, func() bool {
-			return harness.permCount.Load() == 1
-		}, 5*time.Second, 10*time.Millisecond)
-		failedPerm := harness.conn.permMap.getOrCreate(harness.peer)
-		go func() { results <- harness.conn.PreparePeer(context.Background(), harness.peer) }()
-		time.Sleep(100 * time.Millisecond)
-		harness.permGate.release()
+			first := harness.startWaiter(context.Background())
+			requirePrepareWaiting(t, first, 1)
+			require.Equal(t, int32(1), harness.permCount.Load())
+			failedPerm := harness.conn.permMap.getOrCreate(harness.peer)
+			second := harness.startWaiter(context.Background())
+			requirePrepareWaiting(t, second, 1)
+			harness.permGate.release()
 
-		for range 2 {
-			var turnErr *stun.TurnError
-			require.ErrorAs(t, <-results, &turnErr)
-			assert.Equal(t, stun.CodeForbidden, turnErr.ErrorCodeAttr.Code)
-		}
-		assert.Equal(t, int32(1), harness.permCount.Load(), "failed attempt is shared")
-		assert.Empty(t, harness.conn.permMap.addrs(), "final failure deletes membership before waking waiters")
-		nextPerm := harness.conn.permMap.getOrCreate(harness.peer)
-		assert.NotSame(t, failedPerm, nextPerm, "the next attempt has fresh permission identity")
+			for _, waiter := range []*prepareWaiter{first, second} {
+				var turnErr *stun.TurnError
+				require.ErrorAs(t, <-waiter.result, &turnErr)
+				assert.Equal(t, stun.CodeForbidden, turnErr.ErrorCodeAttr.Code)
+			}
+			assert.Equal(t, int32(1), harness.permCount.Load(), "failed attempt is shared")
+			assert.Empty(t, harness.conn.permMap.addrs(), "final failure deletes membership before waking waiters")
+			nextPerm := harness.conn.permMap.getOrCreate(harness.peer)
+			assert.NotSame(t, failedPerm, nextPerm, "the next attempt has fresh permission identity")
 
-		harness.failPerms.Store(false)
-		require.NoError(t, harness.conn.PreparePeer(context.Background(), harness.peer))
-		assert.Equal(t, int32(2), harness.permCount.Load(), "the next caller starts a fresh permission")
+			harness.failPerms.Store(false)
+			require.NoError(t, harness.conn.PreparePeer(context.Background(), harness.peer))
+			assert.Equal(t, int32(2), harness.permCount.Load(), "the next caller starts a fresh permission")
+		})
 	})
 
 	t.Run("closing before worker registration resolves joined waiters", func(t *testing.T) {
@@ -448,74 +486,67 @@ func TestPreparePeer(t *testing.T) {
 	})
 
 	t.Run("same-peer callers coalesce onto one bind", func(t *testing.T) {
-		harness := newPrepareHarness(t, true)
+		synctest.Test(t, func(t *testing.T) {
+			harness := newPrepareHarness(t, true)
 
-		const waiters = 4
-		results := make(chan error, waiters)
-		for range waiters {
-			go func() {
-				results <- harness.conn.PreparePeer(context.Background(), harness.peer)
-			}()
-		}
-
-		// Let the first attempt start and the rest pile onto it.
-		assert.Eventually(t, func() bool {
-			return harness.bindCount.Load() == 1
-		}, 5*time.Second, 10*time.Millisecond)
-		time.Sleep(100 * time.Millisecond)
-		harness.bindGate.release()
-
-		for range waiters {
-			select {
-			case err := <-results:
-				require.NoError(t, err)
-			case <-time.After(5 * time.Second):
-				assert.Fail(t, "timed out waiting for PreparePeer")
+			harness.permGate = newPrepareGate(t)
+			waiters := make([]*prepareWaiter, 4)
+			for i := range waiters {
+				waiters[i] = harness.startWaiter(context.Background())
 			}
-		}
-		assert.Equal(t, int32(1), harness.permCount.Load(), "permission transactions should coalesce")
-		assert.Equal(t, int32(1), harness.bindCount.Load(), "ChannelBind transactions should coalesce")
+			for _, waiter := range waiters {
+				requirePrepareWaiting(t, waiter, 1)
+			}
+			require.Equal(t, int32(1), harness.permCount.Load())
+			harness.permGate.release()
+			for _, waiter := range waiters {
+				requirePrepareWaiting(t, waiter, 2)
+			}
+			require.Equal(t, int32(1), harness.bindCount.Load())
+			harness.bindGate.release()
+			for _, waiter := range waiters {
+				require.NoError(t, <-waiter.result)
+			}
+			assert.Equal(t, int32(1), harness.permCount.Load(), "permission transactions should coalesce")
+			assert.Equal(t, int32(1), harness.bindCount.Load(), "ChannelBind transactions should coalesce")
+		})
 	})
 
 	t.Run("cancellation wakes only that waiter", func(t *testing.T) {
-		harness := newPrepareHarness(t, true)
+		synctest.Test(t, func(t *testing.T) {
+			harness := newPrepareHarness(t, true)
+			require.NoError(t, harness.conn.awaitPermission(context.Background(), harness.peer))
 
-		ctxA, cancelA := context.WithCancelCause(context.Background())
-		defer cancelA(nil)
-		causeA := errors.New("waiter A gave up") //nolint:err113 // test-local cause
+			ctxA, cancelA := context.WithCancelCause(context.Background())
+			defer cancelA(nil)
+			causeA := errors.New("waiter A gave up") //nolint:err113 // test-local cause
 
-		resultA := make(chan error, 1)
-		resultB := make(chan error, 1)
-		go func() { resultA <- harness.conn.PreparePeer(ctxA, harness.peer) }()
-		go func() { resultB <- harness.conn.PreparePeer(context.Background(), harness.peer) }()
+			waiterA := harness.startWaiter(ctxA)
+			waiterB := harness.startWaiter(context.Background())
+			requirePrepareWaiting(t, waiterA, 1)
+			requirePrepareWaiting(t, waiterB, 1)
+			require.Equal(t, int32(1), harness.bindCount.Load())
 
-		assert.Eventually(t, func() bool {
-			return harness.bindCount.Load() == 1
-		}, 5*time.Second, 10*time.Millisecond)
+			cancelA(causeA)
+			select {
+			case err := <-waiterA.result:
+				require.ErrorIs(t, err, causeA, "canceled waiter must observe its cause")
+			case <-time.After(2 * time.Second):
+				assert.Fail(t, "canceled waiter did not wake promptly")
+			}
 
-		cancelA(causeA)
-		select {
-		case err := <-resultA:
-			require.ErrorIs(t, err, causeA, "canceled waiter must observe its cause")
-		case <-time.After(2 * time.Second):
-			assert.Fail(t, "canceled waiter did not wake promptly")
-		}
+			// Cancellation completed, but the surviving caller is still joined.
+			requirePrepareWaiting(t, waiterB, 1)
 
-		// The shared bind attempt must survive waiter A's cancellation.
-		select {
-		case err := <-resultB:
-			assert.Failf(t, "waiter B finished early", "err: %v", err)
-		case <-time.After(200 * time.Millisecond):
-		}
-
-		harness.bindGate.release()
-		select {
-		case err := <-resultB:
-			require.NoError(t, err, "surviving waiter should complete via the shared bind")
-		case <-time.After(5 * time.Second):
-			assert.Fail(t, "timed out waiting for surviving waiter")
-		}
-		assert.Equal(t, int32(1), harness.bindCount.Load(), "cancellation must not restart or cancel the shared bind")
+			harness.bindGate.release()
+			select {
+			case err := <-waiterB.result:
+				require.NoError(t, err, "surviving waiter should complete via the shared bind")
+			case <-time.After(5 * time.Second):
+				assert.Fail(t, "timed out waiting for surviving waiter")
+			}
+			assert.Equal(t, int32(1), harness.bindCount.Load(), "cancellation must not restart or cancel the shared bind")
+		})
 	})
 
 	t.Run("cancellation selected before preparation leaves confirmed peer unprepared", func(t *testing.T) {
@@ -548,43 +579,39 @@ func TestPreparePeer(t *testing.T) {
 	})
 
 	t.Run("cancellation wakes waiter during in-flight permission transaction", func(t *testing.T) {
-		harness := newPrepareHarness(t, false)
-		harness.permGate = newPrepareGate(t)
+		synctest.Test(t, func(t *testing.T) {
+			harness := newPrepareHarness(t, false)
+			harness.permGate = newPrepareGate(t)
 
-		// First caller's CreatePermission transaction is in flight (and holds
-		// the permission mutex for its duration, as createPermission does).
-		resultA := make(chan error, 1)
-		go func() { resultA <- harness.conn.PreparePeer(context.Background(), harness.peer) }()
-		assert.Eventually(t, func() bool {
-			return harness.permCount.Load() == 1
-		}, 5*time.Second, 10*time.Millisecond)
+			waiterA := harness.startWaiter(context.Background())
+			requirePrepareWaiting(t, waiterA, 1)
+			require.Equal(t, int32(1), harness.permCount.Load())
 
-		// A second caller for the same peer must wait on the attempt channel,
-		// where its cancellation can wake it — not on the permission mutex.
-		ctxB, cancelB := context.WithCancelCause(context.Background())
-		defer cancelB(nil)
-		resultB := make(chan error, 1)
-		go func() { resultB <- harness.conn.PreparePeer(ctxB, harness.peer) }()
-		time.Sleep(100 * time.Millisecond)
+			ctxB, cancelB := context.WithCancelCause(context.Background())
+			defer cancelB(nil)
+			waiterB := harness.startWaiter(ctxB)
+			requirePrepareWaiting(t, waiterB, 1)
 
-		cause := errors.New("waiter B gave up") //nolint:err113 // test-local cause
-		cancelB(cause)
-		select {
-		case err := <-resultB:
-			require.ErrorIs(t, err, cause,
-				"waiter must be cancelable while the permission transaction is in flight")
-		case <-time.After(2 * time.Second):
-			assert.Fail(t, "canceled waiter did not wake during in-flight permission transaction")
-		}
+			cause := errors.New("waiter B gave up") //nolint:err113 // test-local cause
+			cancelB(cause)
+			select {
+			case err := <-waiterB.result:
+				require.ErrorIs(t, err, cause,
+					"waiter must be cancelable while the permission transaction is in flight")
+			case <-time.After(2 * time.Second):
+				assert.Fail(t, "canceled waiter did not wake during in-flight permission transaction")
+			}
 
-		harness.permGate.release()
-		select {
-		case err := <-resultA:
-			require.NoError(t, err)
-		case <-time.After(5 * time.Second):
-			assert.Fail(t, "timed out waiting for first caller")
-		}
-		assert.Equal(t, int32(1), harness.permCount.Load(), "permission transactions should coalesce")
+			requirePrepareWaiting(t, waiterA, 1)
+			harness.permGate.release()
+			select {
+			case err := <-waiterA.result:
+				require.NoError(t, err)
+			case <-time.After(5 * time.Second):
+				assert.Fail(t, "timed out waiting for first caller")
+			}
+			assert.Equal(t, int32(1), harness.permCount.Load(), "permission transactions should coalesce")
+		})
 	})
 
 	t.Run("permission refresh failure fails writes, never Send indication", func(t *testing.T) {
@@ -650,36 +677,42 @@ func TestPreparePeer(t *testing.T) {
 	})
 
 	t.Run("joined bind failure is attempt-local for every waiter", func(t *testing.T) {
-		harness := newPrepareHarness(t, false)
-		gate := newPrepareGate(t)
-		mock := harness.script
-		inner := mock.performTransaction
-		mock.performTransaction = func(msg *stun.Message) (*stun.Message, error) {
-			if msg.Type.Method == stun.MethodChannelBind {
-				harness.bindCount.Add(1)
-				<-gate.done
+		synctest.Test(t, func(t *testing.T) {
+			harness := newPrepareHarness(t, false)
+			require.NoError(t, harness.conn.awaitPermission(context.Background(), harness.peer))
+			gate := newPrepareGate(t)
+			mock := harness.script
+			inner := mock.performTransaction
+			mock.performTransaction = func(msg *stun.Message) (*stun.Message, error) {
+				if msg.Type.Method == stun.MethodChannelBind {
+					harness.bindCount.Add(1)
+					<-gate.done
 
-				return nil, errFake
+					return nil, errFake
+				}
+
+				return inner(msg)
 			}
 
-			return inner(msg)
-		}
+			waiters := []*prepareWaiter{
+				harness.startWaiter(context.Background()),
+				harness.startWaiter(context.Background()),
+			}
+			for _, waiter := range waiters {
+				requirePrepareWaiting(t, waiter, 1)
+			}
+			require.Equal(t, int32(1), harness.bindCount.Load())
+			gate.release()
 
-		results := make(chan error, 2)
-		for range 2 {
-			go func() { results <- harness.conn.PreparePeer(context.Background(), harness.peer) }()
-		}
-		require.Eventually(t, func() bool { return harness.bindCount.Load() == 1 }, 5*time.Second, 10*time.Millisecond)
-		gate.release()
+			for _, waiter := range waiters {
+				require.ErrorIs(t, <-waiter.result, errChannelBindTransactionFailed)
+			}
+			assert.Equal(t, int32(1), harness.bindCount.Load())
 
-		for range 2 {
-			require.ErrorIs(t, <-results, errChannelBindTransactionFailed)
-		}
-		assert.Equal(t, int32(1), harness.bindCount.Load())
-
-		mock.performTransaction = inner
-		require.NoError(t, harness.conn.PreparePeer(context.Background(), harness.peer))
-		assert.Equal(t, int32(2), harness.bindCount.Load())
+			mock.performTransaction = inner
+			require.NoError(t, harness.conn.PreparePeer(context.Background(), harness.peer))
+			assert.Equal(t, int32(2), harness.bindCount.Load())
+		})
 	})
 
 	t.Run("server bind rejection surfaces typed TURN error", func(t *testing.T) {
@@ -710,43 +743,44 @@ func TestPreparePeer(t *testing.T) {
 	})
 
 	t.Run("close joins in-flight bind workers", func(t *testing.T) {
-		harness := newPrepareHarness(t, true)
+		synctest.Test(t, func(t *testing.T) {
+			harness := newPrepareHarness(t, true)
+			require.NoError(t, harness.conn.awaitPermission(context.Background(), harness.peer))
 
-		prepareResult := make(chan error, 1)
-		go func() { prepareResult <- harness.conn.PreparePeer(context.Background(), harness.peer) }()
+			waiter := harness.startWaiter(context.Background())
+			requirePrepareWaiting(t, waiter, 1)
+			require.Equal(t, int32(1), harness.bindCount.Load())
 
-		assert.Eventually(t, func() bool {
-			return harness.bindCount.Load() == 1
-		}, 5*time.Second, 10*time.Millisecond)
+			closeResult := make(chan error, 1)
+			go func() { closeResult <- harness.conn.Close() }()
 
-		closeResult := make(chan error, 1)
-		go func() { closeResult <- harness.conn.Close() }()
+			// The waiter unblocks promptly; Close must keep waiting for the worker.
+			select {
+			case err := <-waiter.result:
+				require.ErrorIs(t, err, net.ErrClosed)
+			case <-time.After(2 * time.Second):
+				assert.Fail(t, "PreparePeer waiter did not unblock on close")
+			}
+			synctest.Wait()
+			select {
+			case <-closeResult:
+				assert.Fail(t, "Close returned while a bind worker was still in flight")
+			default:
+			}
 
-		// The waiter unblocks promptly; Close must keep waiting for the worker.
-		select {
-		case err := <-prepareResult:
-			require.ErrorIs(t, err, net.ErrClosed)
-		case <-time.After(2 * time.Second):
-			assert.Fail(t, "PreparePeer waiter did not unblock on close")
-		}
-		select {
-		case <-closeResult:
-			assert.Fail(t, "Close returned while a bind worker was still in flight")
-		case <-time.After(300 * time.Millisecond):
-		}
-
-		harness.bindGate.release()
-		select {
-		case err := <-closeResult:
-			require.NoError(t, err)
-		case <-time.After(5 * time.Second):
-			assert.Fail(t, "Close did not return after the bind worker finished")
-		}
-		bound, ok := harness.conn.bindingMgr.findByAddr(harness.peer)
-		require.True(t, ok)
-		final, readinessErr := bound.preparationAccess(time.Now())
-		assert.False(t, final, "an attempt completing after Allocation close creates no readiness outcome")
-		assert.NoError(t, readinessErr)
+			harness.bindGate.release()
+			select {
+			case err := <-closeResult:
+				require.NoError(t, err)
+			case <-time.After(5 * time.Second):
+				assert.Fail(t, "Close did not return after the bind worker finished")
+			}
+			bound, ok := harness.conn.bindingMgr.findByAddr(harness.peer)
+			require.True(t, ok)
+			final, readinessErr := bound.preparationAccess(time.Now())
+			assert.False(t, final, "an attempt completing after Allocation close creates no readiness outcome")
+			assert.NoError(t, readinessErr)
+		})
 	})
 
 	t.Run("attempt in flight during self-seal records the terminal cause", func(t *testing.T) {
