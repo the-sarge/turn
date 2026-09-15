@@ -1027,3 +1027,26 @@ Annotated tag `v5.3.0-gs.1` published at `d353938` and resolving via the public 
 - The expired-permission/live-binding regression failed on the original code with an emitted ChannelData packet, then passed with the permission guard. Focused fixture cases, `go test ./turntest -count=1`, affected real-client E2E and nonce-expiration tests, and `task verify` passed.
 - RAS review `20260915T023432-8f3c46e8503a7f596c6c898a` completed with six successful reviewers and zero findings. No fix verification or deferred follow-ups were required.
 - `task preflight` passed with a clean worktree at head `3d88cdbb306c95c163fb8a01873e9343647abcd1` against base `4ebf3b0fe39443d479a7b659a8f44d9449e15bf7`, including race, dependency, platform, workflow, and secret checks. Post-ready [CI run 34921899087](https://github.com/the-sarge/turn/actions/runs/34921899087) and `ci-required` succeeded on that exact head before squash merge.
+
+---
+
+## Observer recording completion repaired - 2026-09-14 23:44 EDT
+
+**Main:** `077ec40c1cab`
+**Actor:** Codex (GPT-6, planit)
+
+### Summary
+
+[PR #136](https://github.com/the-sarge/turn/pull/136) merged as `077ec40c1cab384d1e1e25644d3ffa67ad9430d4`, closing [issue #126](https://github.com/the-sarge/turn/issues/126). Root observer helpers now distinguish write admission from stored datagrams, so a completed recording wait makes request bytes and destinations available.
+
+### Completed
+
+- Kept admission ordinals for blocking gates and no-new-write assertions; derived recorded count from append-only entries under the existing mutex for waiters, scans, and stored-entry offsets.
+- Corrected the blocked-retransmit cancellation test to await recording before checking for further sends, preserving caller-owned socket checks.
+- Added deterministic first/second-write regressions using built-in `testing/synctest`, copied-byte preservation checks, and request/Refresh filtering cases. Changes are confined to root test code.
+
+### Validation
+
+- Both recording-wait cases failed on the original helper with nil bytes and empty destinations, then passed after the fix. Focused observer/cancellation/refresh tests, `go test -race . -count=1`, and `task verify` passed.
+- RAS review `20260915T033057-0e8ec7b230f2d8b43468bf33` completed with all six reviewers and adjudicators successful. The sole low finding, optional nil-guard cleanup, was independently rejected as outside the accepted repair; no fix verification, replacement review, or deferred follow-up was needed. [Disposition and certification receipt](https://github.com/the-sarge/turn/pull/136#issuecomment-5674386964).
+- Full `task preflight` passed with a clean worktree at head `d6a15232ca3f5d652385c5b2699b9bc7b5276655` against base `ba4ec6934f15fcf3286360d3623451d5eef79282`. Post-ready [CI run 34925963539](https://github.com/the-sarge/turn/actions/runs/34925963539) and `ci-required` succeeded on that same head before squash merge.
