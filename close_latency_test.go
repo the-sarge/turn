@@ -153,6 +153,9 @@ func TestCloseInterruptsTransactionWaits(t *testing.T) {
 		t.Logf("Close took %v with abort", elapsed)
 		assert.Less(t, elapsed, time.Second,
 			"with abort, Close must not wait out the retransmission budget")
+		// All event producers run synchronously inside Close. Fail before
+		// receiving if an event is missing; there is nothing left to wait for.
+		require.Len(t, closeOrder, 3, "Close must emit all lifecycle events before returning")
 		assert.Equal(t, []string{"abort", "deallocated", "release"},
 			[]string{<-closeOrder, <-closeOrder, <-closeOrder},
 			"the real transaction adapter must abort the old live set before the release transaction starts")
