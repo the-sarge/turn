@@ -1166,3 +1166,27 @@ Merged [PR #146](https://github.com/the-sarge/turn/pull/146) as `e006caf`, compl
 - Full exact-head `task preflight` passed with a clean worktree at `04be847640e332719f677137cf92d99c63d5a0e3` against `6e4f2ddf95f154f8f61a57d5069d1aa7bf2450de`. The first attempt stopped at another local golangci-lint run's shared lock; after that run ended, the unchanged-head retry passed all lanes.
 - Post-ready [CI run 34990535889](https://github.com/the-sarge/turn/actions/runs/34990535889) and `ci-required` succeeded on the certified head before the guarded squash merge.
 - The deferred pre-existing short-buffer documentation suggestion was rechecked at merged commit `e006caf45f639698acd347eaab4494acb0d16fae`, `internal/client/udp_conn.go:203` and `allocation.go:52`. It remains outside the bounded lifecycle corrections and does not warrant a standalone follow-up ticket. No tracked follow-ups remain.
+
+---
+
+## Test helper and scenario discoverability landed - 2026-09-15 12:15 EDT
+
+**Main:** `5021ca4c7433`
+**Actor:** Codex (planit)
+
+### Summary
+
+Merged [PR #148](https://github.com/the-sarge/turn/pull/148) as `5021ca4`, completing [issue #132](https://github.com/the-sarge/turn/issues/132). Shared observer helpers now live in a dedicated test file, ten UDPConn behavior groups have top-level test names, and fourteen codec cases execute under their existing names. Runtime behavior is unchanged.
+
+### Completed
+
+- Moved shared observer, client setup, request observation, and asynchronous Allocate helpers into `observer_helpers_test.go`, preserving their implementations byte for byte and retaining the `!js` build constraint. Scenario-specific helpers remain beside their tests.
+- Split the UDPConn umbrella along its ten existing behavior boundaries, preserved nested cases and assertions, and replaced the never-true binding-deletion dimension with unconditional binding-retention checks.
+- Added named subtests to the ChannelData equality, decode, and detection tables, retaining their inputs and assertions.
+
+### Validation
+
+- Affected packages passed before and after. Discovery matched the intentional mapping: 364 executed identities became 377 after removing the umbrella and exposing fourteen codec names; top-level discovery increased from 127 to 136 as ten tests replaced one. Moved helper blocks matched the pinned baseline byte for byte.
+- `task verify` and full exact-head `task preflight` passed with a clean worktree at `750abbffd527395df8f6ad5c705fe2de7db7322c` against `135cf133eaa04eb7d009e720f9d2ea87e6e177dd`, including race, dependency, cross-build, workflow, and secret checks.
+- RAS review `20260915T160450-5b43ec230735948c405c203e` completed with six successful initial reviewers and zero findings. No fixes, verification, replacement review, or deferred follow-ups were required. The [PR contract and validation record](https://github.com/the-sarge/turn/pull/148) retains the bounded scope and receipts.
+- Post-ready [CI run 34993407878](https://github.com/the-sarge/turn/actions/runs/34993407878) and `ci-required` succeeded on the certified head before the guarded squash merge.
