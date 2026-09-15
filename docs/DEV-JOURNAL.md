@@ -1117,3 +1117,27 @@ Annotated tag `v5.3.0-gs.1` published at `d353938` and resolving via the public 
 - Affected tests passed under the race detector before and after the change. The final affected race run and full `task preflight` passed at `1716ee1f77f25f5393983460d5e5c0de9890faba` against `94072b8dd6f8c62eace9879b5dc250d1094012b8`, including format, vet, tests, lint, docs, race, dependency, platform, workflow, and secret checks.
 - Initial RAS review `20260915T141247-32362db9aab2d981ed57719c` yielded one accepted finding: bound the close-order drain. Exact-head verification cleared the event-count guard; replacement review `20260915T143035-eab41b65007a92871e301b62` returned no findings. A replacement invocation initially failed before any reviewer started because its configured directory did not exist; creating it resolved the setup failure. The extra-retransmission suggestion was independently rejected because a buffered packet would not establish post-cancellation ordering and the combined named regressions already cover waiter-local cancellation. No deferred follow-ups remain.
 - Post-ready [CI run 34983005428](https://github.com/the-sarge/turn/actions/runs/34983005428) and `ci-required` succeeded on the same certified head before the guarded squash merge. The [PR](https://github.com/the-sarge/turn/pull/142) records the review and validation receipts.
+
+---
+
+## Protocol and readiness assertion repairs landed - 2026-09-15 11:13 EDT
+
+**Main:** `b316b2b2f1f5`
+**Actor:** Codex
+
+### Summary
+
+Merged [PR #144](https://github.com/the-sarge/turn/pull/144) as `b316b2b`, completing [issue #130](https://github.com/the-sarge/turn/issues/130). Protocol fuzzing now preserves raw channel inputs and compares independent decoded values; the DONT-FRAGMENT and stale-nonce regressions inspect the intended decoded message and readiness cause.
+
+### Completed
+
+- Removed ChannelData input rewriting and added boundary, interior, invalid-channel, padding, and truncation seeds. Snapshot comparisons catch payload corruption despite buffer aliasing.
+- Seeded all eleven setter attribute types and compare fresh decoded values, allowing reserved-field and IP canonicalization while checking stable re-encoding.
+- Corrected the DONT-FRAGMENT presence check and the negative typed-error assertion for exhausted stale-nonce retries.
+
+### Validation
+
+- Affected proto/client tests, `task verify`, and all three 30-second proto fuzz targets passed under Go 1.27.1.
+- Four temporary negative controls failed at the intended repaired assertions: corrupted ChannelData payload, changed Lifetime value, missing decoded DONT-FRAGMENT, and a typed TURN cause joined with `errTryAgain`. The controls were removed and affected tests passed again.
+- RAS review `20260915T145849-02446afb61429c8fb4f9edb5` completed with all six reviewers and no required fixes. Independent dispositions retained the decoder-validity assertion and deferred a pre-existing helper-style nit; no verification or replacement review was needed. The style nit was rechecked at the merged commit and did not warrant a follow-up ticket. See the [PR review record](https://github.com/the-sarge/turn/pull/144).
+- Exact-head `task preflight` passed with a clean worktree at `30f658d6f5f780c376ad1231a19128eb13904567` against `cd8679c30c2e82af51daaba89da52b334867b406`, including race, dependency, cross-build, workflow, and secret checks. Post-ready [CI run 34986514865](https://github.com/the-sarge/turn/actions/runs/34986514865) and `ci-required` succeeded on that exact head before guarded squash merge.
