@@ -1094,3 +1094,26 @@ Annotated tag `v5.3.0-gs.1` published at `d353938` and resolving via the public 
 - The delivery-failure regression first failed for the missing helper; the pump regression first failed because cleanup returned before the reader exited. Both passed after implementation. Focused success/failure checks, ordinary tests, vet, lint, and the full race suite passed.
 - RAS review `20260915T050943-0edea8c237b82eed88c87c16` completed with six successful initial reviewers and zero required behavioral fixes. Two duplicate documentation findings were fixed in a comment-only commit; verification and replacement review were skipped under the shared documentation-only exemption. Optional terminal-event precedence and unsupported failure-probe traffic were independently rejected as beyond the approved example-level contract. No deferred findings remain; the [PR contract and disposition receipt](https://github.com/the-sarge/turn/pull/140) retain the details.
 - Full `task preflight` passed with a clean worktree at head `c6bd8006abd89f833ef98e119290abff37604a03` against base `d846c63161f411bc915682b4f6aadeb69abfe0df`, including race, dependency, platform, workflow, and secret checks. Post-ready [CI run 34932368232](https://github.com/the-sarge/turn/actions/runs/34932368232) and `ci-required` succeeded on that exact head before the guarded squash merge.
+
+---
+
+## Observable test ordering landed - 2026-09-15 10:42 EDT
+
+**Main:** `a3b9468f7f66`
+**Actor:** Codex (planit)
+
+### Summary
+
+[PR #142](https://github.com/the-sarge/turn/pull/142) merged as `a3b9468f7f66ff5b727800b639c49514ef8f828c`, closing [issue #129](https://github.com/the-sarge/turn/issues/129). Timer, shared-attempt, close-latency, and refresh-failure tests now establish their ordering through observable events instead of scheduler sleeps. The change touches four test files and preserves production behavior.
+
+### Completed
+
+- Timer tests wait for callback notifications and join `StopAndWait`; a gated handler case establishes that the join waits for callback completion.
+- Test-only context observations and `testing/synctest` establish each intended caller's permission/binding wait before result gates open. Shared success/failure, waiter-local cancellation, and close joining a bind worker retain their assertions and cleanup ordering.
+- The real-socket close test observes both callers joining and a CreatePermission packet at the silent server, preserves the real one-second close-latency bound, and checks all synchronous lifecycle events are present before draining their order. Refresh-failure cases establish a blocked reader before terminalization.
+
+### Validation
+
+- Affected tests passed under the race detector before and after the change. The final affected race run and full `task preflight` passed at `1716ee1f77f25f5393983460d5e5c0de9890faba` against `94072b8dd6f8c62eace9879b5dc250d1094012b8`, including format, vet, tests, lint, docs, race, dependency, platform, workflow, and secret checks.
+- Initial RAS review `20260915T141247-32362db9aab2d981ed57719c` yielded one accepted finding: bound the close-order drain. Exact-head verification cleared the event-count guard; replacement review `20260915T143035-eab41b65007a92871e301b62` returned no findings. A replacement invocation initially failed before any reviewer started because its configured directory did not exist; creating it resolved the setup failure. The extra-retransmission suggestion was independently rejected because a buffered packet would not establish post-cancellation ordering and the combined named regressions already cover waiter-local cancellation. No deferred follow-ups remain.
+- Post-ready [CI run 34983005428](https://github.com/the-sarge/turn/actions/runs/34983005428) and `ci-required` succeeded on the same certified head before the guarded squash merge. The [PR](https://github.com/the-sarge/turn/pull/142) records the review and validation receipts.
