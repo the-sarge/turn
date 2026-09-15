@@ -61,40 +61,6 @@ func requireRefreshLifetime(t *testing.T, raw []byte, want time.Duration) [stun.
 	return msg.TransactionID
 }
 
-func awaitNewRefresh(
-	t *testing.T,
-	conn *observerConn,
-	excluded map[[stun.TransactionIDSize]byte]struct{},
-) []byte {
-	t.Helper()
-
-	var raw []byte
-	require.Eventually(t, func() bool {
-		for i := range conn.recordedCount() {
-			candidate := conn.write(int(i))
-			if candidate == nil {
-				continue
-			}
-
-			msg := &stun.Message{Raw: candidate}
-			if msg.Decode() != nil || msg.Type.Method != stun.MethodRefresh {
-				continue
-			}
-			if _, skip := excluded[msg.TransactionID]; skip {
-				continue
-			}
-
-			raw = candidate
-
-			return true
-		}
-
-		return false
-	}, 5*time.Second, time.Millisecond, "new Refresh request never left the socket")
-
-	return raw
-}
-
 func scanMethodTransactions(
 	conn *observerConn,
 	method stun.Method,

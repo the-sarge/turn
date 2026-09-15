@@ -523,514 +523,501 @@ func TestPermissionAndBindingRequestShapes(t *testing.T) {
 	require.NoError(t, conn.bind(bound))
 }
 
-func TestUDPConn(t *testing.T) {
-	makeConn := func(script *testConnScript) *UDPConn {
-		return newTestConn(t, script)
-	}
+func channelBindStaleNonceResponse() *stun.Message {
+	return stun.MustBuild(
+		stun.NewType(stun.MethodChannelBind, stun.ClassErrorResponse),
+		stun.CodeStaleNonce,
+		stun.NewNonce("new-nonce-123"),
+	)
+}
 
-	staleNonceMsg := func() *stun.Message {
-		return stun.MustBuild(
-			stun.NewType(stun.MethodChannelBind, stun.ClassErrorResponse),
-			stun.CodeStaleNonce,
-			stun.NewNonce("new-nonce-123"),
-		)
-	}
+func channelBindBadRequestResponse() *stun.Message {
+	return stun.MustBuild(
+		stun.NewType(stun.MethodChannelBind, stun.ClassErrorResponse),
+		stun.ErrorCodeAttribute{Code: stun.CodeBadRequest, Reason: []byte("Bad Request")},
+	)
+}
 
-	badRequestMsg := func() *stun.Message {
-		return stun.MustBuild(
-			stun.NewType(stun.MethodChannelBind, stun.ClassErrorResponse),
-			stun.ErrorCodeAttribute{Code: stun.CodeBadRequest, Reason: []byte("Bad Request")},
-		)
-	}
-
-	t.Run("maybeBind()", func(t *testing.T) {
-		t.Run("fresh success becomes preparable", func(t *testing.T) {
-			conn := makeConn(&testConnScript{
-				performTransaction: func(*stun.Message) (*stun.Message, error) {
-					return new(stun.Message), nil
-				},
-			})
-			bound := requireBinding(t, conn.bindingMgr, netip.MustParseAddrPort("127.0.0.1:1234"))
-
-			conn.maybeBind(bound)
-			assert.Eventually(t, func() bool {
-				bound.muBind.Lock()
-				defer bound.muBind.Unlock()
-
-				return bound.attempt == nil
-			}, 5*time.Second, 10*time.Millisecond)
-			final, err := bound.preparationAccess(time.Now())
-			assert.True(t, final)
-			assert.NoError(t, err)
-		})
-
-		t.Run("recent confirmation does not refresh", func(t *testing.T) {
-			var attempts atomic.Int32
-			conn := makeConn(&testConnScript{
-				performTransaction: func(*stun.Message) (*stun.Message, error) {
-					attempts.Add(1)
-
-					return new(stun.Message), nil
-				},
-			})
-			bound := requireBinding(t, conn.bindingMgr, netip.MustParseAddrPort("127.0.0.1:1234"))
-			confirmBindingAt(t, bound, time.Now())
-
-			conn.maybeBind(bound)
-			assert.Equal(t, int32(0), attempts.Load())
-		})
-
-		t.Run("stale confirmation refreshes", func(t *testing.T) {
-			var attempts atomic.Int32
-			conn := makeConn(&testConnScript{
-				performTransaction: func(*stun.Message) (*stun.Message, error) {
-					attempts.Add(1)
-
-					return new(stun.Message), nil
-				},
-			})
-			bound := requireBinding(t, conn.bindingMgr, netip.MustParseAddrPort("127.0.0.1:1234"))
-			confirmBindingAt(t, bound, time.Now().Add(-defaultBindingRefreshInterval-time.Minute))
-
-			conn.maybeBind(bound)
-			assert.Eventually(t, func() bool { return attempts.Load() == 1 }, 5*time.Second, 10*time.Millisecond)
-		})
-	})
-
-	t.Run("bind()", func(t *testing.T) {
-		tests := []struct {
-			name                 string
-			transactionFn        func(*stun.Message) (*stun.Message, error)
-			expectErr            error
-			expectErrContains    string
-			expectBadRequest     bool
-			expectTurnErrorCode  stun.ErrorCode
-			expectBindingDeleted bool
-			expectNonceChanged   bool
-		}{
-			{
-				name: "PerformTransaction returns error",
-				transactionFn: func(*stun.Message) (*stun.Message, error) {
-					return nil, errFake
-				},
-				expectErr:            errFake,
-				expectBindingDeleted: false,
-			},
-			{
-				name: "ErrorResponse with CodeStaleNonce triggers nonce update",
-				transactionFn: func(*stun.Message) (*stun.Message, error) {
-					return staleNonceMsg(), nil
-				},
-				expectErr:          errTryAgain,
-				expectNonceChanged: true,
-			},
-			{
-				name: "ErrorResponse with error code returns cannot bind channel error",
-				transactionFn: func(*stun.Message) (*stun.Message, error) {
-					res := stun.MustBuild(
-						stun.NewType(stun.MethodChannelBind, stun.ClassErrorResponse),
-						stun.ErrorCodeAttribute{Code: stun.CodeForbidden, Reason: []byte("Forbidden")},
-					)
-
-					return res, nil
-				},
-				expectErr:           errCannotBindChannel,
-				expectErrContains:   "received error",
-				expectTurnErrorCode: stun.CodeForbidden,
-			},
-			{
-				name: "ErrorResponse with CodeBadRequest is detectable",
-				transactionFn: func(*stun.Message) (*stun.Message, error) {
-					res := stun.MustBuild(
-						stun.NewType(stun.MethodChannelBind, stun.ClassErrorResponse),
-						stun.ErrorCodeAttribute{Code: stun.CodeBadRequest, Reason: []byte("Bad Request")},
-					)
-
-					return res, nil
-				},
-				expectErr:           errCannotBindChannel,
-				expectErrContains:   "received error",
-				expectBadRequest:    true,
-				expectTurnErrorCode: stun.CodeBadRequest,
-			},
-			{
-				name: "ErrorResponse without error code returns unexpected response type error",
-				transactionFn: func(*stun.Message) (*stun.Message, error) {
-					res := stun.MustBuild(
-						stun.NewType(stun.MethodChannelBind, stun.ClassErrorResponse),
-					)
-
-					return res, nil
-				},
-				expectErr:         errCannotBindChannel,
-				expectErrContains: "unexpected response type",
-			},
-		}
-
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				conn := makeConn(&testConnScript{performTransaction: tt.transactionFn})
-				bound := requireBinding(t, conn.bindingMgr, netip.MustParseAddrPort("127.0.0.1:1234"))
-
-				nonceT0 := conn.nonce()
-
-				err := conn.bind(bound)
-				if tt.expectErr == nil {
-					require.NoError(t, err)
-				} else {
-					require.ErrorIs(t, err, tt.expectErr)
-				}
-				if tt.expectErrContains != "" {
-					require.ErrorContains(t, err, tt.expectErrContains)
-				}
-				assert.Equal(t, tt.expectBadRequest, errors.Is(err, errChannelBindBadRequest))
-				var turnErr *stun.TurnError
-				if tt.expectTurnErrorCode != 0 {
-					require.ErrorAs(t, err, &turnErr)
-					assert.Equal(t, tt.expectTurnErrorCode, turnErr.ErrorCodeAttr.Code)
-				} else {
-					assert.NotErrorAs(t, err, &turnErr, "response class must remain untyped")
-				}
-
-				if tt.expectBindingDeleted {
-					assert.Empty(t, conn.bindingMgr.chanMap)
-					assert.Empty(t, conn.bindingMgr.addrMap)
-				} else {
-					// Binding should remain so we don't re-bind the same peer with a different channel number
-					// after a lost/failed ChannelBind transaction.
-					assert.NotEmpty(t, conn.bindingMgr.chanMap)
-					assert.NotEmpty(t, conn.bindingMgr.addrMap)
-					b2, ok := conn.bindingMgr.findByAddr(bound.addr)
-					assert.True(t, ok)
-					assert.Equal(t, bound.number, b2.number)
-				}
-
-				nonceT1 := conn.nonce()
-				if tt.expectNonceChanged {
-					assert.NotEqual(t, nonceT0, nonceT1, "should change")
-					assert.NotEmpty(t, nonceT1, "should be non-empty")
-				} else {
-					assert.Equal(t, nonceT0, nonceT1, "should remain unchanged")
-				}
-			})
-		}
-	})
-
-	t.Run("bindChannel exhausts stale nonce retries without a typed TURN error", func(t *testing.T) {
-		var attempts atomic.Int32
-		conn := makeConn(&testConnScript{
+func TestUDPConnMaybeBind(t *testing.T) {
+	t.Run("fresh success becomes preparable", func(t *testing.T) {
+		conn := newTestConn(t, &testConnScript{
 			performTransaction: func(*stun.Message) (*stun.Message, error) {
-				attempts.Add(1)
-
-				return staleNonceMsg(), nil
+				return new(stun.Message), nil
 			},
 		})
 		bound := requireBinding(t, conn.bindingMgr, netip.MustParseAddrPort("127.0.0.1:1234"))
 
-		token, class, started := bound.beginAttempt(time.Now(), defaultBindingRefreshInterval)
-		require.True(t, started)
-		err := conn.bindChannel(bound, token, class)
-		require.NoError(t, err, "the permanent exhausted-retry cause lives only in readiness")
-		assert.Equal(t, int32(maxRetryAttempts), attempts.Load())
-		final, readinessErr := bound.preparationAccess(time.Now())
+		conn.maybeBind(bound)
+		assert.Eventually(t, func() bool {
+			bound.muBind.Lock()
+			defer bound.muBind.Unlock()
+
+			return bound.attempt == nil
+		}, 5*time.Second, 10*time.Millisecond)
+		final, err := bound.preparationAccess(time.Now())
 		assert.True(t, final)
-		require.ErrorIs(t, readinessErr, errTryAgain)
-		var turnErr *stun.TurnError
-		assert.NotErrorAs(t, readinessErr, &turnErr, "438 retry exhaustion must not become a typed TURN error")
+		assert.NoError(t, err)
 	})
 
-	t.Run("maybeBind() retries unknown binding after transaction failure", func(t *testing.T) {
-		var failed atomic.Bool
-
-		conn := makeConn(&testConnScript{
-			performTransaction: func(msg *stun.Message) (*stun.Message, error) {
-				if failed.CompareAndSwap(false, true) {
-					return nil, errFake
-				}
+	t.Run("recent confirmation does not refresh", func(t *testing.T) {
+		var attempts atomic.Int32
+		conn := newTestConn(t, &testConnScript{
+			performTransaction: func(*stun.Message) (*stun.Message, error) {
+				attempts.Add(1)
 
 				return new(stun.Message), nil
 			},
 		})
 		bound := requireBinding(t, conn.bindingMgr, netip.MustParseAddrPort("127.0.0.1:1234"))
-		originalCh := bound.number
+		confirmBindingAt(t, bound, time.Now())
 
 		conn.maybeBind(bound)
-		assert.Eventually(t, func() bool {
-			bound.muBind.Lock()
-			defer bound.muBind.Unlock()
-
-			return bound.attempt == nil
-		}, 5*time.Second, 10*time.Millisecond)
-		final, err := bound.preparationAccess(time.Now())
-		assert.False(t, final)
-		require.NoError(t, err)
-
-		conn.maybeBind(bound)
-		assert.Eventually(t, func() bool {
-			final, err = bound.preparationAccess(time.Now())
-
-			return final && err == nil
-		}, 5*time.Second, 10*time.Millisecond)
-
-		b2, ok := conn.bindingMgr.findByAddr(bound.addr)
-		assert.True(t, ok)
-		assert.Equal(t, originalCh, b2.number)
+		assert.Equal(t, int32(0), attempts.Load())
 	})
 
-	t.Run("ChannelBind 400 closes allocation", func(t *testing.T) {
-		peerAddr := netip.MustParseAddrPort("127.0.0.1:50000")
-		deallocatedCh := make(chan struct{}, 1)
-		refreshLifetimeCh := make(chan time.Duration, 1)
-		refreshErrCh := make(chan error, 1)
+	t.Run("stale confirmation refreshes", func(t *testing.T) {
+		var attempts atomic.Int32
+		conn := newTestConn(t, &testConnScript{
+			performTransaction: func(*stun.Message) (*stun.Message, error) {
+				attempts.Add(1)
 
-		script := &testConnScript{
-			performTransaction: func(msg *stun.Message) (*stun.Message, error) {
-				switch msg.Type.Method {
-				case stun.MethodChannelBind:
-					return stun.MustBuild(
-							stun.NewType(stun.MethodChannelBind, stun.ClassErrorResponse),
-							stun.ErrorCodeAttribute{Code: stun.CodeBadRequest, Reason: []byte("Bad Request")},
-						),
-						nil
-				case stun.MethodRefresh:
-					return nil, errFake
-				default:
-					return nil, errFake
-				}
-			},
-			startTransaction: func(msg *stun.Message) error {
-				if msg.Type.Method == stun.MethodRefresh {
-					var lifetime proto.Lifetime
-					if err := lifetime.GetFrom(msg); err != nil {
-						refreshErrCh <- err
-					} else {
-						refreshLifetimeCh <- lifetime.Duration
-					}
-				}
-
-				return nil
-			},
-			onDeallocated: func() {
-				deallocatedCh <- struct{}{}
-			},
-		}
-
-		conn := newTestConn(t, script)
-
-		bound := requireBinding(t, conn.bindingMgr, peerAddr)
-		conn.maybeBind(bound)
-
-		assert.Eventually(t, func() bool {
-			return conn.isClosed()
-		}, 5*time.Second, 10*time.Millisecond)
-
-		select {
-		case err := <-refreshErrCh:
-			require.NoError(t, err)
-		default:
-		}
-		select {
-		case <-deallocatedCh:
-		case <-time.After(5 * time.Second):
-			assert.Fail(t, "timed out waiting for deallocation callback")
-		}
-
-		select {
-		case lifetime := <-refreshLifetimeCh:
-			assert.Equal(t, time.Duration(0), lifetime)
-		case <-time.After(5 * time.Second):
-			assert.Fail(t, "timed out waiting for refresh deallocation")
-		}
-
-		_, err := conn.WriteTo([]byte("still closed"), peerAddr)
-		require.ErrorIs(t, err, net.ErrClosed)
-		var turnErr *stun.TurnError
-		require.ErrorAs(t, err, &turnErr)
-		assert.Equal(t, stun.CodeBadRequest, turnErr.ErrorCodeAttr.Code)
-
-		closeErr := conn.Close()
-		require.ErrorAs(t, closeErr, &turnErr)
-		assert.Equal(t, stun.CodeBadRequest, turnErr.ErrorCodeAttr.Code)
-	})
-
-	t.Run("ChannelBind 400 after unknown binding closes allocation", func(t *testing.T) {
-		peerAddr := netip.MustParseAddrPort("127.0.0.1:1234")
-		var channelBindAttempts atomic.Int32
-		deallocatedCh := make(chan struct{}, 1)
-
-		script := &testConnScript{
-			performTransaction: func(msg *stun.Message) (*stun.Message, error) {
-				switch msg.Type.Method {
-				case stun.MethodChannelBind:
-					if channelBindAttempts.Add(1) == 1 {
-						return nil, errFake
-					}
-
-					return badRequestMsg(), nil
-				default:
-					return nil, errFake
-				}
-			},
-			onDeallocated: func() {
-				deallocatedCh <- struct{}{}
-			},
-		}
-		conn := newTestConn(t, script)
-
-		bound := requireBinding(t, conn.bindingMgr, peerAddr)
-
-		conn.maybeBind(bound)
-		assert.Eventually(t, func() bool {
-			bound.muBind.Lock()
-			defer bound.muBind.Unlock()
-
-			return bound.attempt == nil
-		}, 5*time.Second, 10*time.Millisecond)
-
-		conn.maybeBind(bound)
-		assert.Eventually(t, func() bool {
-			return conn.isClosed()
-		}, 5*time.Second, 10*time.Millisecond)
-		assert.Equal(t, int32(2), channelBindAttempts.Load())
-
-		select {
-		case <-deallocatedCh:
-		case <-time.After(5 * time.Second):
-			assert.Fail(t, "timed out waiting for deallocation callback")
-		}
-
-		_, err := conn.WriteTo([]byte("still closed"), peerAddr)
-		var turnErr *stun.TurnError
-		require.ErrorAs(t, err, &turnErr)
-		assert.Equal(t, stun.CodeBadRequest, turnErr.ErrorCodeAttr.Code)
-	})
-
-	t.Run("ChannelBind 400 after lost ready refresh keeps saved binding", func(t *testing.T) {
-		peerAddr := netip.MustParseAddrPort("127.0.0.1:1234")
-		var channelBindAttempts atomic.Int32
-
-		script := &testConnScript{
-			performTransaction: func(msg *stun.Message) (*stun.Message, error) {
-				switch msg.Type.Method {
-				case stun.MethodChannelBind:
-					if channelBindAttempts.Add(1) == 1 {
-						return nil, newTimeoutError("channel bind timeout")
-					}
-
-					return badRequestMsg(), nil
-				default:
-					return nil, errFake
-				}
-			},
-		}
-		conn := newTestConn(t, script)
-
-		bound := requireBinding(t, conn.bindingMgr, peerAddr)
-		staleRefreshedAt := time.Now().Add(-(defaultBindingRefreshInterval + time.Minute))
-		confirmBindingAt(t, bound, staleRefreshedAt)
-
-		conn.maybeBind(bound)
-		assert.Eventually(t, func() bool {
-			bound.muBind.Lock()
-			defer bound.muBind.Unlock()
-
-			return bound.attempt == nil
-		}, 5*time.Second, 10*time.Millisecond)
-		final, err := bound.preparationAccess(time.Now())
-		require.True(t, final)
-		require.NoError(t, err)
-
-		conn.maybeBind(bound)
-		assert.Eventually(t, func() bool {
-			bound.muBind.Lock()
-			defer bound.muBind.Unlock()
-
-			return channelBindAttempts.Load() == 2 && bound.attempt == nil
-		}, 5*time.Second, 10*time.Millisecond)
-		_, err = bound.preparationAccess(staleRefreshedAt.Add(channelBindingLifetime))
-		require.ErrorIs(t, err, ErrChannelBindingExpired,
-			"recovered 400 must not advance confirmation time")
-		assert.False(t, conn.isClosed())
-	})
-
-	t.Run("ChannelBind 400 refresh keeps saved binding", func(t *testing.T) {
-		staleRefreshedAt := time.Now().Add(-(defaultBindingRefreshInterval + time.Minute))
-		var channelBindAttempts atomic.Int32
-		conn := makeConn(&testConnScript{
-			performTransaction: func(msg *stun.Message) (*stun.Message, error) {
-				channelBindAttempts.Add(1)
-
-				return badRequestMsg(), nil
+				return new(stun.Message), nil
 			},
 		})
 		bound := requireBinding(t, conn.bindingMgr, netip.MustParseAddrPort("127.0.0.1:1234"))
-		confirmBindingAt(t, bound, staleRefreshedAt)
+		confirmBindingAt(t, bound, time.Now().Add(-defaultBindingRefreshInterval-time.Minute))
 
 		conn.maybeBind(bound)
-		assert.Eventually(t, func() bool {
-			bound.muBind.Lock()
-			defer bound.muBind.Unlock()
-
-			return channelBindAttempts.Load() == 1 && bound.attempt == nil
-		}, 5*time.Second, 10*time.Millisecond)
-		conn.maybeBind(bound)
-		assert.Eventually(t, func() bool { return channelBindAttempts.Load() == 2 }, 5*time.Second, 10*time.Millisecond)
-		assert.False(t, conn.isClosed())
+		assert.Eventually(t, func() bool { return attempts.Load() == 1 }, 5*time.Second, 10*time.Millisecond)
 	})
+}
 
-	t.Run("WriteTo()", func(t *testing.T) {
-		script := &testConnScript{
-			performTransaction: func(*stun.Message) (*stun.Message, error) {
+func TestUDPConnBind(t *testing.T) {
+	tests := []struct {
+		name                string
+		transactionFn       func(*stun.Message) (*stun.Message, error)
+		expectErr           error
+		expectErrContains   string
+		expectBadRequest    bool
+		expectTurnErrorCode stun.ErrorCode
+		expectNonceChanged  bool
+	}{
+		{
+			name: "PerformTransaction returns error",
+			transactionFn: func(*stun.Message) (*stun.Message, error) {
 				return nil, errFake
 			},
-			writeTo: func(data []byte) (int, error) {
-				return len(data), nil
+			expectErr: errFake,
+		},
+		{
+			name: "ErrorResponse with CodeStaleNonce triggers nonce update",
+			transactionFn: func(*stun.Message) (*stun.Message, error) {
+				return channelBindStaleNonceResponse(), nil
 			},
-		}
+			expectErr:          errTryAgain,
+			expectNonceChanged: true,
+		},
+		{
+			name: "ErrorResponse with error code returns cannot bind channel error",
+			transactionFn: func(*stun.Message) (*stun.Message, error) {
+				res := stun.MustBuild(
+					stun.NewType(stun.MethodChannelBind, stun.ClassErrorResponse),
+					stun.ErrorCodeAttribute{Code: stun.CodeForbidden, Reason: []byte("Forbidden")},
+				)
 
-		addr := netip.MustParseAddrPort("127.0.0.1:1234")
+				return res, nil
+			},
+			expectErr:           errCannotBindChannel,
+			expectErrContains:   "received error",
+			expectTurnErrorCode: stun.CodeForbidden,
+		},
+		{
+			name: "ErrorResponse with CodeBadRequest is detectable",
+			transactionFn: func(*stun.Message) (*stun.Message, error) {
+				res := stun.MustBuild(
+					stun.NewType(stun.MethodChannelBind, stun.ClassErrorResponse),
+					stun.ErrorCodeAttribute{Code: stun.CodeBadRequest, Reason: []byte("Bad Request")},
+				)
 
-		conn := newTestConn(t, script)
+				return res, nil
+			},
+			expectErr:           errCannotBindChannel,
+			expectErrContains:   "received error",
+			expectBadRequest:    true,
+			expectTurnErrorCode: stun.CodeBadRequest,
+		},
+		{
+			name: "ErrorResponse without error code returns unexpected response type error",
+			transactionFn: func(*stun.Message) (*stun.Message, error) {
+				res := stun.MustBuild(
+					stun.NewType(stun.MethodChannelBind, stun.ClassErrorResponse),
+				)
 
-		binding := requireBinding(t, conn.bindingMgr, addr)
-		confirmBindingAt(t, binding, time.Now())
-		final, err := binding.preparationAccess(time.Now())
-		require.True(t, final)
-		require.NoError(t, err)
+				return res, nil
+			},
+			expectErr:         errCannotBindChannel,
+			expectErrContains: "unexpected response type",
+		},
+	}
 
-		buf := []byte("Hello")
-		n, err := conn.WriteTo(buf, addr)
-		require.NoError(t, err)
-		assert.Equal(t, len(buf), n, "WriteTo reports the payload length, not the ChannelData frame length")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conn := newTestConn(t, &testConnScript{performTransaction: tt.transactionFn})
+			bound := requireBinding(t, conn.bindingMgr, netip.MustParseAddrPort("127.0.0.1:1234"))
+
+			nonceT0 := conn.nonce()
+
+			err := conn.bind(bound)
+			if tt.expectErr == nil {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, tt.expectErr)
+			}
+			if tt.expectErrContains != "" {
+				require.ErrorContains(t, err, tt.expectErrContains)
+			}
+			assert.Equal(t, tt.expectBadRequest, errors.Is(err, errChannelBindBadRequest))
+			var turnErr *stun.TurnError
+			if tt.expectTurnErrorCode != 0 {
+				require.ErrorAs(t, err, &turnErr)
+				assert.Equal(t, tt.expectTurnErrorCode, turnErr.ErrorCodeAttr.Code)
+			} else {
+				assert.NotErrorAs(t, err, &turnErr, "response class must remain untyped")
+			}
+
+			// Binding should remain so we don't re-bind the same peer with a different channel number
+			// after a lost/failed ChannelBind transaction.
+			assert.NotEmpty(t, conn.bindingMgr.chanMap)
+			assert.NotEmpty(t, conn.bindingMgr.addrMap)
+			b2, ok := conn.bindingMgr.findByAddr(bound.addr)
+			assert.True(t, ok)
+			assert.Equal(t, bound.number, b2.number)
+
+			nonceT1 := conn.nonce()
+			if tt.expectNonceChanged {
+				assert.NotEqual(t, nonceT0, nonceT1, "should change")
+				assert.NotEmpty(t, nonceT1, "should be non-empty")
+			} else {
+				assert.Equal(t, nonceT0, nonceT1, "should remain unchanged")
+			}
+		})
+	}
+}
+
+func TestUDPConnBindChannelExhaustsStaleNonceRetries(t *testing.T) {
+	var attempts atomic.Int32
+	conn := newTestConn(t, &testConnScript{
+		performTransaction: func(*stun.Message) (*stun.Message, error) {
+			attempts.Add(1)
+
+			return channelBindStaleNonceResponse(), nil
+		},
 	})
+	bound := requireBinding(t, conn.bindingMgr, netip.MustParseAddrPort("127.0.0.1:1234"))
 
-	t.Run("ChannelBind transaction failure retains channel number", func(t *testing.T) {
-		addr := netip.MustParseAddrPort("127.0.0.1:9999")
-		script := &testConnScript{
-			performTransaction: func(*stun.Message) (*stun.Message, error) {
+	token, class, started := bound.beginAttempt(time.Now(), defaultBindingRefreshInterval)
+	require.True(t, started)
+	err := conn.bindChannel(bound, token, class)
+	require.NoError(t, err, "the permanent exhausted-retry cause lives only in readiness")
+	assert.Equal(t, int32(maxRetryAttempts), attempts.Load())
+	final, readinessErr := bound.preparationAccess(time.Now())
+	assert.True(t, final)
+	require.ErrorIs(t, readinessErr, errTryAgain)
+	var turnErr *stun.TurnError
+	assert.NotErrorAs(t, readinessErr, &turnErr, "438 retry exhaustion must not become a typed TURN error")
+}
+
+func TestUDPConnMaybeBindRetriesUnknownBinding(t *testing.T) {
+	var failed atomic.Bool
+
+	conn := newTestConn(t, &testConnScript{
+		performTransaction: func(msg *stun.Message) (*stun.Message, error) {
+			if failed.CompareAndSwap(false, true) {
 				return nil, errFake
-			},
-			writeTo: func(data []byte) (int, error) {
-				return len(data), nil
-			},
-		}
-		conn := newTestConn(t, script)
-		bound := requireBinding(t, conn.bindingMgr, addr)
-		originalCh := bound.number
+			}
 
-		// A failed bind attempt should not remove the binding: the same peer keeps
-		// its channel number, and a write (which fails, unprepared) does not
-		// disturb it.
-		err := conn.bind(bound)
-		require.ErrorIs(t, err, errFake)
-
-		_, err = conn.WriteTo([]byte("hi"), addr)
-		require.ErrorIs(t, err, ErrNotPrepared)
-
-		b2, ok := conn.bindingMgr.findByAddr(addr)
-		assert.True(t, ok)
-		assert.Equal(t, originalCh, b2.number)
+			return new(stun.Message), nil
+		},
 	})
+	bound := requireBinding(t, conn.bindingMgr, netip.MustParseAddrPort("127.0.0.1:1234"))
+	originalCh := bound.number
+
+	conn.maybeBind(bound)
+	assert.Eventually(t, func() bool {
+		bound.muBind.Lock()
+		defer bound.muBind.Unlock()
+
+		return bound.attempt == nil
+	}, 5*time.Second, 10*time.Millisecond)
+	final, err := bound.preparationAccess(time.Now())
+	assert.False(t, final)
+	require.NoError(t, err)
+
+	conn.maybeBind(bound)
+	assert.Eventually(t, func() bool {
+		final, err = bound.preparationAccess(time.Now())
+
+		return final && err == nil
+	}, 5*time.Second, 10*time.Millisecond)
+
+	b2, ok := conn.bindingMgr.findByAddr(bound.addr)
+	assert.True(t, ok)
+	assert.Equal(t, originalCh, b2.number)
+}
+
+func TestUDPConnChannelBindBadRequestClosesAllocation(t *testing.T) {
+	peerAddr := netip.MustParseAddrPort("127.0.0.1:50000")
+	deallocatedCh := make(chan struct{}, 1)
+	refreshLifetimeCh := make(chan time.Duration, 1)
+	refreshErrCh := make(chan error, 1)
+
+	script := &testConnScript{
+		performTransaction: func(msg *stun.Message) (*stun.Message, error) {
+			switch msg.Type.Method {
+			case stun.MethodChannelBind:
+				return stun.MustBuild(
+						stun.NewType(stun.MethodChannelBind, stun.ClassErrorResponse),
+						stun.ErrorCodeAttribute{Code: stun.CodeBadRequest, Reason: []byte("Bad Request")},
+					),
+					nil
+			case stun.MethodRefresh:
+				return nil, errFake
+			default:
+				return nil, errFake
+			}
+		},
+		startTransaction: func(msg *stun.Message) error {
+			if msg.Type.Method == stun.MethodRefresh {
+				var lifetime proto.Lifetime
+				if err := lifetime.GetFrom(msg); err != nil {
+					refreshErrCh <- err
+				} else {
+					refreshLifetimeCh <- lifetime.Duration
+				}
+			}
+
+			return nil
+		},
+		onDeallocated: func() {
+			deallocatedCh <- struct{}{}
+		},
+	}
+
+	conn := newTestConn(t, script)
+
+	bound := requireBinding(t, conn.bindingMgr, peerAddr)
+	conn.maybeBind(bound)
+
+	assert.Eventually(t, func() bool {
+		return conn.isClosed()
+	}, 5*time.Second, 10*time.Millisecond)
+
+	select {
+	case err := <-refreshErrCh:
+		require.NoError(t, err)
+	default:
+	}
+	select {
+	case <-deallocatedCh:
+	case <-time.After(5 * time.Second):
+		assert.Fail(t, "timed out waiting for deallocation callback")
+	}
+
+	select {
+	case lifetime := <-refreshLifetimeCh:
+		assert.Equal(t, time.Duration(0), lifetime)
+	case <-time.After(5 * time.Second):
+		assert.Fail(t, "timed out waiting for refresh deallocation")
+	}
+
+	_, err := conn.WriteTo([]byte("still closed"), peerAddr)
+	require.ErrorIs(t, err, net.ErrClosed)
+	var turnErr *stun.TurnError
+	require.ErrorAs(t, err, &turnErr)
+	assert.Equal(t, stun.CodeBadRequest, turnErr.ErrorCodeAttr.Code)
+
+	closeErr := conn.Close()
+	require.ErrorAs(t, closeErr, &turnErr)
+	assert.Equal(t, stun.CodeBadRequest, turnErr.ErrorCodeAttr.Code)
+}
+
+func TestUDPConnChannelBindBadRequestAfterUnknownBindingClosesAllocation(t *testing.T) {
+	peerAddr := netip.MustParseAddrPort("127.0.0.1:1234")
+	var channelBindAttempts atomic.Int32
+	deallocatedCh := make(chan struct{}, 1)
+
+	script := &testConnScript{
+		performTransaction: func(msg *stun.Message) (*stun.Message, error) {
+			switch msg.Type.Method {
+			case stun.MethodChannelBind:
+				if channelBindAttempts.Add(1) == 1 {
+					return nil, errFake
+				}
+
+				return channelBindBadRequestResponse(), nil
+			default:
+				return nil, errFake
+			}
+		},
+		onDeallocated: func() {
+			deallocatedCh <- struct{}{}
+		},
+	}
+	conn := newTestConn(t, script)
+
+	bound := requireBinding(t, conn.bindingMgr, peerAddr)
+
+	conn.maybeBind(bound)
+	assert.Eventually(t, func() bool {
+		bound.muBind.Lock()
+		defer bound.muBind.Unlock()
+
+		return bound.attempt == nil
+	}, 5*time.Second, 10*time.Millisecond)
+
+	conn.maybeBind(bound)
+	assert.Eventually(t, func() bool {
+		return conn.isClosed()
+	}, 5*time.Second, 10*time.Millisecond)
+	assert.Equal(t, int32(2), channelBindAttempts.Load())
+
+	select {
+	case <-deallocatedCh:
+	case <-time.After(5 * time.Second):
+		assert.Fail(t, "timed out waiting for deallocation callback")
+	}
+
+	_, err := conn.WriteTo([]byte("still closed"), peerAddr)
+	var turnErr *stun.TurnError
+	require.ErrorAs(t, err, &turnErr)
+	assert.Equal(t, stun.CodeBadRequest, turnErr.ErrorCodeAttr.Code)
+}
+
+func TestUDPConnChannelBindBadRequestAfterLostRefreshKeepsBinding(t *testing.T) {
+	peerAddr := netip.MustParseAddrPort("127.0.0.1:1234")
+	var channelBindAttempts atomic.Int32
+
+	script := &testConnScript{
+		performTransaction: func(msg *stun.Message) (*stun.Message, error) {
+			switch msg.Type.Method {
+			case stun.MethodChannelBind:
+				if channelBindAttempts.Add(1) == 1 {
+					return nil, newTimeoutError("channel bind timeout")
+				}
+
+				return channelBindBadRequestResponse(), nil
+			default:
+				return nil, errFake
+			}
+		},
+	}
+	conn := newTestConn(t, script)
+
+	bound := requireBinding(t, conn.bindingMgr, peerAddr)
+	staleRefreshedAt := time.Now().Add(-(defaultBindingRefreshInterval + time.Minute))
+	confirmBindingAt(t, bound, staleRefreshedAt)
+
+	conn.maybeBind(bound)
+	assert.Eventually(t, func() bool {
+		bound.muBind.Lock()
+		defer bound.muBind.Unlock()
+
+		return bound.attempt == nil
+	}, 5*time.Second, 10*time.Millisecond)
+	final, err := bound.preparationAccess(time.Now())
+	require.True(t, final)
+	require.NoError(t, err)
+
+	conn.maybeBind(bound)
+	assert.Eventually(t, func() bool {
+		bound.muBind.Lock()
+		defer bound.muBind.Unlock()
+
+		return channelBindAttempts.Load() == 2 && bound.attempt == nil
+	}, 5*time.Second, 10*time.Millisecond)
+	_, err = bound.preparationAccess(staleRefreshedAt.Add(channelBindingLifetime))
+	require.ErrorIs(t, err, ErrChannelBindingExpired,
+		"recovered 400 must not advance confirmation time")
+	assert.False(t, conn.isClosed())
+}
+
+func TestUDPConnChannelBindBadRequestRefreshKeepsBinding(t *testing.T) {
+	staleRefreshedAt := time.Now().Add(-(defaultBindingRefreshInterval + time.Minute))
+	var channelBindAttempts atomic.Int32
+	conn := newTestConn(t, &testConnScript{
+		performTransaction: func(msg *stun.Message) (*stun.Message, error) {
+			channelBindAttempts.Add(1)
+
+			return channelBindBadRequestResponse(), nil
+		},
+	})
+	bound := requireBinding(t, conn.bindingMgr, netip.MustParseAddrPort("127.0.0.1:1234"))
+	confirmBindingAt(t, bound, staleRefreshedAt)
+
+	conn.maybeBind(bound)
+	assert.Eventually(t, func() bool {
+		bound.muBind.Lock()
+		defer bound.muBind.Unlock()
+
+		return channelBindAttempts.Load() == 1 && bound.attempt == nil
+	}, 5*time.Second, 10*time.Millisecond)
+	conn.maybeBind(bound)
+	assert.Eventually(t, func() bool { return channelBindAttempts.Load() == 2 }, 5*time.Second, 10*time.Millisecond)
+	assert.False(t, conn.isClosed())
+}
+
+func TestUDPConnWriteTo(t *testing.T) {
+	script := &testConnScript{
+		performTransaction: func(*stun.Message) (*stun.Message, error) {
+			return nil, errFake
+		},
+		writeTo: func(data []byte) (int, error) {
+			return len(data), nil
+		},
+	}
+
+	addr := netip.MustParseAddrPort("127.0.0.1:1234")
+
+	conn := newTestConn(t, script)
+
+	binding := requireBinding(t, conn.bindingMgr, addr)
+	confirmBindingAt(t, binding, time.Now())
+	final, err := binding.preparationAccess(time.Now())
+	require.True(t, final)
+	require.NoError(t, err)
+
+	buf := []byte("Hello")
+	n, err := conn.WriteTo(buf, addr)
+	require.NoError(t, err)
+	assert.Equal(t, len(buf), n, "WriteTo reports the payload length, not the ChannelData frame length")
+}
+
+func TestUDPConnBindTransactionFailureRetainsChannelNumber(t *testing.T) {
+	addr := netip.MustParseAddrPort("127.0.0.1:9999")
+	script := &testConnScript{
+		performTransaction: func(*stun.Message) (*stun.Message, error) {
+			return nil, errFake
+		},
+		writeTo: func(data []byte) (int, error) {
+			return len(data), nil
+		},
+	}
+	conn := newTestConn(t, script)
+	bound := requireBinding(t, conn.bindingMgr, addr)
+	originalCh := bound.number
+
+	// A failed bind attempt should not remove the binding: the same peer keeps
+	// its channel number, and a write (which fails, unprepared) does not
+	// disturb it.
+	err := conn.bind(bound)
+	require.ErrorIs(t, err, errFake)
+
+	_, err = conn.WriteTo([]byte("hi"), addr)
+	require.ErrorIs(t, err, ErrNotPrepared)
+
+	b2, ok := conn.bindingMgr.findByAddr(addr)
+	assert.True(t, ok)
+	assert.Equal(t, originalCh, b2.number)
 }
 
 func TestUDPConnBindingCompletionOrdersWithClose(t *testing.T) {

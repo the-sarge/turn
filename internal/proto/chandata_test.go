@@ -88,7 +88,9 @@ func TestChannelData_Equal(t *testing.T) {
 			},
 		},
 	} {
-		assert.Equal(t, tc.value, tc.a.Equal(tc.b))
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.value, tc.a.Equal(tc.b))
+		})
 	}
 }
 
@@ -123,10 +125,12 @@ func TestChannelData_Decode(t *testing.T) {
 			err:  ErrBadChannelDataLength,
 		},
 	} {
-		m := &ChannelData{
-			Raw: tc.buf,
-		}
-		assert.ErrorIs(t, m.Decode(), tc.err)
+		t.Run(tc.name, func(t *testing.T) {
+			m := &ChannelData{
+				Raw: tc.buf,
+			}
+			assert.ErrorIs(t, m.Decode(), tc.err)
+		})
 	}
 }
 
@@ -161,7 +165,9 @@ func TestIsChannelData(t *testing.T) {
 			buf:  []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
 		},
 	} {
-		assert.Equal(t, tc.value, IsChannelData(tc.buf))
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.value, IsChannelData(tc.buf))
+		})
 	}
 }
 
