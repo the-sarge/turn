@@ -52,9 +52,11 @@ func (a *Allocation) PreparePeer(ctx context.Context, peer netip.AddrPort) error
 // ReadFrom reads one relayed datagram, copying the payload into p. It returns
 // the number of bytes copied and the canonical source peer, blocking until a
 // datagram arrives or the allocation closes. Datagrams arriving while the
-// receive queue is full are dropped, matching UDP semantics. After the
-// allocation closes, ReadFrom returns net.ErrClosed, wrapped with the
-// terminal cause when the allocation sealed itself (for example
+// receive queue is full are dropped, matching UDP semantics. Sealing does not
+// drain the queue: a datagram queued before sealing may still be returned,
+// with no priority guaranteed between queued data and closure. When closure
+// is selected, ReadFrom returns net.ErrClosed, wrapped with the terminal
+// cause when the allocation sealed itself (for example
 // ErrAllocationRefreshFailed).
 func (a *Allocation) ReadFrom(p []byte) (int, netip.AddrPort, error) {
 	return a.conn.ReadFrom(p)
@@ -76,9 +78,12 @@ func (a *Allocation) WriteTo(payload []byte, peer netip.AddrPort) (int, error) {
 	return a.conn.WriteTo(payload, canonical)
 }
 
-// Close releases the allocation on the server and unblocks pending ReadFrom
-// and WriteTo calls. It returns only after allocation-owned goroutines have
-// finished; it never closes or deadlines the caller-owned base socket.
+// Close seals the allocation and emits its lifetime-zero release to the
+// server. Sealing wakes blocked ReadFrom calls, subject to the queued-data
+// behavior documented on ReadFrom. Close returns only after allocation-owned
+// goroutines have finished. It never closes or deadlines the caller-owned
+// base socket: the caller must interrupt blocked socket I/O, including a
+// WriteTo already in progress or I/O needed for Close to finish.
 //
 // Close always joins, then returns: the lifetime-0 release error (or nil)
 // when this call performed the release — a socket-close cause satisfies

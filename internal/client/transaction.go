@@ -147,6 +147,10 @@ func (r *TransactionRegistry) armTimerLocked(entry *transactionRegistryEntry) {
 	})
 }
 
+// retry advances the retransmission schedule from the configured initial RTO
+// (200 ms by default in Client). Each retry interval doubles up to
+// maxRtxInterval; maxRtxCount includes the initial request. Socket writes run
+// outside the registry lock, and only a still-live entry can re-arm its timer.
 func (r *TransactionRegistry) retry(entry *transactionRegistryEntry) {
 	r.mutex.Lock()
 	if r.live[entry.id] != entry {

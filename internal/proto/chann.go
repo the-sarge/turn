@@ -50,10 +50,9 @@ func (n *ChannelNumber) GetFrom(m *stun.Message) error {
 	return nil
 }
 
-// See https://tools.ietf.org/html/rfc5766#section-11:
-//
-// 0x4000 through 0x7FFF: These values are the allowed channel
-// numbers (16,383 possible values).
+// The inclusive RFC 5766 Section 11 range, 0x4000 through 0x7FFF, contains
+// 16,384 channel numbers. The RFC's printed count of 16,383 is off by one.
+// See https://www.rfc-editor.org/rfc/rfc5766.html#section-11.
 const (
 	MinChannelNumber = 0x4000
 	MaxChannelNumber = 0x7FFF
