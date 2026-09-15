@@ -9,7 +9,6 @@ import (
 	"context"
 	"net"
 	"net/netip"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -505,95 +504,36 @@ func TestClientNonceExpiration(t *testing.T) {
 // ChannelBind also refreshes permission, so this test does not independently
 // demonstrate CreatePermission refresh.
 func TestClientE2E(t *testing.T) {
-	server, err := turntest.New(turntest.Options{
-		Realm:              "pion.ly",
-		Username:           testUsername,
-		Password:           testPassword,
-		AllocationLifetime: time.Second,
-		PermissionTimeout:  time.Millisecond * 100,
-		ChannelBindTimeout: time.Millisecond * 100,
-	})
-	require.NoError(t, err)
-
-	stunClientConn, err := net.ListenPacket("udp4", "0.0.0.0:0")
-	require.NoError(t, err)
-
-	client, err := NewClient(&ClientConfig{
-		Conn:                      stunClientConn,
-		Server:                    server.Addr(),
-		Username:                  testUsername,
-		Password:                  testPassword,
-		PermissionRefreshInterval: time.Millisecond * 50,
-		bindingRefreshInterval:    time.Millisecond * 50,
-		bindingCheckInterval:      time.Millisecond * 50,
-	})
-	require.NoError(t, err)
-	startTestPump(t, client, stunClientConn)
-
-	allocation, err := client.Allocate(context.Background())
-	require.NoError(t, err)
-
-	remotePeerConn, err := net.ListenPacket("udp4", "0.0.0.0:0")
-	require.NoError(t, err)
-
-	remotePeerAddr, ok := remotePeerConn.LocalAddr().(*net.UDPAddr)
-	assert.True(t, ok)
-
-	relayedAddr := allocation.RelayedAddr()
-
-	sendPackets := func(write func([]byte) error, read func([]byte) (int, error)) {
-		const expectedPktCount = 25
-		expectedPacket := []byte{0xDE, 0xAD, 0xBE, 0xEF}
-
-		pktCount := atomic.Uint32{}
-		go func() {
-			buff := make([]byte, len(expectedPacket))
-			for pktCount.Load() < expectedPktCount {
-				i, readErr := read(buff)
-				assert.NoError(t, readErr)
-
-				assert.Equal(t, expectedPacket, buff[:i])
-				pktCount.Add(1)
-			}
-		}()
-		for pktCount.Load() < expectedPktCount {
-			require.NoError(t, write(expectedPacket))
-
-			time.Sleep(time.Millisecond * 25)
-		}
+	allocation, clientConn, peerConn := newClientE2E(t)
+	peer := netip.MustParseAddrPort(peerConn.LocalAddr().String())
+	runDelivery := func(direction string, write func([]byte) error, read func([]byte) (int, error)) {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		deadline, _ := ctx.Deadline()
+		require.NoError(t, clientConn.SetWriteDeadline(deadline))
+		require.NoError(t, peerConn.SetWriteDeadline(deadline))
+		require.NoError(t, sendPackets(ctx, direction, write, read, func() {
+			// Closing the caller-owned transport first also releases allocation workers
+			// blocked in writes, so allocation.Close can join without hanging.
+			closeE2EResource(t, clientConn)
+			closeE2EResource(t, peerConn)
+			closeE2EResource(t, allocation)
+		}))
 	}
-
-	peer := netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), uint16(remotePeerAddr.Port)) //nolint:gosec // test port
-	require.NoError(t, allocation.PreparePeer(context.Background(), peer))
-	sendPackets(
-		func(p []byte) error {
-			_, writeErr := allocation.WriteTo(p, peer)
-
-			return writeErr
-		},
-		func(p []byte) (int, error) {
-			n, _, readErr := remotePeerConn.ReadFrom(p)
-
-			return n, readErr
-		},
-	)
-	relayedUDP := net.UDPAddrFromAddrPort(relayedAddr)
-	sendPackets(
-		func(p []byte) error {
-			_, writeErr := remotePeerConn.WriteTo(p, relayedUDP)
-
-			return writeErr
-		},
-		func(p []byte) (int, error) {
-			n, _, readErr := allocation.ReadFrom(p)
-
-			return n, readErr
-		},
-	)
-
-	// Shutdown
-	assert.NoError(t, remotePeerConn.Close())
-	assert.NoError(t, allocation.Close())
-	assert.NoError(t, stunClientConn.Close())
-	assert.NoError(t, server.Close())
+	runDelivery("allocation to peer", func(p []byte) error {
+		_, err := allocation.WriteTo(p, peer)
+		return err
+	}, func(p []byte) (int, error) {
+		n, _, err := peerConn.ReadFrom(p)
+		return n, err
+	})
+	relayedUDP := net.UDPAddrFromAddrPort(allocation.RelayedAddr())
+	runDelivery("peer to allocation", func(p []byte) error {
+		_, err := peerConn.WriteTo(p, relayedUDP)
+		return err
+	}, func(p []byte) (int, error) {
+		n, _, err := allocation.ReadFrom(p)
+		return n, err
+	})
 }
