@@ -11,7 +11,8 @@ cd "$fixture"
 git init -q --initial-branch=main
 git config user.name 'CI range fixture'
 git config user.email 'ci-range@example.invalid'
-printf 'initial\n' > README.md
+# Inherited whitespace is harmless unless a comparison reintroduces it.
+printf 'initial \n' > README.md
 git add README.md
 git commit -qm initial
 initial="$(git rev-parse HEAD)"
@@ -25,11 +26,13 @@ code="$(git rev-parse HEAD)"
 printf 'trailing whitespace \n' >> README.md
 git commit -qam whitespace
 whitespace="$(git rev-parse HEAD)"
-# A sibling branch with a code file: classifier compares endpoints while the
-# docs lane checks only the changes since their common ancestor.
+# A sibling fixes inherited whitespace and adds code. Endpoint comparison
+# reintroduces whitespace and removes code; merge-base comparison adds only
+# clean documentation. This distinguishes both callers' comparison policies.
 git checkout -q --detach "$initial"
+printf 'initial\n' > README.md
 printf 'package sibling\n' > sibling.go
-git add sibling.go
+git add README.md sibling.go
 git commit -qm sibling
 sibling="$(git rev-parse HEAD)"
 disconnected="$(printf 'disconnected\n' | git commit-tree "$docs^{tree}")"
