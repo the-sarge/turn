@@ -57,8 +57,8 @@ type Options struct {
 	// Defaults to the RFC 5766 default of 10 minutes.
 	AllocationLifetime time.Duration
 
-	// PermissionTimeout is the expiry of installed permissions. Defaults to 5
-	// minutes.
+	// PermissionTimeout is the expiry of installed permissions. Peer datagrams
+	// require a live permission even with a live binding. Defaults to 5 minutes.
 	PermissionTimeout time.Duration
 
 	// ChannelBindTimeout is the expiry of confirmed channel bindings.
@@ -301,9 +301,9 @@ func (s *Server) relayLoop(alloc *allocationState) {
 	}
 }
 
-// forwardFromPeer delivers one peer datagram to the client: as ChannelData
-// when the peer has a live channel binding, as a Data indication when the
-// peer is permitted but unbound, and dropped otherwise.
+// forwardFromPeer drops peer datagrams without a live permission. Permitted
+// datagrams reach the client as ChannelData when the peer has a live channel
+// binding, or as a Data indication otherwise.
 func (s *Server) forwardFromPeer(alloc *allocationState, data []byte, peerAddr net.Addr) {
 	peerUDP, ok := peerAddr.(*net.UDPAddr)
 	if !ok {
@@ -313,6 +313,13 @@ func (s *Server) forwardFromPeer(alloc *allocationState, data []byte, peerAddr n
 
 	now := time.Now()
 	s.mu.Lock()
+	expiry, havePerm := alloc.permissions[peer.Addr()]
+	if !havePerm || !now.Before(expiry) {
+		s.mu.Unlock()
+
+		return
+	}
+
 	number, bound := uint16(0), false
 	for num, entry := range alloc.bindings {
 		if entry.peer == peer && now.Before(entry.expiresAt) {
@@ -321,8 +328,6 @@ func (s *Server) forwardFromPeer(alloc *allocationState, data []byte, peerAddr n
 			break
 		}
 	}
-	expiry, havePerm := alloc.permissions[peer.Addr()]
-	permitted := havePerm && now.Before(expiry)
 	clientAddr := alloc.clientAddr
 	s.mu.Unlock()
 
@@ -331,7 +336,7 @@ func (s *Server) forwardFromPeer(alloc *allocationState, data []byte, peerAddr n
 		chData := &proto.ChannelData{Data: data, Number: proto.ChannelNumber(number)}
 		chData.Encode()
 		_, _ = s.listener.WriteTo(chData.Raw, clientAddr)
-	case permitted:
+	default:
 		msg, err := stun.Build(
 			stun.TransactionID,
 			stun.NewType(stun.MethodData, stun.ClassIndication),
@@ -342,7 +347,6 @@ func (s *Server) forwardFromPeer(alloc *allocationState, data []byte, peerAddr n
 			return
 		}
 		_, _ = s.listener.WriteTo(msg.Raw, clientAddr)
-	default: // Dropped: no binding and no permission.
 	}
 }
 
