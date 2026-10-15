@@ -1242,3 +1242,16 @@ Published [v5.3.1](https://github.com/the-sarge/turn/releases/tag/v5.3.1) at `32
 - A clean dedicated feature-branch worktree passed `task release-gate`, `task workflow-check`, and `task secret-scan` at the exact tagged commit with Go 1.27.1 on Darwin/arm64. Validation included lint, ordinary and race tests, dependency checks, cross-builds, three 30-second fuzz runs, 20 CI range cases, and a full-history secret scan. The installed Command Line Tools were selected via `DEVELOPER_DIR` after the default Xcode selection rejected compilation because its license was unaccepted.
 - [Release checks run 35000891901](https://github.com/the-sarge/turn/actions/runs/35000891901) passed the Linux release gate, consumer Go-floor tests, and secret scan at `3207a1c5a6273161133c288bb9e5e6414eb5b464`. The preparation PR's [required CI](https://github.com/the-sarge/turn/actions/runs/35000526759) also passed before merge.
 - Explicit `@v5.3.1` and `@latest` queries both resolved to `v5.3.1` through `https://proxy.golang.org` with `GONOPROXY=none` and `GONOSUMDB=none`. Module download succeeded with `GOSUMDB=sum.golang.org`, origin commit `3207a1c5a6273161133c288bb9e5e6414eb5b464`, module checksum `h1:qK5B0XB2No+XZnEdQzK1ZewphECxkIt9U9UBB6Oq0pc=`, and go.mod checksum `h1:kaeJXMb067JGhAAxjph40CY5Du5Kxi7t1A8Qx/ypbfo=`. This resolves the previously documented inherited-tag `@latest` problem.
+
+---
+
+## Go 1.27.2 foundation upgrade landed - 2026-10-14 20:00 EDT
+
+**Main:** `f0d34100b03f`
+**Actor:** Codex
+
+Merged [PR #154](https://github.com/the-sarge/turn/pull/154) as `f0d34100b03f50af95f869fc4508ae34964b9bc2`: Go 1.27.2 toolchain/validation, golangci-lint v2.14.0, govulncheck v1.9.0, x/crypto v0.58.0 and x/sys v0.49.0. The Go 1.27 consumer floor, DTLS selection and existing validation policy are preserved. No release tag was required.
+
+All six reviewers completed RAS run `20261014T235236-cb0f240e7d11c8f952f81980` with zero findings or follow-ups. Consumer-floor tests, dependency/workflow checks and race tests passed. Final `task preflight` certified `bcec8b5c1dc7e800a7f49b57846427620f347831` against base `dbe09149cd52af9e0efd8170eaa30e26bc69c809`; [post-ready hosted CI](https://github.com/the-sarge/turn/actions/runs/38657287837) succeeded on that exact head. Govulncheck found no reachable vulnerabilities. The [validation receipt](https://github.com/the-sarge/turn/pull/154#issuecomment-6181144654) records the local tool-lock retry and module-only advisory context.
+
+This completes turn's portion of [infra #686](https://github.com/the-sarge/infra/issues/686), the live batch tracker. At this entry, cpace remains blocked on official standalone scanner compatibility and the QUIC/raptorq portions remain pending.
