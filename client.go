@@ -185,7 +185,7 @@ func (c *Client) sendAllocateRequest(ctx context.Context, protocol proto.Protoco
 		return exchange, err
 	}
 
-	res, err := c.performAllocateTransaction(ctx, msg)
+	res, err := c.performAllocateTransaction(ctx, msg, nil)
 	if err != nil {
 		return exchange, err
 	}
@@ -208,7 +208,7 @@ func (c *Client) sendAllocateRequest(ctx context.Context, protocol proto.Protoco
 		return exchange, err
 	}
 
-	res, err = c.performAllocateTransaction(ctx, msg)
+	res, err = c.performAllocateTransaction(ctx, msg, credentials.integrity)
 	if err != nil {
 		return exchange, err
 	}
@@ -284,9 +284,13 @@ func (c *Client) Allocate(ctx context.Context) (*Allocation, error) {
 	}
 
 	relayedConn := client.NewUDPConn(&client.AllocationConfig{
-		WriteTo:                   c.sendToServer,
-		PerformTransaction:        c.transactions.Perform,
-		StartTransaction:          c.transactions.Start,
+		WriteTo: c.sendToServer,
+		PerformTransaction: func(msg *stun.Message) (*stun.Message, error) {
+			return c.transactions.Perform(msg, exchange.integrity)
+		},
+		StartTransaction: func(msg *stun.Message) error {
+			return c.transactions.Start(msg, exchange.integrity)
+		},
 		OnDeallocated:             c.onDeallocated,
 		Realm:                     exchange.realm,
 		Username:                  c.username,
@@ -319,10 +323,10 @@ func (c *Client) Allocate(ctx context.Context) (*Allocation, error) {
 
 // performAllocateTransaction delegates Allocate's private cancelable wait to
 // the transaction registry; cancellation does not cancel shared peer work.
-func (c *Client) performAllocateTransaction(ctx context.Context, msg *stun.Message) (
+func (c *Client) performAllocateTransaction(ctx context.Context, msg *stun.Message, integrity stun.MessageIntegrity) (
 	*stun.Message, error,
 ) {
-	return c.transactions.PerformWithContext(ctx, msg)
+	return c.transactions.PerformWithContext(ctx, msg, integrity)
 }
 
 // onDeallocated is called when de-allocation of relay address has been complete.
@@ -339,7 +343,9 @@ func (c *Client) onDeallocated() {
 // depth under the caller's own source guard, not a replacement for it.
 //
 // A datagram from the Server is de-multiplexed by type: STUN responses
-// complete their pending transaction, Data indications and ChannelData are
+// complete their pending transaction only after method and authentication
+// validation. Invalid responses are silently discarded without retiring the
+// transaction. Data indications and ChannelData are
 // delivered to the allocation. An error is returned only for malformed or
 // unexpected protocol input from the Server (a parse failure, a STUN request,
 // a Data indication whose peer address cannot be canonicalized

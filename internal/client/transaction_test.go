@@ -18,10 +18,11 @@ import (
 )
 
 func TestTransactionRegistryInitialSendFailureRollsBack(t *testing.T) {
-	request := stun.MustBuild(stun.TransactionID, stun.BindingRequest)
+	request := stun.MustBuild(stun.TransactionID, stun.BindingRequest, transactionTestIntegrity())
 	response := stun.MustBuild(
 		stun.NewTransactionIDSetter(request.TransactionID),
 		stun.NewType(stun.MethodBinding, stun.ClassSuccessResponse),
+		transactionTestIntegrity(),
 	)
 	sendErr := errors.New("initial send failed") //nolint:err113 // test-local failure
 	var sends atomic.Int32
@@ -33,12 +34,12 @@ func TestTransactionRegistryInitialSendFailureRollsBack(t *testing.T) {
 		return len(request.Raw), nil
 	}, time.Hour)
 
-	_, err := registry.Perform(request)
+	_, err := registry.Perform(request, transactionTestIntegrity())
 	require.ErrorIs(t, err, sendErr)
 
 	resultCh := make(chan *stun.Message, 1)
 	go func() {
-		result, _ := registry.Perform(request)
+		result, _ := registry.Perform(request, transactionTestIntegrity())
 		resultCh <- result
 	}()
 	require.Eventually(t, func() bool { return sends.Load() == 2 }, time.Second, time.Millisecond)
@@ -53,10 +54,11 @@ func TestTransactionRegistryInitialSendFailureRollsBack(t *testing.T) {
 }
 
 func TestTransactionRegistryRejectsDuplicateLiveID(t *testing.T) {
-	request := stun.MustBuild(stun.TransactionID, stun.BindingRequest)
+	request := stun.MustBuild(stun.TransactionID, stun.BindingRequest, transactionTestIntegrity())
 	response := stun.MustBuild(
 		stun.NewTransactionIDSetter(request.TransactionID),
 		stun.NewType(stun.MethodBinding, stun.ClassSuccessResponse),
+		transactionTestIntegrity(),
 	)
 	var sends atomic.Int32
 	registry := NewTransactionRegistry(func(raw []byte) (int, error) {
@@ -67,12 +69,12 @@ func TestTransactionRegistryRejectsDuplicateLiveID(t *testing.T) {
 
 	firstResult := make(chan *stun.Message, 1)
 	go func() {
-		result, _ := registry.Perform(request)
+		result, _ := registry.Perform(request, transactionTestIntegrity())
 		firstResult <- result
 	}()
 	require.Eventually(t, func() bool { return sends.Load() == 1 }, time.Second, time.Millisecond)
 
-	_, err := registry.Perform(request)
+	_, err := registry.Perform(request, transactionTestIntegrity())
 	require.ErrorIs(t, err, errTransactionAlreadyExists)
 	assert.Equal(t, int32(1), sends.Load(), "a duplicate must not reach the socket")
 
@@ -86,7 +88,7 @@ func TestTransactionRegistryRejectsDuplicateLiveID(t *testing.T) {
 }
 
 func TestTransactionRegistryAbortWinsBlockedInitialSend(t *testing.T) {
-	request := stun.MustBuild(stun.TransactionID, stun.BindingRequest)
+	request := stun.MustBuild(stun.TransactionID, stun.BindingRequest, transactionTestIntegrity())
 	sendStarted := make(chan struct{})
 	releaseSend := make(chan struct{})
 	registry := NewTransactionRegistry(func(raw []byte) (int, error) {
@@ -98,7 +100,7 @@ func TestTransactionRegistryAbortWinsBlockedInitialSend(t *testing.T) {
 
 	resultCh := make(chan error, 1)
 	go func() {
-		_, err := registry.Perform(request)
+		_, err := registry.Perform(request, transactionTestIntegrity())
 		resultCh <- err
 	}()
 	<-sendStarted
@@ -114,10 +116,11 @@ func TestTransactionRegistryAbortWinsBlockedInitialSend(t *testing.T) {
 }
 
 func TestTransactionRegistryCancellationClaimsLiveWait(t *testing.T) {
-	request := stun.MustBuild(stun.TransactionID, stun.BindingRequest)
+	request := stun.MustBuild(stun.TransactionID, stun.BindingRequest, transactionTestIntegrity())
 	response := stun.MustBuild(
 		stun.NewTransactionIDSetter(request.TransactionID),
 		stun.NewType(stun.MethodBinding, stun.ClassSuccessResponse),
+		transactionTestIntegrity(),
 	)
 	sent := make(chan struct{})
 	registry := NewTransactionRegistry(func(raw []byte) (int, error) {
@@ -130,7 +133,7 @@ func TestTransactionRegistryCancellationClaimsLiveWait(t *testing.T) {
 
 	resultCh := make(chan error, 1)
 	go func() {
-		_, err := registry.PerformWithContext(ctx, request)
+		_, err := registry.PerformWithContext(ctx, request, transactionTestIntegrity())
 		resultCh <- err
 	}()
 	<-sent
@@ -147,7 +150,7 @@ func TestTransactionRegistryCancellationClaimsLiveWait(t *testing.T) {
 }
 
 func TestTransactionRegistryExhaustionSendsSevenByteIdenticalRequests(t *testing.T) {
-	request := stun.MustBuild(stun.TransactionID, stun.BindingRequest)
+	request := stun.MustBuild(stun.TransactionID, stun.BindingRequest, transactionTestIntegrity())
 	expected := append([]byte(nil), request.Raw...)
 	initialSent := make(chan struct{})
 	var writes atomic.Int32
@@ -162,7 +165,7 @@ func TestTransactionRegistryExhaustionSendsSevenByteIdenticalRequests(t *testing
 
 	resultCh := make(chan error, 1)
 	go func() {
-		_, err := registry.Perform(request)
+		_, err := registry.Perform(request, transactionTestIntegrity())
 		resultCh <- err
 	}()
 	<-initialSent
@@ -178,10 +181,11 @@ func TestTransactionRegistryExhaustionSendsSevenByteIdenticalRequests(t *testing
 }
 
 func TestTransactionRegistryResponseWinsBlockedInitialSend(t *testing.T) {
-	request := stun.MustBuild(stun.TransactionID, stun.BindingRequest)
+	request := stun.MustBuild(stun.TransactionID, stun.BindingRequest, transactionTestIntegrity())
 	response := stun.MustBuild(
 		stun.NewTransactionIDSetter(request.TransactionID),
 		stun.NewType(stun.MethodBinding, stun.ClassSuccessResponse),
+		transactionTestIntegrity(),
 	)
 	sendStarted := make(chan struct{})
 	releaseSend := make(chan struct{})
@@ -196,7 +200,7 @@ func TestTransactionRegistryResponseWinsBlockedInitialSend(t *testing.T) {
 
 	resultCh := make(chan *stun.Message, 1)
 	go func() {
-		result, _ := registry.Perform(request)
+		result, _ := registry.Perform(request, transactionTestIntegrity())
 		resultCh <- result
 	}()
 	<-sendStarted
@@ -214,7 +218,7 @@ func TestTransactionRegistryResponseWinsBlockedInitialSend(t *testing.T) {
 }
 
 func TestTransactionRegistryInitialSendErrorSurvivesAbort(t *testing.T) {
-	request := stun.MustBuild(stun.TransactionID, stun.BindingRequest)
+	request := stun.MustBuild(stun.TransactionID, stun.BindingRequest, transactionTestIntegrity())
 	sendStarted := make(chan struct{})
 	releaseSend := make(chan struct{})
 	sendErr := errors.New("blocked initial send failed") //nolint:err113 // test-local failure
@@ -227,7 +231,7 @@ func TestTransactionRegistryInitialSendErrorSurvivesAbort(t *testing.T) {
 
 	resultCh := make(chan error, 1)
 	go func() {
-		_, err := registry.Perform(request)
+		_, err := registry.Perform(request, transactionTestIntegrity())
 		resultCh <- err
 	}()
 	<-sendStarted
@@ -271,10 +275,11 @@ func TestTransactionRegistryClaimDuringBlockedRetryPreventsRearm(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			request := stun.MustBuild(stun.TransactionID, stun.BindingRequest)
+			request := stun.MustBuild(stun.TransactionID, stun.BindingRequest, transactionTestIntegrity())
 			response := stun.MustBuild(
 				stun.NewTransactionIDSetter(request.TransactionID),
 				stun.NewType(stun.MethodBinding, stun.ClassSuccessResponse),
+				transactionTestIntegrity(),
 			)
 			retryStarted := make(chan struct{})
 			releaseRetry := make(chan struct{})
@@ -294,7 +299,7 @@ func TestTransactionRegistryClaimDuringBlockedRetryPreventsRearm(t *testing.T) {
 			}
 			outcomeCh := make(chan outcome, 1)
 			go func() {
-				result, err := registry.Perform(request)
+				result, err := registry.Perform(request, transactionTestIntegrity())
 				outcomeCh <- outcome{result: result, err: err}
 			}()
 			<-retryStarted
@@ -314,10 +319,11 @@ func TestTransactionRegistryClaimDuringBlockedRetryPreventsRearm(t *testing.T) {
 }
 
 func TestTransactionRegistryWaitedRetryFailureRetires(t *testing.T) {
-	request := stun.MustBuild(stun.TransactionID, stun.BindingRequest)
+	request := stun.MustBuild(stun.TransactionID, stun.BindingRequest, transactionTestIntegrity())
 	response := stun.MustBuild(
 		stun.NewTransactionIDSetter(request.TransactionID),
 		stun.NewType(stun.MethodBinding, stun.ClassSuccessResponse),
+		transactionTestIntegrity(),
 	)
 	retryErr := errors.New("retry failed") //nolint:err113 // test-local failure
 	var sends atomic.Int32
@@ -336,13 +342,13 @@ func TestTransactionRegistryWaitedRetryFailureRetires(t *testing.T) {
 		return len(raw), nil
 	}, time.Millisecond)
 
-	_, err := registry.Perform(request)
+	_, err := registry.Perform(request, transactionTestIntegrity())
 	require.ErrorIs(t, err, retryErr)
 	assert.Equal(t, int32(2), sends.Load())
 
 	resultCh := make(chan *stun.Message, 1)
 	go func() {
-		result, _ := registry.Perform(request)
+		result, _ := registry.Perform(request, transactionTestIntegrity())
 		resultCh <- result
 	}()
 	<-replacementStarted
@@ -358,10 +364,11 @@ func TestTransactionRegistryWaitedRetryFailureRetires(t *testing.T) {
 
 func TestTransactionRegistryFireAndForgetRetiresOnEveryTerminalPath(t *testing.T) {
 	t.Run("response", func(t *testing.T) {
-		request := stun.MustBuild(stun.TransactionID, stun.BindingRequest)
+		request := stun.MustBuild(stun.TransactionID, stun.BindingRequest, transactionTestIntegrity())
 		response := stun.MustBuild(
 			stun.NewTransactionIDSetter(request.TransactionID),
 			stun.NewType(stun.MethodBinding, stun.ClassSuccessResponse),
+			transactionTestIntegrity(),
 		)
 		var sends atomic.Int32
 		registry := NewTransactionRegistry(func(raw []byte) (int, error) {
@@ -370,17 +377,17 @@ func TestTransactionRegistryFireAndForgetRetiresOnEveryTerminalPath(t *testing.T
 			return len(raw), nil
 		}, time.Hour)
 
-		err := registry.Start(request)
+		err := registry.Start(request, transactionTestIntegrity())
 		require.NoError(t, err)
 		registry.Complete(response)
-		err = registry.Start(request)
+		err = registry.Start(request, transactionTestIntegrity())
 		require.NoError(t, err, "the response must retire fire-and-forget ownership")
 		assert.Equal(t, int32(2), sends.Load())
 		registry.AbortCurrent()
 	})
 
 	t.Run("retransmit failure", func(t *testing.T) {
-		request := stun.MustBuild(stun.TransactionID, stun.BindingRequest)
+		request := stun.MustBuild(stun.TransactionID, stun.BindingRequest, transactionTestIntegrity())
 		retryErr := errors.New("retry failed") //nolint:err113 // test-local failure
 		var sends atomic.Int32
 		registry := NewTransactionRegistry(func(raw []byte) (int, error) {
@@ -391,10 +398,10 @@ func TestTransactionRegistryFireAndForgetRetiresOnEveryTerminalPath(t *testing.T
 			return len(raw), nil
 		}, time.Millisecond)
 
-		err := registry.Start(request)
+		err := registry.Start(request, transactionTestIntegrity())
 		require.NoError(t, err)
 		require.Eventually(t, func() bool {
-			performErr := registry.Start(request)
+			performErr := registry.Start(request, transactionTestIntegrity())
 
 			return performErr == nil
 		}, time.Second, time.Millisecond, "a failed retry must retire fire-and-forget ownership")
@@ -402,7 +409,7 @@ func TestTransactionRegistryFireAndForgetRetiresOnEveryTerminalPath(t *testing.T
 	})
 
 	t.Run("exhaustion", func(t *testing.T) {
-		request := stun.MustBuild(stun.TransactionID, stun.BindingRequest)
+		request := stun.MustBuild(stun.TransactionID, stun.BindingRequest, transactionTestIntegrity())
 		var sends atomic.Int32
 		registry := NewTransactionRegistry(func(raw []byte) (int, error) {
 			sends.Add(1)
@@ -410,14 +417,18 @@ func TestTransactionRegistryFireAndForgetRetiresOnEveryTerminalPath(t *testing.T
 			return len(raw), nil
 		}, time.Millisecond)
 
-		err := registry.Start(request)
+		err := registry.Start(request, transactionTestIntegrity())
 		require.NoError(t, err)
 		require.Eventually(t, func() bool {
-			performErr := registry.Start(request)
+			performErr := registry.Start(request, transactionTestIntegrity())
 
 			return performErr == nil
 		}, time.Second, time.Millisecond, "exhaustion must retire fire-and-forget ownership")
 		assert.Equal(t, int32(8), sends.Load())
 		registry.AbortCurrent()
 	})
+}
+
+func transactionTestIntegrity() stun.MessageIntegrity {
+	return stun.NewShortTermIntegrity("transaction-test-key")
 }

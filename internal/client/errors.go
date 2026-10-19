@@ -30,6 +30,7 @@ var (
 	errTryAgain                      = errors.New("try again")
 	errTransactionClosed             = fmt.Errorf("transaction closed: %w", net.ErrClosed)
 	errTransactionAlreadyExists      = errors.New("transaction ID is already live")
+	errResponseIntegrityRequired     = errors.New("turn: response integrity key is required")
 	errFailedToRetransmitTransaction = errors.New("turn: failed to retransmit transaction")
 	errFailedToBuildRefreshRequest   = errors.New("failed to build refresh request")
 	errFailedToRefreshAllocation     = errors.New("failed to refresh allocation")

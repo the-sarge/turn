@@ -149,16 +149,17 @@ func TestHandleInboundAdmitsOnlyServer(t *testing.T) {
 	// returns the matching success plus the observable waiter result.
 	pendingResponse := func(t *testing.T, c *Client, conn *observerConn) ([]byte, <-chan *stun.Message) {
 		t.Helper()
-		req := stun.MustBuild(stun.TransactionID, stun.BindingRequest)
+		req := stun.MustBuild(stun.TransactionID, stun.BindingRequest, stun.NewShortTermIntegrity(testPassword))
 		res, err := stun.Build(
 			stun.NewTransactionIDSetter(req.TransactionID),
-			stun.NewType(stun.MethodAllocate, stun.ClassSuccessResponse),
+			stun.NewType(stun.MethodBinding, stun.ClassSuccessResponse),
+			stun.NewShortTermIntegrity(testPassword),
 		)
 		require.NoError(t, err)
 
 		waited := make(chan *stun.Message, 1)
 		go func() {
-			result, _ := c.transactions.Perform(req)
+			result, _ := c.transactions.Perform(req, stun.NewShortTermIntegrity(testPassword))
 			waited <- result
 		}()
 		awaitWrite(t, conn, 1)
@@ -402,10 +403,11 @@ func TestClientCloseIsAnAbortCutNotATerminalState(t *testing.T) {
 	cl := newObservedClient(t, conn)
 	cl.Close()
 
-	request := stun.MustBuild(stun.TransactionID, stun.BindingRequest)
+	request := stun.MustBuild(stun.TransactionID, stun.BindingRequest, stun.NewShortTermIntegrity(testPassword))
 	response := stun.MustBuild(
 		stun.NewTransactionIDSetter(request.TransactionID),
 		stun.NewType(stun.MethodBinding, stun.ClassSuccessResponse),
+		stun.NewShortTermIntegrity(testPassword),
 	)
 	type outcome struct {
 		result *stun.Message
@@ -413,7 +415,7 @@ func TestClientCloseIsAnAbortCutNotATerminalState(t *testing.T) {
 	}
 	resultCh := make(chan outcome, 1)
 	go func() {
-		result, err := cl.transactions.Perform(request)
+		result, err := cl.transactions.Perform(request, stun.NewShortTermIntegrity(testPassword))
 		resultCh <- outcome{result: result, err: err}
 	}()
 	awaitWrite(t, conn, 1)
@@ -432,11 +434,11 @@ func TestClientCloseWinsBlockedInitialSendWithoutRearm(t *testing.T) {
 	conn := newObserverConn()
 	conn.blockFrom = 1
 	cl := newObservedClient(t, conn)
-	request := stun.MustBuild(stun.TransactionID, stun.BindingRequest)
+	request := stun.MustBuild(stun.TransactionID, stun.BindingRequest, stun.NewShortTermIntegrity(testPassword))
 
 	resultCh := make(chan error, 1)
 	go func() {
-		_, err := cl.transactions.Perform(request)
+		_, err := cl.transactions.Perform(request, stun.NewShortTermIntegrity(testPassword))
 		resultCh <- err
 	}()
 	select {

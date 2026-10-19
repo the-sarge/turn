@@ -121,6 +121,7 @@ func scriptInvalidRelayedServer(serverSock net.PacketConn, refreshLifetime chan<
 					stun.NewType(stun.MethodAllocate, stun.ClassSuccessResponse),
 					proto.RelayedAddress{IP: net.IPv4zero, Port: 0},
 					proto.Lifetime{Duration: 10 * time.Minute},
+					stun.NewLongTermIntegrity(testUsername, "pion.ly", testPassword),
 				)
 			} else {
 				res = stun.MustBuild(

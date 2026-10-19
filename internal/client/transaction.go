@@ -26,6 +26,7 @@ type transactionResult struct {
 type transactionRegistryEntry struct {
 	id       [stun.TransactionIDSize]byte
 	raw      []byte
+	response responsePolicy
 	interval time.Duration
 	nRtx     int
 	timer    *time.Timer
@@ -49,9 +50,10 @@ func NewTransactionRegistry(send func([]byte) (int, error), rto time.Duration) *
 	}
 }
 
-// Perform registers, initially sends, and waits for one transaction.
-func (r *TransactionRegistry) Perform(msg *stun.Message) (*stun.Message, error) {
-	entry, err := r.begin(msg, make(chan transactionResult, 1))
+// Perform registers, initially sends, and waits for one verified response.
+// A nil integrity key is allowed only for the initial Allocate challenge.
+func (r *TransactionRegistry) Perform(msg *stun.Message, integrity stun.MessageIntegrity) (*stun.Message, error) {
+	entry, err := r.begin(msg, integrity, make(chan transactionResult, 1))
 	if err != nil {
 		return nil, err
 	}
@@ -60,8 +62,8 @@ func (r *TransactionRegistry) Perform(msg *stun.Message) (*stun.Message, error) 
 }
 
 // Start registers and initially sends one fire-and-forget transaction.
-func (r *TransactionRegistry) Start(msg *stun.Message) error {
-	_, err := r.begin(msg, nil)
+func (r *TransactionRegistry) Start(msg *stun.Message, integrity stun.MessageIntegrity) error {
+	_, err := r.begin(msg, integrity, nil)
 
 	return err
 }
@@ -70,12 +72,13 @@ func (r *TransactionRegistry) Start(msg *stun.Message) error {
 func (r *TransactionRegistry) PerformWithContext(
 	ctx context.Context,
 	msg *stun.Message,
+	integrity stun.MessageIntegrity,
 ) (*stun.Message, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, context.Cause(ctx)
 	}
 
-	entry, err := r.begin(msg, make(chan transactionResult, 1))
+	entry, err := r.begin(msg, integrity, make(chan transactionResult, 1))
 	if err != nil {
 		return nil, err
 	}
@@ -104,11 +107,21 @@ func (r *TransactionRegistry) PerformWithContext(
 
 func (r *TransactionRegistry) begin(
 	msg *stun.Message,
+	integrity stun.MessageIntegrity,
 	resultCh chan transactionResult,
 ) (*transactionRegistryEntry, error) {
+	if len(integrity) == 0 && (msg.Type.Method != stun.MethodAllocate || msg.Contains(stun.AttrMessageIntegrity)) {
+		return nil, errResponseIntegrityRequired
+	}
+	realm, _ := msg.Get(stun.AttrRealm)
 	entry := &transactionRegistryEntry{
-		id:       msg.TransactionID,
-		raw:      append([]byte(nil), msg.Raw...),
+		id:  msg.TransactionID,
+		raw: append([]byte(nil), msg.Raw...),
+		response: responsePolicy{
+			method:    msg.Type.Method,
+			integrity: append(stun.MessageIntegrity(nil), integrity...),
+			realm:     append([]byte(nil), realm...),
+		},
 		interval: r.rto,
 		resultCh: resultCh,
 	}
@@ -220,10 +233,16 @@ func finishResult(result transactionResult, ok bool) (*stun.Message, error) {
 	return result.msg, result.err
 }
 
-// Complete claims a matching response and publishes it to a waiting caller.
+// Complete verifies a matching response before claiming or publishing it.
+// Rejected packets leave the transaction and its retransmission timer live.
 func (r *TransactionRegistry) Complete(msg *stun.Message) {
 	r.mutex.Lock()
 	entry, ok := r.live[msg.TransactionID]
+	if ok && !entry.response.accepts(msg) {
+		r.mutex.Unlock()
+
+		return
+	}
 	if ok {
 		delete(r.live, msg.TransactionID)
 		if entry.timer != nil {
