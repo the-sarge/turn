@@ -41,6 +41,9 @@ func (s *Server) handleSTUN(pkt []byte, from net.Addr) {
 // to the client.
 func (s *Server) send(from net.Addr, msg *stun.Message, msgType stun.MessageType, attrs ...stun.Setter) {
 	setters := append([]stun.Setter{stun.NewTransactionIDSetter(msg.TransactionID), msgType}, attrs...)
+	if msg.Contains(stun.AttrMessageIntegrity) && s.integrity.Check(msg) == nil {
+		setters = append(setters, s.integrity)
+	}
 	res, err := stun.Build(setters...)
 	if err != nil {
 		return

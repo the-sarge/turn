@@ -30,6 +30,7 @@ func allocateSuccessResponseWithLifetime(t *testing.T, req []byte, lifetime time
 		proto.Lifetime{Duration: lifetime},
 	)
 	require.NoError(t, err)
+	require.NoError(t, stun.NewLongTermIntegrity(testUsername, "test-realm", testPassword).AddTo(msg))
 
 	return msg.Raw
 }
@@ -43,6 +44,7 @@ func refreshSuccessResponseWithLifetime(t *testing.T, req []byte, lifetime time.
 		proto.Lifetime{Duration: lifetime},
 	)
 	require.NoError(t, err)
+	require.NoError(t, stun.NewLongTermIntegrity(testUsername, "test-realm", testPassword).AddTo(msg))
 
 	return msg.Raw
 }
@@ -171,6 +173,7 @@ func refreshErrorResponse(t *testing.T, req []byte, code stun.ErrorCode) []byte 
 		stun.ErrorCodeAttribute{Code: code, Reason: []byte("error")},
 	)
 	require.NoError(t, err)
+	require.NoError(t, stun.NewLongTermIntegrity(testUsername, "test-realm", testPassword).AddTo(msg))
 
 	return msg.Raw
 }
