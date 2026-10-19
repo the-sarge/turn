@@ -16,7 +16,9 @@ import (
 var ErrClosed = net.ErrClosed
 
 // ErrTransactionTimeout reports a STUN transaction whose retransmissions
-// were all exhausted without a server response.
+// were all exhausted without an accepted server response. This includes
+// transactions that received only responses rejected by method or integrity
+// validation.
 var ErrTransactionTimeout = client.ErrTransactionTimeout
 
 // ErrAllocationRefreshFailed reports a terminal allocation-lifetime result:

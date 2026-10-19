@@ -250,6 +250,14 @@ func (c *Client) sendAllocateRequest(ctx context.Context, protocol proto.Protoco
 // cannot be canonicalized, the allocation is released with a lifetime-0
 // Refresh and Allocate returns ErrInvalidRelayedAddress.
 //
+// Only an Allocate 401 challenge with nonempty REALM and NONCE completes the
+// initial unauthenticated exchange. Responses to authenticated requests,
+// including 401/438 errors, must verify with the request's MESSAGE-INTEGRITY
+// key. Rejected responses leave the transaction pending; if none is accepted,
+// retries exhaust with ErrTransactionTimeout. An unsigned 438 cannot update
+// the nonce. Wrong-password 401 responses can likewise time out instead of
+// returning a *stun.TurnError, even when the server supports signing.
+//
 // A success response reporting zero remaining lifetime is terminal: Allocate
 // emits one lifetime-0 Release and returns no Allocation with
 // ErrAllocationRefreshFailed; it never publishes the terminal connection.
