@@ -1255,3 +1255,24 @@ Merged [PR #154](https://github.com/the-sarge/turn/pull/154) as `f0d34100b03f50a
 All six reviewers completed RAS run `20261014T235236-cb0f240e7d11c8f952f81980` with zero findings or follow-ups. Consumer-floor tests, dependency/workflow checks and race tests passed. Final `task preflight` certified `bcec8b5c1dc7e800a7f49b57846427620f347831` against base `dbe09149cd52af9e0efd8170eaa30e26bc69c809`; [post-ready hosted CI](https://github.com/the-sarge/turn/actions/runs/38657287837) succeeded on that exact head. Govulncheck found no reachable vulnerabilities. The [validation receipt](https://github.com/the-sarge/turn/pull/154#issuecomment-6181144654) records the local tool-lock retry and module-only advisory context.
 
 This completes turn's portion of [infra #686](https://github.com/the-sarge/infra/issues/686), the live batch tracker. At this entry, cpace remains blocked on official standalone scanner compatibility and the QUIC/raptorq portions remain pending.
+
+---
+
+## TURN response authentication landed - 2026-10-18 21:42 EDT
+
+**Main:** `6cbd5c0a0e64`
+**Actor:** Codex
+
+### Summary
+
+- Merged [PR #156](https://github.com/the-sarge/turn/pull/156), binding TURN response completion to the request method and a copied MESSAGE-INTEGRITY key before transaction retirement. Invalid responses leave the legitimate transaction live; authenticated fixture responses are now signed.
+- Documented the compatibility consequence: unsigned or unverifiable authenticated replies can exhaust retries, including wrong-password 401 responses that previously surfaced as a typed server error.
+
+### Decisions
+
+- Keep the initial Allocate 401 challenge as the only unauthenticated exchange, and require signed nonce updates with matching realm and nonempty nonce. See the [response-authentication ADR](adr/2026-10-18-turn-response-authentication.md) for the policy and compatibility boundary.
+
+### Validation
+
+- RAS review `20261019T011410-09b300be8de82c81029cb01f` completed on `9e9a146b005d78ea7d5c2ebfa765bebdee8af565`: six initial reviewers and five adjudicators completed; one stalled adjudicator was terminated and its failure retained. Two accepted low-severity documentation fixes were applied. A further review/verification run was skipped under the documentation-only policy; no deferred findings remain.
+- Focused security regressions and `task preflight` passed on final pushed head `967a4c7c6f2dc2ce2172317dda9d9ab679402acd`, against base `1c4b3b905f46c87d8530ce44e800b95b587c8644`. The post-ready [CI run](https://github.com/the-sarge/turn/actions/runs/39186326867) passed `ci-required` on that same head before squash merge.
