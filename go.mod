@@ -2,7 +2,7 @@ module github.com/the-sarge/turn/v5
 
 go 1.27
 
-toolchain go1.27.2
+toolchain go1.27.3
 
 require (
 	github.com/pion/stun/v3 v3.1.7
