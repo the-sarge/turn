@@ -12,4 +12,4 @@ The five canonical triage labels use their default names (`needs-triage`, `needs
 
 ### Domain docs
 
-Single-context: `CONTEXT.md` at the repo root (created lazily by `/domain-modeling`) and ADRs in `docs/adr/`. See `docs/agents/domain.md`.
+Single-context: `GLOSSARY.md` at the repo root (created lazily by `/domain-modeling`) and ADRs in `docs/adr/`. See `docs/agents/domain.md`.
