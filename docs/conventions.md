@@ -1,6 +1,6 @@
 # Conventions
 
-This guide records the six dimensions surveyed in September 2026. Observed preferences guide new work; they are not retroactive requirements or a reason for cosmetic rewrites. Linked ADRs own the documented contracts and their exceptions. Use [CONTEXT.md](../CONTEXT.md) for domain vocabulary.
+This guide records the six dimensions surveyed in September 2026. Observed preferences guide new work; they are not retroactive requirements or a reason for cosmetic rewrites. Linked ADRs own the documented contracts and their exceptions. Use [GLOSSARY.md](../GLOSSARY.md) for domain vocabulary.
 
 ## Error-message grammar
 
@@ -18,7 +18,7 @@ This guide records the six dimensions surveyed in September 2026. Observed prefe
 
 **Observed preference:** Use `NewX`/`newX` constructors, explicit configuration structs, and operations named for their behavior. `NewClient(*ClientConfig)`, `NewUDPConn(*AllocationConfig, abort)`, and the fixture's `New(Options)` have intentionally different crossings; uniform signatures and mutex names are not requirements.
 
-**Documented contract:** Domain names come from [the glossary](../CONTEXT.md). The [construction crossing ADR](adr/2026-08-19-udpconn-construction-crossing-plan.md) bounds constructor helpers and rejects general builders/options layers for that seam. Its started-constructor behavior is superseded by the [publication and activation ADR](adr/2026-08-20-allocation-publication-activation-plan.md): `NewUDPConn` returns a quiescent connection. The first activation of an unsealed positive-lifetime connection publishes and arms timers; zero lifetime terminalizes without publication or timers, while repeated activation and activation after sealing are no-ops.
+**Documented contract:** Domain names come from [the glossary](../GLOSSARY.md). The [construction crossing ADR](adr/2026-08-19-udpconn-construction-crossing-plan.md) bounds constructor helpers and rejects general builders/options layers for that seam. Its started-constructor behavior is superseded by the [publication and activation ADR](adr/2026-08-20-allocation-publication-activation-plan.md): `NewUDPConn` returns a quiescent connection. The first activation of an unsealed positive-lifetime connection publishes and arms timers; zero lifetime terminalizes without publication or timers, while repeated activation and activation after sealing are no-ops.
 
 ## Tests and helper prefixes
 
