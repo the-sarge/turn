@@ -1276,3 +1276,16 @@ This completes turn's portion of [infra #686](https://github.com/the-sarge/infra
 
 - RAS review `20261019T011410-09b300be8de82c81029cb01f` completed on `9e9a146b005d78ea7d5c2ebfa765bebdee8af565`: six initial reviewers and five adjudicators completed; one stalled adjudicator was terminated and its failure retained. Two accepted low-severity documentation fixes were applied. A further review/verification run was skipped under the documentation-only policy; no deferred findings remain.
 - Focused security regressions and `task preflight` passed on final pushed head `967a4c7c6f2dc2ce2172317dda9d9ab679402acd`, against base `1c4b3b905f46c87d8530ce44e800b95b587c8644`. The post-ready [CI run](https://github.com/the-sarge/turn/actions/runs/39186326867) passed `ci-required` on that same head before squash merge.
+
+---
+
+## Go 1.27.4 selection landed - 2026-11-11 02:35 EST
+
+**Main:** `7ff9f715e0a5`
+**Actor:** Codex
+
+Merged [PR #160](https://github.com/the-sarge/turn/pull/160) as `7ff9f715e0a57b2f423a93c33eeecee1a5017b43`, selecting Go 1.27.4 in `go.mod` and the existing validation manifest. The Go 1.27 language floor, all dependencies/checksums, other tools and Allocation/Permission/Channel binding behavior are preserved. No library tag, release or consumer dependency update was needed. This completes Turn's source selection within the approved [portfolio refresh](https://github.com/the-sarge/infra/issues/729).
+
+Final `task preflight` passed with official Go 1.27.4 and Task 3.53.1 at clean pushed head `b35dfcf538fc72fdbfdb169c196646dfb6a5d00a` against `a02bdf5d7c49df4d7bd52ccb4d1229aec6b57986`: format, vet, tests/lint, docs, race, module/tidy/vulnerability, Darwin/Windows builds, workflow/range fixtures and full-history secrets. [Post-ready CI](https://github.com/the-sarge/turn/actions/runs/42980206517) passed `ci-required` on that exact head before guarded squash merge; the merged tree matches the certified tree.
+
+RAS `20261111T072917-27a1635ab9b898287d252f71` returned zero findings or follow-ups. Two Codex reviewers and synthesis succeeded, meeting configured quorum two; both Claude processes failed. No fixes, verification or replacement review were required, and no configured model or timeout was changed. Evidence is retained under `/Users/josh/.local/share/infra-deployments/go1274/turn/`. This post-merge journal uses no RAS.
